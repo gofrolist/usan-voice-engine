@@ -1,0 +1,17 @@
+{
+  "dispatch_rule": {
+    "name": "usan-inbound-default",
+    "rule": {
+      "dispatchRuleIndividual": {
+        "roomPrefix": "usan-inbound-"
+      }
+    },
+    "room_config": {
+      "agents": [
+        {
+          "agent_name": ""
+        }
+      ]
+    }
+  }
+}
