@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# uv / venv
+.venv/
+.env
+.env.local
+.env.*.local
+
+# Build / dist
+dist/
+build/
+
+# Docker
+.docker/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local state
+*.log
+data/
+recordings/
+
+# Secrets (allow templates)
+infra/.env
+!infra/.env.example
