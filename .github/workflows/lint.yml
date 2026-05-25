@@ -1,0 +1,54 @@
+name: Lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ruff-api:
+    name: Lint Python (apps/api)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.5.11"
+      - name: Install
+        working-directory: apps/api
+        run: uv sync --frozen
+      - name: ruff check
+        working-directory: apps/api
+        run: uv run ruff check .
+      - name: ruff format --check
+        working-directory: apps/api
+        run: uv run ruff format --check .
+
+  ruff-agent:
+    name: Lint Python (services/agent)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.5.11"
+      - name: Install
+        working-directory: services/agent
+        run: uv sync --frozen
+      - name: ruff check
+        working-directory: services/agent
+        run: uv run ruff check .
+      - name: ruff format --check
+        working-directory: services/agent
+        run: uv run ruff format --check .
+
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
