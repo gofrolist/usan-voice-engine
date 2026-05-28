@@ -1,3 +1,4 @@
+import enum
 import uuid
 from datetime import datetime
 from typing import Any
@@ -11,7 +12,7 @@ from sqlalchemy.sql import func
 from usan_api.db.base import Base, CallDirection, CallStatus
 
 
-def _enum_values(enum_cls: type) -> list[str]:
+def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     """Store PG enum values (e.g. 'outbound'), not Python member names."""
     return [member.value for member in enum_cls]
 
