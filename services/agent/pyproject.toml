@@ -4,20 +4,20 @@ version = "0.1.0"
 description = "USAN voice engine — LiveKit Agents worker"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "livekit-agents[silero,turn-detector]>=1.0.0",
-    "livekit-plugins-cartesia>=1.0.0",
-    "livekit-plugins-google>=1.0.0",
-    "pydantic>=2.10.0",
-    "pydantic-settings>=2.7.0",
-    "loguru>=0.7.2",
-    "httpx>=0.28.0",
+    "livekit-agents[silero,turn-detector]>=1.5.14",
+    "livekit-plugins-cartesia>=1.5.14",
+    "livekit-plugins-google>=1.5.14",
+    "pydantic>=2.13.0",
+    "pydantic-settings>=2.14.0",
+    "loguru>=0.7.3",
+    "httpx>=0.28.1",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.24.0",
-    "ruff>=0.8.0",
+    "pytest>=9.0.0",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.15.0",
 ]
 
 [build-system]

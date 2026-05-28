@@ -10,7 +10,7 @@ def configure_logging(level: str = "INFO") -> None:
         sys.stdout,
         level=level,
         format=(
-            "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | " "{name}:{function}:{line} - {message}"
+            "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
         ),
         backtrace=True,
         diagnose=False,
