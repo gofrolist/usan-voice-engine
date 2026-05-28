@@ -53,3 +53,67 @@ With Telnyx pointing inbound SIP at your livekit-sip endpoint and dispatch rules
 4. The agent should respond with an acknowledgement
 5. Hang up
 6. Check logs: `docker compose -f docker-compose.yml logs -f agent`
+
+## Outbound calling (Plan 2a)
+
+Outbound calls need a LiveKit **SIP outbound trunk** pointing at Telnyx, plus a
+caller-ID number. The agent worker is now **named** (`AGENT_NAME=usan-agent`), so
+both inbound (dispatch rule) and outbound (explicit dispatch) reference that name.
+
+### 1. Create the outbound trunk
+
+With the stack running and `infra/.env` populated (Telnyx SIP credentials + `TELNYX_CALLER_ID`):
+
+```bash
+set -a; . infra/.env; set +a
+envsubst < infra/livekit-sip-outbound-trunk.json > /tmp/outbound.json
+
+livekit-cli sip create-trunk \
+  --url "$LIVEKIT_URL" --api-key "$LIVEKIT_API_KEY" --api-secret "$LIVEKIT_API_SECRET" \
+  --file /tmp/outbound.json
+```
+
+Copy the returned trunk ID (`ST_...`) into `infra/.env` as `LIVEKIT_SIP_OUTBOUND_TRUNK_ID`,
+then recreate the `api` container so it picks up the new env:
+
+```bash
+make up   # or: docker compose --env-file infra/.env -f infra/docker-compose.yml up -d api
+```
+
+### 2. (Re)apply the inbound dispatch rule with the agent name
+
+```bash
+envsubst < infra/livekit-sip-dispatch-rule.json > /tmp/rule.json
+livekit-cli sip create-dispatch \
+  --url "$LIVEKIT_URL" --api-key "$LIVEKIT_API_KEY" --api-secret "$LIVEKIT_API_SECRET" \
+  --file /tmp/rule.json
+```
+
+### 3. Place an outbound call
+
+```bash
+# Add an elder
+curl -s -X POST http://localhost:8000/v1/elders \
+  -H 'content-type: application/json' \
+  -d '{"name":"Test Elder","phone_e164":"+1YOURPHONE","timezone":"America/New_York"}'
+
+# Enqueue a call (use the returned elder id)
+curl -s -X POST http://localhost:8000/v1/calls \
+  -H 'content-type: application/json' \
+  -d '{"elder_id":"<ELDER_ID>","idempotency_key":"smoke-1","dynamic_vars":{}}'
+
+# Poll status
+curl -s http://localhost:8000/v1/calls/<CALL_ID>
+```
+
+Your phone should ring; on answer you hear the greeting. Watch the agent:
+
+```bash
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f agent
+```
+
+### Outbound smoke test result
+
+Document the outcome here: network setup (local public IP / VM), what you heard,
+and any latency observations. If you don't yet have a public IP for Telnyx to
+route media to, note that outbound is deferred to the Plan 4 deploy task.
