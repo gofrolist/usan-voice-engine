@@ -1,11 +1,3 @@
-# ruff: noqa: E402
-import os
-
-os.environ.setdefault("DATABASE_URL", "postgresql://u:p@host/db")
-os.environ.setdefault("LIVEKIT_API_KEY", "key")
-os.environ.setdefault("LIVEKIT_API_SECRET", "a" * 32)
-os.environ.setdefault("LIVEKIT_URL", "ws://livekit:7880")
-
 import pytest
 from fastapi.testclient import TestClient
 

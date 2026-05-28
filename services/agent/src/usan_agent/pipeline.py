@@ -22,7 +22,7 @@ STT_MODEL = "ink-whisper"
 LLM_MODEL = "gemini-3.1-flash-lite"
 
 
-def build_session(settings: Settings) -> AgentSession:
+def build_session(settings: Settings) -> AgentSession[None]:
     """Construct an AgentSession wiring STT, LLM, TTS, VAD, and turn-detector."""
     logger.info("Building AgentSession (cartesia STT/TTS, {model})", model=LLM_MODEL)
     return AgentSession(
@@ -51,6 +51,6 @@ def build_agent() -> Agent:
     )
 
 
-async def greet(session: AgentSession) -> None:
+async def greet(session: AgentSession[None]) -> None:
     """Speak the opening greeting once the session is connected."""
     await session.say(GREETING, allow_interruptions=True)

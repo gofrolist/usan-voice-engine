@@ -17,6 +17,7 @@ dev = [
     "pytest>=9.0.0",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.15.0",
+    "mypy>=1.13.0",
 ]
 
 [build-system]
@@ -41,3 +42,10 @@ ignore = ["S101"]  # allow assert in tests
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+files = ["src"]

@@ -42,5 +42,5 @@ def test_settings_validates_secret_length(monkeypatch):
     monkeypatch.setenv("LIVEKIT_API_SECRET", "short")
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
 
-    with pytest.raises(ValueError, match="at least 32 characters"):
+    with pytest.raises(ValueError, match="LIVEKIT_API_SECRET"):
         get_settings()

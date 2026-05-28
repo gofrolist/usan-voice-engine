@@ -32,6 +32,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 def main() -> None:
+    # Configure logging first so a missing/invalid-env failure in get_settings()
+    # is emitted as a structured log line, not a raw traceback.
+    configure_logging()
     settings = get_settings()
     configure_logging(settings.log_level)
     logger.info("Starting USAN agent worker")

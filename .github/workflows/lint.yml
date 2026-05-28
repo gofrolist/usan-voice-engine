@@ -23,6 +23,9 @@ jobs:
       - name: ruff format --check
         working-directory: apps/api
         run: uv run ruff format --check .
+      - name: mypy
+        working-directory: apps/api
+        run: uv run mypy
 
   ruff-agent:
     name: Lint Python (services/agent)
@@ -41,6 +44,9 @@ jobs:
       - name: ruff format --check
         working-directory: services/agent
         run: uv run ruff format --check .
+      - name: mypy
+        working-directory: services/agent
+        run: uv run mypy
 
   gitleaks:
     name: Gitleaks

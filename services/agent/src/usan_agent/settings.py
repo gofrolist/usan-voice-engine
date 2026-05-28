@@ -1,7 +1,7 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,13 +18,36 @@ class Settings(BaseSettings):
         default="INFO", alias="LOG_LEVEL"
     )
 
+    @field_validator("livekit_url")
+    @classmethod
+    def _ws_scheme(cls, v: str) -> str:
+        if not v.startswith(("ws://", "wss://")):
+            raise ValueError("must be a ws:// or wss:// URL")
+        return v
+
+
+def _field_names(errors: list[Any], *, error_type: str | None = None) -> list[str]:
+    """Field names (env-var aliases) from Pydantic errors, optionally filtered by type."""
+    names = []
+    for err in errors:
+        if error_type is not None and err["type"] != error_type:
+            continue
+        loc = err["loc"]
+        names.append(str(loc[0]) if loc else "<root>")
+    return names
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    # lru_cache never caches a raised exception, so a fixed environment is
+    # picked up on the next call — do not wrap callers expecting otherwise.
     try:
         return Settings()
     except ValidationError as e:
-        missing = [err["loc"][0] for err in e.errors() if err["type"] == "missing"]
+        # Re-raise as ValueError naming the offending env vars, so the message
+        # is stable and callers don't depend on Pydantic's internal wording.
+        missing = _field_names(e.errors(), error_type="missing")
         if missing:
             raise ValueError(f"Missing required environment variables: {', '.join(missing)}") from e
-        raise ValueError(str(e)) from e
+        invalid = _field_names(e.errors())
+        raise ValueError(f"Invalid configuration for: {', '.join(invalid)}") from e
