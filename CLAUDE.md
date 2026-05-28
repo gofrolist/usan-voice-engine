@@ -35,8 +35,16 @@ ruff check . && ruff format .
 
 ### Stack
 ```bash
-docker compose --env-file infra/.env -f infra/docker-compose.yml up -d
+make up       # builds usan-agent-base:local if missing, then compose up -d
+make base     # force rebuild of the agent base image (model pre-warm)
+make down
+make logs
 ```
+
+The agent has a split Dockerfile (heavy `Dockerfile.base` for VAD/turn-detector
+pre-warm + thin `Dockerfile` for app code). The Makefile bootstraps the base
+image; raw `docker compose up` will fail with "pull access denied" on
+`usan-agent-base:local`.
 
 ## Conventions
 

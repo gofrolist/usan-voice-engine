@@ -22,9 +22,15 @@ See `docs/superpowers/specs/2026-05-25-usan-voice-engine-design.md` for the full
 cp infra/.env.example infra/.env
 # Fill in Telnyx, Cartesia, Gemini, LiveKit secrets
 
-docker compose --env-file infra/.env -f infra/docker-compose.yml up -d
-docker compose -f infra/docker-compose.yml logs -f
+make up      # builds usan-agent-base:local on first run, then compose up -d
+make logs
 ```
+
+The agent uses a split Dockerfile: a heavy `Dockerfile.base` that pre-warms Silero
+VAD + turn-detector models, and a thin `Dockerfile` that copies app code on top.
+`make up` builds the base image on first run; rebuild it explicitly with `make base`
+when `services/agent/Dockerfile.base`, `pyproject.toml`, or `uv.lock` changes.
+Run `make help` for the full target list.
 
 ## Development
 
