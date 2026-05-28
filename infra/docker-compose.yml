@@ -35,8 +35,9 @@ services:
       - "7881:7881/tcp"           # rtc tcp
       - "50000-50100:50000-50100/udp"  # rtc media
     environment:
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      # LiveKit server reads keys from LIVEKIT_KEYS ("key: secret"). Compose
+      # substitutes the placeholders here, unlike the server's YAML config.
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
     restart: unless-stopped
 
   livekit-sip:

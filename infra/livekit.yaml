@@ -4,8 +4,9 @@ rtc:
   port_range_start: 50000
   port_range_end: 50100
   use_external_ip: false
-keys:
-  ${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}
+# Keys are injected via the LIVEKIT_KEYS env var in docker-compose.yml.
+# LiveKit server does NOT substitute ${...} placeholders in this YAML, so a
+# `keys:` block here would be read literally and every client gets a 401.
 logging:
   level: info
   json: true
