@@ -18,18 +18,21 @@ Keep responses short — one or two sentences. Pause to let them respond.
 
 GREETING = "Hello! This is your daily check-in from USAN. How are you feeling today?"
 
+STT_MODEL = "ink-whisper"
+LLM_MODEL = "gemini-3.1-flash-lite"
+
 
 def build_session(settings: Settings) -> AgentSession:
     """Construct an AgentSession wiring STT, LLM, TTS, VAD, and turn-detector."""
-    logger.info("Building AgentSession (cartesia STT/TTS, gemini-3.1-flash-lite)")
+    logger.info("Building AgentSession (cartesia STT/TTS, {model})", model=LLM_MODEL)
     return AgentSession(
         vad=silero.VAD.load(),
         stt=cartesia.STT(
-            model="ink-whisper",
+            model=STT_MODEL,
             api_key=settings.cartesia_api_key,
         ),
         llm=google.LLM(
-            model="gemini-3.1-flash-lite",
+            model=LLM_MODEL,
             api_key=settings.gemini_api_key,
         ),
         tts=cartesia.TTS(
