@@ -53,10 +53,11 @@ def test_enqueue_call_idempotent_replay_returns_200(client, mock_dispatch):
 
 def test_enqueue_call_conflicting_idempotency_returns_409(client, mock_dispatch):
     elder_id = _create_elder(client)
-    client.post(
+    first = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "x", "dynamic_vars": {"a": 1}},
     )
+    assert first.status_code == 202
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "x", "dynamic_vars": {"a": 2}},

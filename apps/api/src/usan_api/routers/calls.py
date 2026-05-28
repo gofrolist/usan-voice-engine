@@ -71,16 +71,19 @@ async def enqueue_call(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         await calls_repo.set_status(
-            db, call.id, CallStatus.FAILED, error={"reason": "dispatch_error"}
+            db,
+            call.id,
+            CallStatus.FAILED,
+            error={"reason": "dispatch_error", "exc_type": type(exc).__name__},
         )
         await db.commit()
         logger.bind(call_id=str(call.id)).exception("Outbound dispatch failed")
         raise HTTPException(status_code=502, detail="failed to dispatch outbound call") from exc
 
-    await calls_repo.set_status(db, call.id, CallStatus.DIALING)
+    dialing = await calls_repo.set_status(db, call.id, CallStatus.DIALING)
     await db.commit()
     logger.bind(call_id=str(call.id), room=room).info("Outbound call dispatched")
-    return CallResponse.from_model(call)
+    return CallResponse.from_model(dialing or call)
 
 
 @router.get("/{call_id}", response_model=CallResponse)

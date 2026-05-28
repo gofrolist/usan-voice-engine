@@ -9,7 +9,7 @@ from usan_api.db.models import Call
 
 class CreateCallRequest(BaseModel):
     elder_id: uuid.UUID
-    idempotency_key: str = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1, max_length=255)
     dynamic_vars: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -49,6 +49,13 @@ async def test_dispatch_invokes_agent_and_sip(monkeypatch):
 
     fake.agent_dispatch.create_dispatch.assert_awaited_once()
     fake.sip.create_sip_participant.assert_awaited_once()
+
+    dispatch_req = fake.agent_dispatch.create_dispatch.await_args.args[0]
+    assert dispatch_req.agent_name == "usan-agent"
+    assert dispatch_req.room == "usan-outbound-abc"
+    assert '"call_id"' in dispatch_req.metadata
+    assert str(call.id) in dispatch_req.metadata
+
     sip_req = fake.sip.create_sip_participant.await_args.args[0]
     assert sip_req.sip_call_to == "+15551234567"
     assert sip_req.sip_trunk_id == "ST_x"
