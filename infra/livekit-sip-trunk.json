@@ -1,0 +1,7 @@
+{
+  "trunk": {
+    "name": "usan-telnyx-inbound",
+    "numbers": ["${TELNYX_INBOUND_DID}"],
+    "allowed_addresses": ["sip.telnyx.com"]
+  }
+}

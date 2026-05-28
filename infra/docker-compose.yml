@@ -1,0 +1,151 @@
+name: usan-voice-engine
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    container_name: usan-postgres
+    init: true
+    stop_signal: SIGINT
+    stop_grace_period: 10s
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    container_name: usan-redis
+    init: true
+    stop_grace_period: 5s
+    # Message bus for livekit <-> livekit-sip coordination, not durable
+    # storage, so persistence is disabled.
+    command: redis-server --save "" --appendonly no
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  livekit:
+    image: livekit/livekit-server:v1.12.0
+    container_name: usan-livekit
+    init: true
+    stop_grace_period: 5s
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      # Control plane — host-only. Agent/sip reach livekit over the Docker
+      # network (ws://livekit:7880), not these host ports; only local tooling
+      # (livekit-cli) needs them. Production fronts livekit with TLS (Plan 4).
+      - "127.0.0.1:7880:7880"     # signaling (ws)
+      - "127.0.0.1:7881:7881/tcp" # rtc tcp
+      # Media plane — must stay reachable for RTP. Firewall at the host/VM
+      # level in production (Plan 4).
+      - "50000-50100:50000-50100/udp"  # rtc media
+    environment:
+      # LiveKit server reads keys from LIVEKIT_KEYS ("key: secret"). Compose
+      # substitutes the placeholders here, unlike the server's YAML config.
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    restart: unless-stopped
+
+  livekit-sip:
+    image: livekit/sip:v1.3.1
+    container_name: usan-livekit-sip
+    init: true
+    stop_grace_period: 5s
+    depends_on:
+      livekit:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    ports:
+      - "5060:5060/udp"
+      # rtp_port range below must match. Kept small for Docker Desktop on Mac —
+      # a 10k-port range makes up/down extremely slow and can wedge the VM
+      # network layer. Widen for production on Linux.
+      - "10000-10100:10000-10100/udp"
+    environment:
+      # livekit-sip does NOT expand ${...} in a --config file and has no
+      # per-field env overrides, so credentials are injected via SIP_CONFIG_BODY
+      # (the whole config as YAML). Compose substitutes the placeholders here.
+      SIP_CONFIG_BODY: |
+        api_key: ${LIVEKIT_API_KEY}
+        api_secret: ${LIVEKIT_API_SECRET}
+        ws_url: ${LIVEKIT_URL}
+        redis:
+          address: redis:6379
+        sip_port: 5060
+        rtp_port: 10000-10100
+        logging:
+          level: info
+          json: true
+    restart: unless-stopped
+
+  api:
+    image: usan-api:local
+    container_name: usan-api
+    pull_policy: build
+    init: true
+    stop_signal: SIGINT
+    stop_grace_period: 5s
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_URL: ${LIVEKIT_URL}
+      LOG_LEVEL: ${LOG_LEVEL}
+    ports:
+      # Host-only — the API is unauthenticated at this stage and is fronted by
+      # TLS/Caddy in production (Plan 4). Reachable as localhost:8000 in dev.
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+
+  agent:
+    image: usan-agent:local
+    container_name: usan-agent
+    pull_policy: build
+    init: true
+    stop_signal: SIGINT
+    stop_grace_period: 5s
+    build:
+      context: ../services/agent
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: usan-agent-base:local
+    depends_on:
+      - livekit
+    environment:
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_URL: ${LIVEKIT_URL}
+      CARTESIA_API_KEY: ${CARTESIA_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      DEFAULT_CARTESIA_VOICE_ID: ${DEFAULT_CARTESIA_VOICE_ID}
+      LOG_LEVEL: ${LOG_LEVEL}
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
