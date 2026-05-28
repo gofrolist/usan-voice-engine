@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
 
@@ -48,17 +48,14 @@ def async_database_url(database_url: str) -> str:
     return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
-async def _truncate(async_url: str) -> None:
-    engine = create_async_engine(async_url, poolclass=NullPool)
-    async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE calls, dnc_list, elders RESTART IDENTITY CASCADE"))
-    await engine.dispose()
-
-
-@pytest.fixture(autouse=True)
-def _clean_tables(async_database_url: str):
-    yield
-    asyncio.run(_truncate(async_database_url))
+async def _truncate_and_dispose(engine: AsyncEngine) -> None:
+    # Reset table state then dispose, run from the client teardown — so pure-unit
+    # tests that never request `client` don't pay for a Postgres container.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("TRUNCATE calls, dnc_list, elders RESTART IDENTITY CASCADE"))
+    finally:
+        await engine.dispose()
 
 
 @pytest.fixture
@@ -88,5 +85,5 @@ def client(database_url: str, async_database_url: str, monkeypatch) -> TestClien
     try:
         yield TestClient(app)
     finally:
-        asyncio.run(test_engine.dispose())
+        asyncio.run(_truncate_and_dispose(test_engine))
         get_settings.cache_clear()

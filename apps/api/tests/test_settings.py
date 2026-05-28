@@ -57,6 +57,17 @@ def test_database_url_async_converts_scheme(monkeypatch):
     assert s.database_url_async == "postgresql+asyncpg://u:p@host/db"
 
 
+def test_database_url_async_converts_legacy_postgres_scheme(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@host/db")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+
+    s = Settings()
+
+    assert s.database_url_async == "postgresql+asyncpg://u:p@host/db"
+
+
 def test_database_url_async_leaves_asyncpg_untouched(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@host/db")
     monkeypatch.setenv("LIVEKIT_API_KEY", "key")
