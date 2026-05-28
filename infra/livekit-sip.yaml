@@ -3,7 +3,12 @@ api_secret: ${LIVEKIT_API_SECRET}
 ws_url: ${LIVEKIT_URL}
 
 sip_port: 5060
-rtp_port: 10000-20000
+# Local dev: small RTP range. Docker Desktop for Mac creates one forwarding
+# rule per published port — the full 10000-20000 range (10k ports) makes
+# `compose up`/`down` pathologically slow and wedges the VM. ~100 ports here
+# handles ~50 concurrent calls. Widen this (and the compose port mapping) for
+# production on a real Linux host.
+rtp_port: 10000-10100
 
 logging:
   level: info
