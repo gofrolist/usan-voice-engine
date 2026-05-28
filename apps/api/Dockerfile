@@ -17,11 +17,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
 COPY src/ ./src/
+COPY alembic.ini ./
+COPY migrations/ ./migrations/
+COPY docker-entrypoint.sh ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 # Non-root user
-RUN groupadd -g 1001 appuser && \
+RUN chmod +x docker-entrypoint.sh && \
+    groupadd -g 1001 appuser && \
     useradd  -u 1001 -g 1001 -s /sbin/nologin -d /app appuser && \
     chown -R appuser:appuser /app
 USER appuser
@@ -30,4 +34,4 @@ ENV PATH="/app/.venv/bin:${PATH}"
 
 EXPOSE 8000
 
-CMD ["uvicorn", "usan_api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["./docker-entrypoint.sh"]
