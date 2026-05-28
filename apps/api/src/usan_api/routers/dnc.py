@@ -1,0 +1,23 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from usan_api.db.session import get_db
+from usan_api.repositories import dnc as dnc_repo
+from usan_api.schemas.dnc import DNCCreate, DNCResponse
+
+router = APIRouter(prefix="/v1/dnc", tags=["dnc"])
+
+
+@router.post("", status_code=status.HTTP_201_CREATED, response_model=DNCResponse)
+async def add_dnc(body: DNCCreate, db: AsyncSession = Depends(get_db)) -> DNCResponse:
+    entry = await dnc_repo.add_entry(db, body.phone_e164, body.reason)
+    await db.commit()
+    return DNCResponse.from_model(entry)
+
+
+@router.delete("/{phone_e164}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_dnc(phone_e164: str, db: AsyncSession = Depends(get_db)) -> None:
+    removed = await dnc_repo.remove_entry(db, phone_e164)
+    if not removed:
+        raise HTTPException(status_code=404, detail="not on DNC list")
+    await db.commit()

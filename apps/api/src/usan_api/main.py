@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from usan_api.logging_config import configure_logging
+from usan_api.routers import dnc
 from usan_api.settings import get_settings
 
 
@@ -18,5 +19,7 @@ def create_app() -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(status="ok")
+
+    app.include_router(dnc.router)
 
     return app
