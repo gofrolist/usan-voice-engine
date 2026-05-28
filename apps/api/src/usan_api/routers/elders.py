@@ -37,8 +37,15 @@ async def create_elder(body: ElderCreate, db: AsyncSession = Depends(get_db)) ->
 async def update_elder(
     elder_id: uuid.UUID, body: ElderUpdate, db: AsyncSession = Depends(get_db)
 ) -> ElderResponse:
-    elder = await elders_repo.update_elder(db, elder_id, body.model_dump(exclude_unset=True))
-    if elder is None:
-        raise HTTPException(status_code=404, detail="elder not found")
-    await db.commit()
+    try:
+        elder = await elders_repo.update_elder(db, elder_id, body.model_dump(exclude_unset=True))
+        if elder is None:
+            raise HTTPException(status_code=404, detail="elder not found")
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="elder with this phone_e164 or external_id already exists",
+        ) from exc
     return ElderResponse.from_model(elder)
