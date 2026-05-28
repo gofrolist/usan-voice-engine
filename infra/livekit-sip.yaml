@@ -2,6 +2,10 @@ api_key: ${LIVEKIT_API_KEY}
 api_secret: ${LIVEKIT_API_SECRET}
 ws_url: ${LIVEKIT_URL}
 
+# Shared message bus with the livekit server (must point at the same redis).
+redis:
+  address: redis:6379
+
 sip_port: 5060
 # Local dev: small RTP range. Docker Desktop for Mac creates one forwarding
 # rule per published port — the full 10000-20000 range (10k ports) makes
