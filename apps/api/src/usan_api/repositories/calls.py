@@ -4,7 +4,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api.db.models import Call, CallDirection, CallStatus
+from usan_api.db.base import CallDirection, CallStatus
+from usan_api.db.models import Call
 
 
 async def create_call(

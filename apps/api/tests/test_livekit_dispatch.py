@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from usan_api import livekit_dispatch
-from usan_api.db.models import Call, CallDirection, CallStatus, Elder
+from usan_api.db.base import CallDirection, CallStatus
+from usan_api.db.models import Call, Elder
 from usan_api.settings import Settings
 
 

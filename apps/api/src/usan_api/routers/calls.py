@@ -5,7 +5,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import livekit_dispatch
-from usan_api.db.models import CallDirection, CallStatus
+from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.session import get_db
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
