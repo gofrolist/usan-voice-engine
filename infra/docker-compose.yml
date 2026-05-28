@@ -23,7 +23,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: usan-redis
     init: true
     stop_grace_period: 5s
@@ -61,7 +61,7 @@ services:
     restart: unless-stopped
 
   livekit-sip:
-    image: livekit/sip:latest
+    image: livekit/sip:v1.3.1
     container_name: usan-livekit-sip
     init: true
     stop_grace_period: 5s
