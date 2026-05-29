@@ -66,9 +66,11 @@ async def enqueue_call(
     try:
         await livekit_dispatch.dispatch_outbound_call(call, elder=elder, settings=settings)
     except livekit_dispatch.OutboundDispatchError as exc:
+        # Keep the operational reason in the DB error column + logs; don't leak
+        # internal config var names to the (currently unauthenticated) caller.
         await calls_repo.set_status(db, call.id, CallStatus.FAILED, error={"reason": str(exc)})
         await db.commit()
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="outbound calling is not available") from exc
     except Exception as exc:
         await calls_repo.set_status(
             db,

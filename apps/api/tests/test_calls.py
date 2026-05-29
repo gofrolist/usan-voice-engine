@@ -104,6 +104,43 @@ def test_get_call_returns_status(client, mock_dispatch):
     assert r.json()["id"] == call_id
 
 
+def test_enqueue_call_dispatch_config_error_returns_503(client, monkeypatch):
+    async def _raise(*args, **kwargs):
+        raise livekit_dispatch.OutboundDispatchError(
+            "not configured: set LIVEKIT_SIP_OUTBOUND_TRUNK_ID"
+        )
+
+    monkeypatch.setattr(livekit_dispatch, "dispatch_outbound_call", _raise)
+    elder_id = _create_elder(client)
+    r = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": "err503", "dynamic_vars": {}},
+    )
+    assert r.status_code == 503
+    # the generic detail must not leak internal config var names
+    assert "LIVEKIT_SIP_OUTBOUND_TRUNK_ID" not in r.json()["detail"]
+    # the call row was persisted as FAILED; an idempotent replay surfaces it
+    replay = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": "err503", "dynamic_vars": {}},
+    )
+    assert replay.status_code == 200
+    assert replay.json()["status"] == "failed"
+
+
+def test_enqueue_call_unexpected_dispatch_error_returns_502(client, monkeypatch):
+    async def _raise(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(livekit_dispatch, "dispatch_outbound_call", _raise)
+    elder_id = _create_elder(client)
+    r = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": "err502", "dynamic_vars": {}},
+    )
+    assert r.status_code == 502
+
+
 def test_get_unknown_call_returns_404(client):
     r = client.get(f"/v1/calls/{uuid.uuid4()}")
     assert r.status_code == 404
