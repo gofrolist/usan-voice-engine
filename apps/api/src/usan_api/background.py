@@ -9,13 +9,24 @@ import asyncio
 from collections.abc import Coroutine
 from typing import Any
 
+from loguru import logger
+
 _tasks: set[asyncio.Task[Any]] = set()
+
+
+def _log_task_exception(task: asyncio.Task[Any]) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.opt(exception=exc).error("Unhandled background task exception")
 
 
 def spawn(coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
     task = asyncio.create_task(coro)
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
+    task.add_done_callback(_log_task_exception)
     return task
 
 

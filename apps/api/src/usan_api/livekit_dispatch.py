@@ -5,6 +5,7 @@ from google.protobuf.duration_pb2 import Duration
 from livekit import api
 from loguru import logger
 
+from usan_api.db.base import CallStatus
 from usan_api.db.models import Call, Elder
 from usan_api.db.session import get_session_factory
 from usan_api.repositories import calls as calls_repo
@@ -83,7 +84,25 @@ async def _delete_room(room: str, settings: Settings) -> None:
 
 
 async def dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
-    """Background task: dial the callee, classify the outcome, write it, clean up."""
+    """Background task entrypoint: dial + classify, guarded so an infra failure
+    still marks the call FAILED instead of leaving it stuck at ``dialing``."""
+    try:
+        await _dial_and_classify(call_id, settings)
+    except Exception:
+        logger.bind(call_id=str(call_id)).exception("dial_and_classify crashed")
+        try:
+            factory = get_session_factory()
+            async with factory() as db:
+                await calls_repo.mark_dial_failure(
+                    db, call_id, CallStatus.FAILED, end_reason="internal_error"
+                )
+                await db.commit()
+        except Exception:
+            logger.bind(call_id=str(call_id)).warning("Could not mark call FAILED after crash")
+
+
+async def _dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
+    """Dial the callee, classify the outcome, write it, clean up."""
     factory = get_session_factory()
     async with factory() as db:
         call = await calls_repo.get_call(db, call_id)

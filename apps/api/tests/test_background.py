@@ -5,6 +5,14 @@ import pytest
 from usan_api import background
 
 
+@pytest.fixture(autouse=True)
+def _clear_background_tasks():
+    # _tasks is module-level global state; isolate tests from each other.
+    background._tasks.clear()
+    yield
+    background._tasks.clear()
+
+
 @pytest.mark.asyncio
 async def test_spawn_tracks_and_drains():
     ran = []

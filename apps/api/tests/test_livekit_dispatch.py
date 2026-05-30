@@ -55,7 +55,7 @@ async def _seed(factory, status=CallStatus.DIALING, room="usan-outbound-x"):
             livekit_room=room,
         )
         await db.commit()
-        return call.id
+        return call.id, phone
 
 
 @pytest.mark.asyncio
@@ -93,12 +93,17 @@ async def test_dial_success_marks_in_progress(monkeypatch, session_factory):
     monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
     monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
 
-    call_id = await _seed(session_factory, room="usan-outbound-ok")
+    call_id, phone = await _seed(session_factory, room="usan-outbound-ok")
     await livekit_dispatch.dial_and_classify(call_id, _settings())
 
     fake.sip.create_sip_participant.assert_awaited_once()
     sip_req = fake.sip.create_sip_participant.await_args.args[0]
     assert sip_req.wait_until_answered is True
+    assert sip_req.sip_call_to == phone
+    assert sip_req.sip_trunk_id == "ST_x"
+    assert sip_req.sip_number == "+15551230000"
+    assert sip_req.room_name == "usan-outbound-ok"
+    assert sip_req.participant_identity == "callee"
     async with session_factory() as db:
         call = await calls_repo.get_call(db, call_id)
     assert call.status is CallStatus.IN_PROGRESS
@@ -113,7 +118,7 @@ async def test_dial_busy_marks_busy_and_deletes_room(monkeypatch, session_factor
     monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
     monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
 
-    call_id = await _seed(session_factory, room="usan-outbound-busy")
+    call_id, _ = await _seed(session_factory, room="usan-outbound-busy")
     await livekit_dispatch.dial_and_classify(call_id, _settings())
 
     async with session_factory() as db:
