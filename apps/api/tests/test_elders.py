@@ -74,3 +74,37 @@ def test_update_elder_duplicate_phone_returns_409(client):
 def test_update_missing_elder_returns_404(client):
     r = client.put(f"/v1/elders/{uuid.uuid4()}", json={"name": "X"})
     assert r.status_code == 404
+
+
+def test_create_elder_invalid_phone_returns_422(client):
+    r = client.post(
+        "/v1/elders",
+        json={"name": "A", "phone_e164": "5551234567", "timezone": "UTC"},
+    )
+    assert r.status_code == 422
+
+
+def test_create_elder_sip_uri_phone_rejected_422(client):
+    r = client.post(
+        "/v1/elders",
+        json={"name": "A", "phone_e164": "sip:victim@attacker.com", "timezone": "UTC"},
+    )
+    assert r.status_code == 422
+
+
+def test_update_elder_invalid_phone_returns_422(client):
+    created = client.post(
+        "/v1/elders",
+        json={"name": "A", "phone_e164": "+15551239999", "timezone": "UTC"},
+    )
+    elder_id = created.json()["id"]
+    r = client.put(f"/v1/elders/{elder_id}", json={"phone_e164": "not-a-number"})
+    assert r.status_code == 422
+
+
+def test_create_elder_oversized_name_returns_422(client):
+    r = client.post(
+        "/v1/elders",
+        json={"name": "A" * 201, "phone_e164": "+15551230001", "timezone": "UTC"},
+    )
+    assert r.status_code == 422

@@ -10,6 +10,9 @@ router = APIRouter(prefix="/v1/dnc", tags=["dnc"])
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=DNCResponse)
 async def add_dnc(body: DNCCreate, db: AsyncSession = Depends(get_db)) -> DNCResponse:
+    # Serialize against a concurrent call-enqueue gate for the same number so a
+    # number cannot be dialed in the window between the gate check and this add.
+    await dnc_repo.lock_phone(db, body.phone_e164)
     entry = await dnc_repo.add_entry(db, body.phone_e164, body.reason)
     await db.commit()
     return DNCResponse.from_model(entry)

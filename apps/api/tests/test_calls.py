@@ -141,6 +141,95 @@ def test_enqueue_call_unexpected_dispatch_error_returns_502(client, monkeypatch)
     assert r.status_code == 502
 
 
+def test_enqueue_call_idempotency_race_returns_200(client, mock_dispatch, monkeypatch):
+    # Simulate the TOCTOU: the early idempotency SELECT misses, so the handler
+    # attempts an INSERT that hits the UNIQUE constraint, and the IntegrityError
+    # path must re-fetch and return the existing row (200) rather than 500.
+    from usan_api.repositories import calls as calls_repo
+
+    elder_id = _create_elder(client)
+    first = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": "race", "dynamic_vars": {}},
+    )
+    assert first.status_code == 202
+
+    real = calls_repo.get_by_idempotency_key
+    state = {"n": 0}
+
+    async def flaky(db, key):
+        state["n"] += 1
+        if state["n"] == 1:
+            return None  # first (early-check) lookup misses the committed row
+        return await real(db, key)
+
+    monkeypatch.setattr(calls_repo, "get_by_idempotency_key", flaky)
+    second = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": "race", "dynamic_vars": {}},
+    )
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+
+
+def test_enqueue_call_idempotency_race_conflict_returns_409(client, mock_dispatch, monkeypatch):
+    from usan_api.repositories import calls as calls_repo
+
+    elder_id = _create_elder(client)
+    first = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": "race2", "dynamic_vars": {"a": 1}},
+    )
+    assert first.status_code == 202
+
+    real = calls_repo.get_by_idempotency_key
+    state = {"n": 0}
+
+    async def flaky(db, key):
+        state["n"] += 1
+        return None if state["n"] == 1 else await real(db, key)
+
+    monkeypatch.setattr(calls_repo, "get_by_idempotency_key", flaky)
+    second = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": "race2", "dynamic_vars": {"a": 2}},
+    )
+    assert second.status_code == 409
+
+
+def test_enqueue_call_acquires_phone_advisory_lock(client, mock_dispatch, monkeypatch):
+    # Guard M2: the enqueue gate must take the per-phone advisory lock that
+    # serializes it against a concurrent add_dnc for the same number.
+    from usan_api.repositories import dnc as dnc_repo
+
+    seen: list[str] = []
+    real = dnc_repo.lock_phone
+
+    async def spy(db, phone):
+        seen.append(phone)
+        await real(db, phone)
+
+    monkeypatch.setattr(dnc_repo, "lock_phone", spy)
+    elder_id = _create_elder(client)  # phone +15551234567
+    r = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": "lock", "dynamic_vars": {}},
+    )
+    assert r.status_code == 202
+    assert seen == ["+15551234567"]
+
+
+def test_enqueue_call_oversized_dynamic_vars_returns_422(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    big = {"k": "x" * 9000}
+    r = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": "big", "dynamic_vars": big},
+    )
+    assert r.status_code == 422
+    mock_dispatch.assert_not_awaited()
+
+
 def test_get_unknown_call_returns_404(client):
     r = client.get(f"/v1/calls/{uuid.uuid4()}")
     assert r.status_code == 404

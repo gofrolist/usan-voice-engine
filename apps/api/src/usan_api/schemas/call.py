@@ -1,16 +1,28 @@
+import json
 import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from usan_api.db.models import Call
+
+# Cap the serialized dynamic_vars payload: it is persisted to JSONB and relayed
+# verbatim as LiveKit agent-dispatch metadata, so it must stay small.
+MAX_DYNAMIC_VARS_BYTES = 8192
 
 
 class CreateCallRequest(BaseModel):
     elder_id: uuid.UUID
     idempotency_key: str = Field(min_length=1, max_length=255)
     dynamic_vars: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("dynamic_vars")
+    @classmethod
+    def _cap_dynamic_vars(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(v)) > MAX_DYNAMIC_VARS_BYTES:
+            raise ValueError(f"dynamic_vars must serialize to <= {MAX_DYNAMIC_VARS_BYTES} bytes")
+        return v
 
 
 class CallResponse(BaseModel):

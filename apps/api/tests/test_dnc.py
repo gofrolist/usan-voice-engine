@@ -19,3 +19,8 @@ def test_remove_dnc_returns_204_then_404(client):
     assert d1.status_code == 204
     d2 = client.delete("/v1/dnc/%2B15550003333")
     assert d2.status_code == 404
+
+
+def test_add_dnc_invalid_phone_returns_422(client):
+    r = client.post("/v1/dnc", json={"phone_e164": "5550001111", "reason": "x"})
+    assert r.status_code == 422

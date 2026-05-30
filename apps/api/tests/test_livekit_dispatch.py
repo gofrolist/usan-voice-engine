@@ -60,6 +60,12 @@ async def test_dispatch_invokes_agent_and_sip(monkeypatch):
     assert sip_req.sip_call_to == "+15551234567"
     assert sip_req.sip_trunk_id == "ST_x"
     assert sip_req.room_name == "usan-outbound-abc"
+    # Caller ID (TELNYX_CALLER_ID) is load-bearing — assert it is wired through.
+    assert sip_req.sip_number == "+15551230000"
+    # Behavioral flags that distinguish a correct outbound dial.
+    assert sip_req.participant_identity == "callee"
+    assert sip_req.wait_until_answered is False
+    assert sip_req.play_ringtone is True
 
 
 @pytest.mark.asyncio

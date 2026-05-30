@@ -5,23 +5,24 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from usan_api.db.models import Elder
+from usan_api.schemas._validators import E164_PATTERN, PHONE_MAX_LENGTH
 
 
 class ElderCreate(BaseModel):
-    name: str = Field(min_length=1)
-    phone_e164: str = Field(min_length=1)
-    timezone: str = Field(min_length=1)
-    external_id: str | None = None
-    preferred_voice: str | None = None
+    name: str = Field(min_length=1, max_length=200)
+    phone_e164: str = Field(min_length=1, max_length=PHONE_MAX_LENGTH, pattern=E164_PATTERN)
+    timezone: str = Field(min_length=1, max_length=64)
+    external_id: str | None = Field(default=None, max_length=255)
+    preferred_voice: str | None = Field(default=None, max_length=255)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ElderUpdate(BaseModel):
-    name: str | None = None
-    phone_e164: str | None = None
-    timezone: str | None = None
-    external_id: str | None = None
-    preferred_voice: str | None = None
+    name: str | None = Field(default=None, max_length=200)
+    phone_e164: str | None = Field(default=None, max_length=PHONE_MAX_LENGTH, pattern=E164_PATTERN)
+    timezone: str | None = Field(default=None, max_length=64)
+    external_id: str | None = Field(default=None, max_length=255)
+    preferred_voice: str | None = Field(default=None, max_length=255)
     metadata: dict[str, Any] | None = None
 
 

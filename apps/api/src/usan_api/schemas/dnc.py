@@ -3,11 +3,12 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from usan_api.db.models import DNCEntry
+from usan_api.schemas._validators import E164_PATTERN, PHONE_MAX_LENGTH
 
 
 class DNCCreate(BaseModel):
-    phone_e164: str = Field(min_length=1)
-    reason: str | None = None
+    phone_e164: str = Field(min_length=1, max_length=PHONE_MAX_LENGTH, pattern=E164_PATTERN)
+    reason: str | None = Field(default=None, max_length=1000)
 
 
 class DNCResponse(BaseModel):
