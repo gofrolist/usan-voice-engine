@@ -92,3 +92,32 @@ async def test_mark_completed_noop_when_terminal(session_factory):
 async def test_mark_completed_unknown_room_is_none(session_factory):
     async with session_factory() as db:
         assert await calls_repo.mark_completed_if_in_progress(db, "nope") is None
+
+
+@pytest.mark.asyncio
+async def test_mark_voicemail_left_only_when_in_progress(session_factory):
+    call_id = await _seed_call(session_factory, status=CallStatus.DIALING, room="vm1")
+    async with session_factory() as db:
+        await calls_repo.mark_answered(db, call_id, sip_call_id="SCL")
+        await db.commit()
+    async with session_factory() as db:
+        call = await calls_repo.mark_voicemail_left_if_in_progress(db, call_id)
+        await db.commit()
+    assert call is not None
+    assert call.status is CallStatus.VOICEMAIL_LEFT
+    assert call.end_reason == "voicemail"
+    assert call.ended_at is not None
+    assert call.duration_seconds is not None
+    assert call.duration_seconds >= 0
+
+
+@pytest.mark.asyncio
+async def test_mark_voicemail_left_noop_when_terminal(session_factory):
+    call_id = await _seed_call(session_factory, status=CallStatus.NO_ANSWER, room="vm2")
+    async with session_factory() as db:
+        result = await calls_repo.mark_voicemail_left_if_in_progress(db, call_id)
+        await db.commit()
+    assert result is None
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.NO_ANSWER

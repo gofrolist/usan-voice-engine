@@ -121,3 +121,17 @@ async def mark_completed_if_in_progress(db: AsyncSession, livekit_room: str) -> 
     await db.flush()
     await db.refresh(call)
     return call
+
+
+async def mark_voicemail_left_if_in_progress(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
+    call = await db.get(Call, call_id)
+    if call is None or call.status is not CallStatus.IN_PROGRESS:
+        return None
+    call.status = CallStatus.VOICEMAIL_LEFT
+    call.ended_at = _utcnow()
+    call.end_reason = "voicemail"
+    if call.answered_at is not None:
+        call.duration_seconds = int((call.ended_at - call.answered_at).total_seconds())
+    await db.flush()
+    await db.refresh(call)
+    return call
