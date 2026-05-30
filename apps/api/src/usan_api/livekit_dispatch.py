@@ -1,14 +1,20 @@
 import json
+import uuid
 
+from google.protobuf.duration_pb2 import Duration
 from livekit import api
 from loguru import logger
 
 from usan_api.db.models import Call, Elder
+from usan_api.db.session import get_session_factory
+from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import elders as elders_repo
 from usan_api.settings import Settings
+from usan_api.sip_status import classify_dial_exception
 
 
 class OutboundDispatchError(Exception):
-    """Raised when an outbound call cannot be dispatched (misconfig or upstream error)."""
+    """Raised when an outbound call cannot be dispatched (misconfig)."""
 
 
 def build_livekit_api(settings: Settings) -> api.LiveKitAPI:
@@ -19,7 +25,18 @@ def build_livekit_api(settings: Settings) -> api.LiveKitAPI:
     )
 
 
-async def dispatch_outbound_call(call: Call, *, elder: Elder, settings: Settings) -> None:
+def _outbound_metadata(call: Call) -> str:
+    return json.dumps(
+        {
+            "call_id": str(call.id),
+            "direction": "outbound",
+            "dynamic_vars": call.dynamic_vars,
+        }
+    )
+
+
+async def dispatch_agent(call: Call, *, settings: Settings) -> None:
+    """Dispatch the named agent worker into the call's room (fast, synchronous)."""
     if not settings.livekit_sip_outbound_trunk_id or not settings.telnyx_caller_id:
         raise OutboundDispatchError(
             "outbound calling not configured: set "
@@ -28,23 +45,20 @@ async def dispatch_outbound_call(call: Call, *, elder: Elder, settings: Settings
     if not call.livekit_room:
         raise OutboundDispatchError("call has no livekit_room assigned")
 
-    metadata = json.dumps(
-        {
-            "call_id": str(call.id),
-            "direction": "outbound",
-            "dynamic_vars": call.dynamic_vars,
-        }
-    )
-
     async with build_livekit_api(settings) as lkapi:
         await lkapi.agent_dispatch.create_dispatch(
             api.CreateAgentDispatchRequest(
                 agent_name=settings.agent_name,
                 room=call.livekit_room,
-                metadata=metadata,
+                metadata=_outbound_metadata(call),
             )
         )
-        await lkapi.sip.create_sip_participant(
+    logger.bind(call_id=str(call.id), room=call.livekit_room).info("Agent dispatched")
+
+
+async def _create_sip_participant(call: Call, elder: Elder, settings: Settings) -> object:
+    async with build_livekit_api(settings) as lkapi:
+        return await lkapi.sip.create_sip_participant(
             api.CreateSIPParticipantRequest(
                 sip_trunk_id=settings.livekit_sip_outbound_trunk_id,
                 sip_call_to=elder.phone_e164,
@@ -52,11 +66,53 @@ async def dispatch_outbound_call(call: Call, *, elder: Elder, settings: Settings
                 room_name=call.livekit_room,
                 participant_identity="callee",
                 participant_name=elder.name,
-                wait_until_answered=False,
+                wait_until_answered=True,
                 play_ringtone=True,
+                ringing_timeout=Duration(seconds=settings.outbound_ringing_timeout_s),
+                max_call_duration=Duration(seconds=settings.outbound_max_call_duration_s),
             )
         )
 
-    logger.bind(call_id=str(call.id), room=call.livekit_room).info(
-        "Dispatched agent + SIP participant for outbound call"
-    )
+
+async def _delete_room(room: str, settings: Settings) -> None:
+    try:
+        async with build_livekit_api(settings) as lkapi:
+            await lkapi.room.delete_room(api.DeleteRoomRequest(room=room))
+    except Exception:  # best-effort cleanup; never mask the original dial outcome
+        logger.bind(room=room).warning("delete_room failed during dial cleanup")
+
+
+async def dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
+    """Background task: dial the callee, classify the outcome, write it, clean up."""
+    factory = get_session_factory()
+    async with factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+        if call is None or call.elder_id is None or not call.livekit_room:
+            logger.bind(call_id=str(call_id)).warning("dial_and_classify: call not dialable")
+            return
+        elder = await elders_repo.get_elder(db, call.elder_id)
+        if elder is None:
+            return
+        room = call.livekit_room
+
+    log = logger.bind(call_id=str(call_id), room=room)
+    try:
+        info = await _create_sip_participant(call, elder, settings)
+    except Exception as exc:  # busy / no-answer / reject / transport
+        status, end_reason, error = classify_dial_exception(exc)
+        async with factory() as db:
+            await calls_repo.mark_dial_failure(
+                db, call_id, status, end_reason=end_reason, error=error
+            )
+            await db.commit()
+        await _delete_room(room, settings)
+        log.info(
+            "Outbound dial failed: {status} ({reason})", status=status.value, reason=end_reason
+        )
+        return
+
+    sip_call_id = getattr(info, "sip_call_id", None)
+    async with factory() as db:
+        await calls_repo.mark_answered(db, call_id, sip_call_id=sip_call_id)
+        await db.commit()
+    log.info("Outbound call answered; in_progress")
