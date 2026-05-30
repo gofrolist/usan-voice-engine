@@ -4,9 +4,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from usan_api import background
 from usan_api.db.session import dispose_engine
 from usan_api.logging_config import configure_logging
-from usan_api.routers import calls, dnc, elders
+from usan_api.routers import calls, dnc, elders, webhooks
 from usan_api.settings import get_settings
 
 
@@ -17,6 +18,7 @@ class HealthResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
+    await background.drain(timeout=30.0)
     await dispose_engine()
 
 
@@ -33,5 +35,6 @@ def create_app() -> FastAPI:
     app.include_router(elders.router)
     app.include_router(dnc.router)
     app.include_router(calls.router)
+    app.include_router(webhooks.router)
 
     return app
