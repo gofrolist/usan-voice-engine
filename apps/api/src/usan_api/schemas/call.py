@@ -1,7 +1,7 @@
 import json
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -23,6 +23,10 @@ class CreateCallRequest(BaseModel):
         if len(json.dumps(v)) > MAX_DYNAMIC_VARS_BYTES:
             raise ValueError(f"dynamic_vars must serialize to <= {MAX_DYNAMIC_VARS_BYTES} bytes")
         return v
+
+
+class CallOutcomeRequest(BaseModel):
+    outcome: Literal["voicemail_left"]
 
 
 class CallResponse(BaseModel):

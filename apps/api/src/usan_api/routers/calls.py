@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from loguru import logger
@@ -6,13 +7,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import dialer, livekit_dispatch
+from usan_api.auth import require_service_token
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Elder
 from usan_api.db.session import get_db
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
-from usan_api.schemas.call import CallResponse, CreateCallRequest
+from usan_api.schemas.call import CallOutcomeRequest, CallResponse, CreateCallRequest
 from usan_api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/v1/calls", tags=["calls"])
@@ -121,3 +123,23 @@ async def get_call(call_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> Ca
     if call is None:
         raise HTTPException(status_code=404, detail="call not found")
     return CallResponse.from_model(call)
+
+
+@router.post("/{call_id}/outcome", response_model=CallResponse)
+async def report_outcome(
+    call_id: uuid.UUID,
+    body: CallOutcomeRequest,
+    db: AsyncSession = Depends(get_db),
+    claims: dict[str, Any] = Depends(require_service_token),
+) -> CallResponse:
+    if claims.get("call_id") != str(call_id):
+        raise HTTPException(status_code=403, detail="token not valid for this call")
+    call = await calls_repo.get_call(db, call_id)
+    if call is None:
+        raise HTTPException(status_code=404, detail="call not found")
+    # body.outcome is constrained to "voicemail_left"; gate on in_progress so a
+    # late/duplicate report never overrides an already-terminal call.
+    updated = await calls_repo.mark_voicemail_left_if_in_progress(db, call_id)
+    await db.commit()
+    logger.bind(call_id=str(call_id)).info("Call outcome reported: {o}", o=body.outcome)
+    return CallResponse.from_model(updated or call)
