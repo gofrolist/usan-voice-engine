@@ -56,6 +56,9 @@ async def _run_detection_window(
     settings: Settings,
 ) -> None:
     """Greet, then over the detection window leave a voicemail or fall through."""
+    # The watcher is already subscribed to user_input_transcribed (in entrypoint),
+    # so a voicemail greeting spoken DURING this greeting's playout still feeds the
+    # watcher; wait_until_detected returns immediately if the event is already set.
     await greet(session)
     if await watcher.wait_until_detected(VOICEMAIL_WINDOW_S):
         await leave_voicemail(ctx, session, call_id, settings)
@@ -83,6 +86,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 ctx.wait_for_participant(), timeout=settings.outbound_answer_timeout_s
             )
         except TimeoutError:
+            # asyncio.TimeoutError is an alias of builtin TimeoutError on 3.11+.
             # The API's dial task classifies/cleans up no-answer; this is the
             # agent-side backstop so the job never hangs on an unanswered call.
             log.info("No participant within answer timeout; ending job")
