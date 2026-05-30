@@ -5,7 +5,7 @@ from loguru import logger
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api import livekit_dispatch
+from usan_api import dialer, livekit_dispatch
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Elder
 from usan_api.db.session import get_db
@@ -35,7 +35,7 @@ async def _create_and_dispatch(
     settings: Settings,
     response: Response,
 ) -> CallResponse:
-    """Persist a queued call, dispatch it, and transition to dialing."""
+    """Persist a queued call, dispatch the agent, schedule the background dial."""
     room = f"usan-outbound-{uuid.uuid4()}"
     try:
         call = await calls_repo.create_call(
@@ -49,8 +49,6 @@ async def _create_and_dispatch(
         )
         await db.commit()
     except IntegrityError as exc:
-        # Lost a concurrent race on the unique idempotency_key: the row now
-        # exists. Re-fetch and apply the same replay contract (200 or 409).
         await db.rollback()
         existing = await calls_repo.get_by_idempotency_key(db, body.idempotency_key)
         if existing is None:
@@ -58,10 +56,8 @@ async def _create_and_dispatch(
         return _idempotent_replay(existing, body, response)
 
     try:
-        await livekit_dispatch.dispatch_outbound_call(call, elder=elder, settings=settings)
+        await livekit_dispatch.dispatch_agent(call, settings=settings)
     except livekit_dispatch.OutboundDispatchError as exc:
-        # Keep the operational reason in the DB error column + logs; don't leak
-        # internal config var names to the (currently unauthenticated) caller.
         await calls_repo.set_status(db, call.id, CallStatus.FAILED, error={"reason": str(exc)})
         await db.commit()
         raise HTTPException(status_code=503, detail="outbound calling is not available") from exc
@@ -73,12 +69,13 @@ async def _create_and_dispatch(
             error={"reason": "dispatch_error", "exc_type": type(exc).__name__},
         )
         await db.commit()
-        logger.bind(call_id=str(call.id)).exception("Outbound dispatch failed")
+        logger.bind(call_id=str(call.id)).exception("Agent dispatch failed")
         raise HTTPException(status_code=502, detail="failed to dispatch outbound call") from exc
 
     dialing = await calls_repo.set_status(db, call.id, CallStatus.DIALING)
     await db.commit()
-    logger.bind(call_id=str(call.id), room=room).info("Outbound call dispatched")
+    dialer.schedule_dial(call.id, settings)
+    logger.bind(call_id=str(call.id), room=room).info("Outbound call dispatched; dialing")
     return CallResponse.from_model(dialing or call)
 
 

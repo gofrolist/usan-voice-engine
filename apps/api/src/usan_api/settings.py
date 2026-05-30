@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     )
     telnyx_caller_id: str | None = Field(default=None, alias="TELNYX_CALLER_ID")
     agent_name: str = Field(default="usan-agent", alias="AGENT_NAME")
+    outbound_ringing_timeout_s: int = Field(
+        default=45, ge=5, le=120, alias="OUTBOUND_RINGING_TIMEOUT_S"
+    )
+    outbound_max_call_duration_s: int = Field(
+        default=1800, ge=60, le=7200, alias="OUTBOUND_MAX_CALL_DURATION_S"
+    )
 
     @field_validator("livekit_url")
     @classmethod

@@ -104,3 +104,29 @@ def test_outbound_fields_default_none_and_agent_name(monkeypatch):
     assert s.livekit_sip_outbound_trunk_id is None
     assert s.telnyx_caller_id is None
     assert s.agent_name == "usan-agent"
+
+
+def test_outbound_dial_timeouts_have_defaults(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+    monkeypatch.delenv("OUTBOUND_RINGING_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("OUTBOUND_MAX_CALL_DURATION_S", raising=False)
+
+    s = Settings()
+
+    assert s.outbound_ringing_timeout_s == 45
+    assert s.outbound_max_call_duration_s == 1800
+
+
+def test_outbound_dial_timeouts_override(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+    monkeypatch.setenv("OUTBOUND_RINGING_TIMEOUT_S", "30")
+
+    s = Settings()
+
+    assert s.outbound_ringing_timeout_s == 30

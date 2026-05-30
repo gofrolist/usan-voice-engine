@@ -117,3 +117,33 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f agent
 Document the outcome here: network setup (local public IP / VM), what you heard,
 and any latency observations. If you don't yet have a public IP for Telnyx to
 route media to, note that outbound is deferred to the Plan 4 deploy task.
+
+## Call lifecycle (Plan 2b-1)
+
+After dispatch, an outbound call now transitions through real states instead of
+sitting at `dialing`:
+
+- `dialing` → background SIP dial (`wait_until_answered=true`, `ringing_timeout`):
+  - answered → `in_progress` (sets `answered_at`, `sip_call_id`)
+  - SIP 486 → `busy`; SIP 408/480/487 → `no_answer`; SIP 603 → `no_answer`; other → `failed` (the room is torn down so the waiting agent exits)
+- `in_progress` → LiveKit `room_finished` webhook → `completed` (sets `ended_at`, `duration_seconds`)
+
+LiveKit posts room events to `http://api:8000/webhooks/livekit`, signed with
+`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` and verified by the API. The `webhook`
+block lives in the `LIVEKIT_CONFIG` env body of the `livekit` service in
+`docker-compose.yml` (not a mounted YAML file — livekit-server does not expand
+`${...}` in a `--config` file, so the whole config is passed via the env body
+where compose substitutes the key). Confirm wiring:
+
+```bash
+# place a call, then watch it advance
+curl -s -X POST http://localhost:8000/v1/calls -H 'content-type: application/json' \
+  -d "{\"elder_id\":\"<ELDER_ID>\",\"idempotency_key\":\"lc-1\",\"dynamic_vars\":{}}"
+# poll a few times — status moves dialing -> in_progress/busy/no_answer -> completed
+curl -s http://localhost:8000/v1/calls/<CALL_ID>
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f api | grep -i webhook
+```
+
+> Retry of `no_answer`/`busy`/`failed`/`voicemail_left` calls and TCPA quiet hours
+> are Plan 2b-3; agent-side voicemail detection is Plan 2b-2. In 2b-1 those terminal
+> states are reached and recorded but not yet retried.
