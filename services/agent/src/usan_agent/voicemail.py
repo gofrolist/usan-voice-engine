@@ -1,0 +1,54 @@
+"""Transcript-based voicemail detection (design spec §7).
+
+Telnyx AMD is not invokable in our LiveKit-SIP-trunk topology, so voicemail is
+detected agent-side from the first few seconds of STT. `is_voicemail` is a pure
+classifier; `VoicemailWatcher` accumulates interim+final STT chunks and signals
+once a voicemail greeting is recognised within the detection window.
+"""
+
+import asyncio
+import re
+
+# Seconds after the callee answers to listen for a voicemail greeting.
+VOICEMAIL_WINDOW_S = 3.0
+
+# §7 patterns, case-insensitive. The apostrophe in "you've" may be transcribed
+# as ', ', or dropped, so it is optional.
+_PATTERN = re.compile(
+    r"leave a (?:message|name)"
+    r"|you['']?ve reached"
+    r"|not available right now"
+    r"|after the (?:beep|tone)",
+    re.IGNORECASE,
+)
+
+
+def is_voicemail(text: str) -> bool:
+    return bool(_PATTERN.search(text))
+
+
+class VoicemailWatcher:
+    """Accumulate STT chunks and flag when a voicemail greeting is recognised."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._event = asyncio.Event()
+
+    def feed(self, transcript: str) -> None:
+        # Interim chunks are revised rather than strictly additive, but matching
+        # the §7 phrases against the running buffer is robust to that.
+        self._buffer = f"{self._buffer} {transcript}".strip()
+        if is_voicemail(self._buffer):
+            self._event.set()
+
+    @property
+    def detected(self) -> bool:
+        return self._event.is_set()
+
+    async def wait_until_detected(self, window_s: float) -> bool:
+        """True if a voicemail greeting is detected within `window_s` seconds."""
+        try:
+            await asyncio.wait_for(self._event.wait(), timeout=window_s)
+            return True
+        except TimeoutError:
+            return False
