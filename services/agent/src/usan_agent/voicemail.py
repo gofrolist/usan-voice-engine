@@ -13,10 +13,11 @@ import re
 VOICEMAIL_WINDOW_S = 3.0
 
 # §7 patterns, case-insensitive. The apostrophe in "you've" may be transcribed
-# as ', ', or dropped, so it is optional.
+# as a straight ', a curly ’, or dropped, so the class covers both and is
+# optional. (re interprets the ’ escape inside the pattern.)
 _PATTERN = re.compile(
     r"leave a (?:message|name)"
-    r"|you['']?ve reached"
+    r"|you[’']?ve reached"
     r"|not available right now"
     r"|after the (?:beep|tone)",
     re.IGNORECASE,

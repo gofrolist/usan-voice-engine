@@ -10,8 +10,8 @@ from usan_agent.voicemail import VOICEMAIL_WINDOW_S, VoicemailWatcher, is_voicem
     [
         "Please leave a message after the tone",
         "leave a name and number",
-        "You've reached the Smith residence",
-        "you've reached us",  # curly apostrophe
+        "You've reached the Smith residence",  # straight apostrophe
+        "you’ve reached us",  # curly apostrophe (U+2019)
         "youve reached us",  # dropped apostrophe
         "I'm not available right now",
         "please record your message after the beep",
