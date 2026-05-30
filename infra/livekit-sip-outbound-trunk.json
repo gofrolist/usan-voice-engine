@@ -1,0 +1,9 @@
+{
+  "trunk": {
+    "name": "usan-telnyx-outbound",
+    "address": "sip.telnyx.com",
+    "numbers": ["${TELNYX_CALLER_ID}"],
+    "auth_username": "${TELNYX_SIP_USERNAME}",
+    "auth_password": "${TELNYX_SIP_PASSWORD}"
+  }
+}

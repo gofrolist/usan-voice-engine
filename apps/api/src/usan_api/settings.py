@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO", alias="LOG_LEVEL"
     )
+    livekit_sip_outbound_trunk_id: str | None = Field(
+        default=None, alias="LIVEKIT_SIP_OUTBOUND_TRUNK_ID"
+    )
+    telnyx_caller_id: str | None = Field(default=None, alias="TELNYX_CALLER_ID")
+    agent_name: str = Field(default="usan-agent", alias="AGENT_NAME")
 
     @field_validator("livekit_url")
     @classmethod
@@ -22,6 +27,28 @@ class Settings(BaseSettings):
         if not v.startswith(("ws://", "wss://")):
             raise ValueError("must be a ws:// or wss:// URL")
         return v
+
+    @property
+    def database_url_async(self) -> str:
+        """DATABASE_URL with the asyncpg driver, for SQLAlchemy's async engine."""
+        url = self.database_url
+        if url.startswith("postgresql+asyncpg://"):
+            return url
+        if url.startswith("postgresql://"):
+            return "postgresql+asyncpg://" + url[len("postgresql://") :]
+        if url.startswith("postgres://"):
+            return "postgresql+asyncpg://" + url[len("postgres://") :]
+        return url
+
+    @property
+    def livekit_http_url(self) -> str:
+        """LIVEKIT_URL as an http(s) URL, for the livekit-api server SDK."""
+        url = self.livekit_url
+        if url.startswith("wss://"):
+            return "https://" + url[len("wss://") :]
+        if url.startswith("ws://"):
+            return "http://" + url[len("ws://") :]
+        return url
 
 
 def _field_names(errors: list[Any], *, error_type: str | None = None) -> list[str]:

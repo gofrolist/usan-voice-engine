@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     cartesia_api_key: str = Field(..., min_length=1, alias="CARTESIA_API_KEY")
     gemini_api_key: str = Field(..., min_length=1, alias="GEMINI_API_KEY")
     default_cartesia_voice_id: str = Field(..., min_length=1, alias="DEFAULT_CARTESIA_VOICE_ID")
+    agent_name: str = Field(default="usan-agent", alias="AGENT_NAME")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO", alias="LOG_LEVEL"
     )
