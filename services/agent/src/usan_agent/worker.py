@@ -5,6 +5,7 @@ Run with:
     uv run python -m usan_agent.worker start  # production mode
 """
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -14,7 +15,9 @@ from loguru import logger
 
 from usan_agent.logging_config import configure_logging
 from usan_agent.pipeline import build_agent, build_session, greet
-from usan_agent.settings import get_settings
+from usan_agent.settings import Settings, get_settings
+from usan_agent.voicemail import VOICEMAIL_WINDOW_S, VoicemailWatcher
+from usan_agent.voicemail_action import leave_voicemail
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,21 @@ def parse_metadata(raw: str | None) -> CallMetadata:
     )
 
 
+async def _run_detection_window(
+    ctx: JobContext,
+    session: Any,
+    watcher: VoicemailWatcher,
+    *,
+    call_id: str | None,
+    settings: Settings,
+) -> None:
+    """Greet, then over the detection window leave a voicemail or fall through."""
+    await greet(session)
+    if await watcher.wait_until_detected(VOICEMAIL_WINDOW_S):
+        await leave_voicemail(ctx, session, call_id, settings)
+    # else: a human answered — the conversation continues (single-turn in Plan 1).
+
+
 async def entrypoint(ctx: JobContext) -> None:
     """Per-room entrypoint. LiveKit calls this once per dispatched job."""
     settings = get_settings()
@@ -56,15 +74,30 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session = build_session(settings)
     agent = build_agent()
-
     await session.start(agent=agent, room=ctx.room)
     log.info("Session started; waiting for participant")
 
-    # Inbound: the caller is already present and this returns immediately.
-    # Outbound: blocks until the callee answers and the SIP participant joins.
+    if meta.direction == "outbound":
+        try:
+            await asyncio.wait_for(
+                ctx.wait_for_participant(), timeout=settings.outbound_answer_timeout_s
+            )
+        except TimeoutError:
+            # The API's dial task classifies/cleans up no-answer; this is the
+            # agent-side backstop so the job never hangs on an unanswered call.
+            log.info("No participant within answer timeout; ending job")
+            ctx.shutdown(reason="no_answer_timeout")
+            return
+
+        watcher = VoicemailWatcher()
+        session.on("user_input_transcribed", lambda ev: watcher.feed(ev.transcript))
+        log.info("Participant present; running voicemail detection window")
+        await _run_detection_window(ctx, session, watcher, call_id=meta.call_id, settings=settings)
+        return
+
+    # Inbound: caller already present; no voicemail detection (spec §7).
     await ctx.wait_for_participant()
     log.info("Participant present; greeting")
-
     await greet(session)
     log.info("Greeting spoken")
 
