@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     outbound_max_call_duration_s: int = Field(
         default=1800, ge=60, le=7200, alias="OUTBOUND_MAX_CALL_DURATION_S"
     )
+    jwt_signing_key: str = Field(..., min_length=32, alias="JWT_SIGNING_KEY")
 
     @field_validator("livekit_url")
     @classmethod
