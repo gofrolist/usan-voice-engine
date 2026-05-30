@@ -114,6 +114,18 @@ async def _dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
             return
         room = call.livekit_room
 
+    # Belt-and-suspenders: dispatch_agent already gates on this before the dial
+    # is scheduled, but the SIP request fields are typed str|None — never pass
+    # None into the gRPC request; mark FAILED with a clear reason instead.
+    if not settings.livekit_sip_outbound_trunk_id or not settings.telnyx_caller_id:
+        async with factory() as db:
+            await calls_repo.mark_dial_failure(
+                db, call_id, CallStatus.FAILED, end_reason="not_configured"
+            )
+            await db.commit()
+        await _delete_room(room, settings)
+        return
+
     log = logger.bind(call_id=str(call_id), room=room)
     try:
         info = await _create_sip_participant(call, elder, settings)

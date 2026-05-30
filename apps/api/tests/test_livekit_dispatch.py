@@ -128,6 +128,24 @@ async def test_dial_busy_marks_busy_and_deletes_room(monkeypatch, session_factor
     fake.room.delete_room.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_dial_unconfigured_marks_failed_without_dialing(monkeypatch, session_factory):
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    call_id, _ = await _seed(session_factory, room="usan-outbound-noconf")
+    settings = _settings(LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None, TELNYX_CALLER_ID=None)
+    await livekit_dispatch.dial_and_classify(call_id, settings)
+
+    fake.sip.create_sip_participant.assert_not_awaited()  # never pass None into the request
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.FAILED
+    assert call.end_reason == "not_configured"
+    fake.room.delete_room.assert_awaited_once()
+
+
 def _twirp_busy() -> Exception:
     exc = Exception("SIP 486 Busy Here")
     exc.metadata = {"sip_status_code": "486"}

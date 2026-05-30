@@ -125,7 +125,11 @@ services:
     pull_policy: build
     init: true
     stop_signal: SIGINT
-    stop_grace_period: 5s
+    # Must exceed the shutdown drain window (OUTBOUND_RINGING_TIMEOUT_S + 15,
+    # default 60s) so an in-flight background dial finishes and writes its
+    # outcome before Docker SIGKILLs the container — otherwise a mid-ring call
+    # is left stuck at 'dialing' on every restart.
+    stop_grace_period: 90s
     build:
       context: ../apps/api
       dockerfile: Dockerfile
