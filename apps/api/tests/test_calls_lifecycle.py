@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -8,19 +10,19 @@ from usan_api.repositories import elders as elders_repo
 
 
 @pytest.fixture
-def session_factory(async_database_url):
+async def session_factory(async_database_url):
     engine = create_async_engine(async_database_url, poolclass=NullPool)
-    return async_sessionmaker(engine, expire_on_commit=False)
+    yield async_sessionmaker(engine, expire_on_commit=False)
+    await engine.dispose()
 
 
-async def _seed_call(factory, *, status, room, answered=False):
-    # Derive a unique phone suffix from the room name to avoid unique constraint
-    # violations when tests share a long-lived Postgres container.
-    suffix = abs(hash(room)) % 9_000_000 + 1_000_000
+async def _seed_call(factory, *, status, room):
+    # Unique phone per call: tests using this fixture share a long-lived Postgres
+    # container with no truncation between them, so a fixed number would collide
+    # on the phone_e164 unique constraint.
+    phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(
-            db, name="A", phone_e164=f"+1555{suffix}", timezone="UTC"
-        )
+        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
         call = await calls_repo.create_call(
             db,
             elder_id=elder.id,
