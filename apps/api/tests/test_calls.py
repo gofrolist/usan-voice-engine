@@ -16,10 +16,19 @@ def _create_elder(client) -> str:
 
 
 @pytest.fixture
-def mock_dispatch(monkeypatch) -> AsyncMock:
-    dispatch = AsyncMock()
-    monkeypatch.setattr(livekit_dispatch, "dispatch_outbound_call", dispatch)
-    return dispatch
+def mock_dispatch(monkeypatch):
+    agent = AsyncMock()
+    scheduled: list = []
+    monkeypatch.setattr(livekit_dispatch, "dispatch_agent", agent)
+
+    def _schedule(call_id, settings):
+        scheduled.append(call_id)
+
+    from usan_api import dialer
+
+    monkeypatch.setattr(dialer, "schedule_dial", _schedule)
+    agent.scheduled = scheduled
+    return agent
 
 
 def test_enqueue_call_dispatches_and_returns_202(client, mock_dispatch):
@@ -32,7 +41,8 @@ def test_enqueue_call_dispatches_and_returns_202(client, mock_dispatch):
     body = r.json()
     assert body["direction"] == "outbound"
     assert body["status"] == "dialing"
-    mock_dispatch.assert_awaited_once()
+    mock_dispatch.assert_awaited_once()  # agent dispatched
+    assert len(mock_dispatch.scheduled) == 1  # background dial scheduled
 
 
 def test_enqueue_call_idempotent_replay_returns_200(client, mock_dispatch):
@@ -48,7 +58,7 @@ def test_enqueue_call_idempotent_replay_returns_200(client, mock_dispatch):
     assert r1.status_code == 202
     assert r2.status_code == 200
     assert r2.json()["id"] == r1.json()["id"]
-    mock_dispatch.assert_awaited_once()
+    assert len(mock_dispatch.scheduled) == 1
 
 
 def test_enqueue_call_conflicting_idempotency_returns_409(client, mock_dispatch):
@@ -77,7 +87,7 @@ def test_enqueue_call_dnc_blocked(client, mock_dispatch):
     )
     assert r.status_code == 200
     assert r.json()["status"] == "dnc_blocked"
-    mock_dispatch.assert_not_awaited()
+    assert mock_dispatch.scheduled == []
 
 
 def test_enqueue_call_unknown_elder_returns_404(client, mock_dispatch):
@@ -110,16 +120,14 @@ def test_enqueue_call_dispatch_config_error_returns_503(client, monkeypatch):
             "not configured: set LIVEKIT_SIP_OUTBOUND_TRUNK_ID"
         )
 
-    monkeypatch.setattr(livekit_dispatch, "dispatch_outbound_call", _raise)
+    monkeypatch.setattr(livekit_dispatch, "dispatch_agent", _raise)
     elder_id = _create_elder(client)
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "err503", "dynamic_vars": {}},
     )
     assert r.status_code == 503
-    # the generic detail must not leak internal config var names
     assert "LIVEKIT_SIP_OUTBOUND_TRUNK_ID" not in r.json()["detail"]
-    # the call row was persisted as FAILED; an idempotent replay surfaces it
     replay = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "err503", "dynamic_vars": {}},
@@ -132,7 +140,7 @@ def test_enqueue_call_unexpected_dispatch_error_returns_502(client, monkeypatch)
     async def _raise(*args, **kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(livekit_dispatch, "dispatch_outbound_call", _raise)
+    monkeypatch.setattr(livekit_dispatch, "dispatch_agent", _raise)
     elder_id = _create_elder(client)
     r = client.post(
         "/v1/calls",
@@ -228,6 +236,16 @@ def test_enqueue_call_oversized_dynamic_vars_returns_422(client, mock_dispatch):
     )
     assert r.status_code == 422
     mock_dispatch.assert_not_awaited()
+
+
+def test_enqueue_call_status_is_dialing(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    r = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": "dl", "dynamic_vars": {}},
+    )
+    assert r.status_code == 202
+    assert r.json()["status"] == "dialing"
 
 
 def test_get_unknown_call_returns_404(client):
