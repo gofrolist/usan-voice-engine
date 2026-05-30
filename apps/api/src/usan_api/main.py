@@ -18,7 +18,11 @@ class HealthResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
-    await background.drain(timeout=30.0)
+    # Drain longer than the longest blocking dial (ringing timeout) so an
+    # in-flight dial finishes and writes its outcome before the engine closes;
+    # otherwise it would write against a disposed engine and stick at 'dialing'.
+    drain_timeout = float(get_settings().outbound_ringing_timeout_s) + 15.0
+    await background.drain(timeout=drain_timeout)
     await dispose_engine()
 
 
