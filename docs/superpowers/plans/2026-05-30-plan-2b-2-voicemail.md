@@ -1338,7 +1338,7 @@ async def _run_detection_window(
 ) -> None:
     """Greet, then over the detection window leave a voicemail or fall through."""
     await greet(session)
-    if await watcher.wait_until_detected(timeout=VOICEMAIL_WINDOW_S):
+    if await watcher.wait_until_detected(VOICEMAIL_WINDOW_S):
         await leave_voicemail(ctx, session, call_id, settings)
     # else: a human answered — the conversation continues (single-turn in Plan 1).
 

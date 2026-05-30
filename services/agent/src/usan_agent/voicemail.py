@@ -36,6 +36,8 @@ class VoicemailWatcher:
         self._event = asyncio.Event()
 
     def feed(self, transcript: str) -> None:
+        if self._event.is_set():
+            return  # already detected; stop accumulating
         # Interim chunks are revised rather than strictly additive, but matching
         # the §7 phrases against the running buffer is robust to that.
         self._buffer = f"{self._buffer} {transcript}".strip()

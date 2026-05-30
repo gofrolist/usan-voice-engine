@@ -10,17 +10,6 @@ def _settings() -> MagicMock:
     return MagicMock()
 
 
-def _awaitable_handle() -> AsyncMock:
-    """Return an AsyncMock that can be used as a directly-awaitable SpeechHandle.
-
-    session.say() returns a SpeechHandle which implements __await__. We simulate
-    this with an AsyncMock used as a coroutine function — the production code does
-    `handle = session.say(...); await handle`, so session.say is AsyncMock and
-    handle is the coroutine object returned by calling it.
-    """
-    return AsyncMock()
-
-
 @pytest.mark.asyncio
 async def test_leave_voicemail_sequence(monkeypatch):
     reported = []
