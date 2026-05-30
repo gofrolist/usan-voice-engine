@@ -343,3 +343,23 @@ def test_outcome_unknown_call_404(client):
         headers={"Authorization": f"Bearer {_service_token(cid)}"},
     )
     assert r.status_code == 404
+
+
+def test_outcome_idempotent_noop_when_already_terminal(client, mock_dispatch, async_database_url):
+    # A late/duplicate report on an already-terminal call is a 200 no-op, not an error.
+    call_id = _answered_call(client, async_database_url)
+    first = client.post(
+        f"/v1/calls/{call_id}/outcome",
+        json={"outcome": "voicemail_left"},
+        headers={"Authorization": f"Bearer {_service_token(call_id)}"},
+    )
+    assert first.status_code == 200
+    assert first.json()["status"] == "voicemail_left"
+
+    second = client.post(
+        f"/v1/calls/{call_id}/outcome",
+        json={"outcome": "voicemail_left"},
+        headers={"Authorization": f"Bearer {_service_token(call_id)}"},
+    )
+    assert second.status_code == 200
+    assert second.json()["status"] == "voicemail_left"
