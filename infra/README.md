@@ -129,7 +129,11 @@ sitting at `dialing`:
 - `in_progress` → LiveKit `room_finished` webhook → `completed` (sets `ended_at`, `duration_seconds`)
 
 LiveKit posts room events to `http://api:8000/webhooks/livekit`, signed with
-`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` and verified by the API. Confirm wiring:
+`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` and verified by the API. The `webhook`
+block lives in the `LIVEKIT_CONFIG` env body of the `livekit` service in
+`docker-compose.yml` (not a mounted YAML file — livekit-server does not expand
+`${...}` in a `--config` file, so the whole config is passed via the env body
+where compose substitutes the key). Confirm wiring:
 
 ```bash
 # place a call, then watch it advance
