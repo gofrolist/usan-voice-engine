@@ -145,6 +145,7 @@ services:
       TELNYX_CALLER_ID: ${TELNYX_CALLER_ID}
       AGENT_NAME: ${AGENT_NAME}
       LOG_LEVEL: ${LOG_LEVEL}
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
     ports:
       # Host-only — the API is unauthenticated at this stage and is fronted by
       # TLS/Caddy in production (Plan 4). Reachable as localhost:8000 in dev.
@@ -174,6 +175,8 @@ services:
       DEFAULT_CARTESIA_VOICE_ID: ${DEFAULT_CARTESIA_VOICE_ID}
       AGENT_NAME: ${AGENT_NAME}
       LOG_LEVEL: ${LOG_LEVEL}
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
+      API_BASE_URL: ${API_BASE_URL}
     restart: unless-stopped
 
 volumes:

@@ -147,3 +147,20 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f api | g
 > Retry of `no_answer`/`busy`/`failed`/`voicemail_left` calls and TCPA quiet hours
 > are Plan 2b-3; agent-side voicemail detection is Plan 2b-2. In 2b-1 those terminal
 > states are reached and recorded but not yet retried.
+
+## Voicemail detection & agent→API auth (Plan 2b-2)
+
+On an answered outbound call the agent listens to the first ~3s of speech. If it
+matches a voicemail greeting (e.g. "leave a message", "you've reached", "after the
+beep"), the agent cancels the conversation, plays a scripted leave-message, reports
+`voicemail_left` to the API, and hangs up (`delete_room`). An unanswered outbound
+call ends cleanly via an agent-side answer timeout.
+
+The agent→API report (`POST /v1/calls/{id}/outcome`) is authenticated with a
+short-lived HS256 JWT signed with the shared `JWT_SIGNING_KEY`; the API verifies
+the signature and that the token's `call_id` matches the path. Set a strong
+`JWT_SIGNING_KEY` (`openssl rand -hex 32`) in `infra/.env` — it is required by
+both `api` and `agent` at startup.
+
+> Telnyx AMD is intentionally NOT used (our SIP-trunk topology can't invoke it).
+> Retry of `voicemail_left` (one attempt after 3h) and TCPA quiet hours are Plan 2b-3.
