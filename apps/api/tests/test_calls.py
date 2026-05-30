@@ -283,7 +283,11 @@ def _answered_call(client, async_database_url) -> str:
     elder_id = _create_elder(client)
     created = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": "vm", "dynamic_vars": {}},
+        json={
+            "elder_id": elder_id,
+            "idempotency_key": f"vm-{_uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
     )
     call_id = created.json()["id"]
 

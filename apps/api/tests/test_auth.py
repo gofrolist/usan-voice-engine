@@ -29,7 +29,11 @@ def auth_client(monkeypatch) -> TestClient:
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
     monkeypatch.setenv("JWT_SIGNING_KEY", SECRET)
     get_settings.cache_clear()
-    return TestClient(_app())
+    try:
+        yield TestClient(_app())
+    finally:
+        # Don't let this fixture's fake DATABASE_URL bleed into later tests.
+        get_settings.cache_clear()
 
 
 def _token(secret=SECRET, *, call_id="abc", exp_delta=300, **extra) -> str:
