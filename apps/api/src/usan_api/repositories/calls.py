@@ -241,3 +241,24 @@ async def reclaim_stuck_dialing(
         call.status = CallStatus.QUEUED
     await db.flush()
     return [call.id for call in stuck]
+
+
+_ACTIVE_STATUSES = frozenset({CallStatus.QUEUED, CallStatus.DIALING, CallStatus.RINGING})
+
+
+async def mark_failed_if_active(
+    db: AsyncSession, call_id: uuid.UUID, *, end_reason: str
+) -> Call | None:
+    """Transition a still-active call to FAILED. No-op (returns None) if the call
+    already reached IN_PROGRESS or any terminal state, so a crash handler never
+    clobbers a committed outcome.
+    """
+    call = await db.get(Call, call_id)
+    if call is None or call.status not in _ACTIVE_STATUSES:
+        return None
+    call.status = CallStatus.FAILED
+    call.ended_at = _utcnow()
+    call.end_reason = end_reason
+    await db.flush()
+    await db.refresh(call)
+    return call

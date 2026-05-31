@@ -121,3 +121,42 @@ async def test_mark_voicemail_left_noop_when_terminal(session_factory):
     async with session_factory() as db:
         call = await calls_repo.get_call(db, call_id)
     assert call.status is CallStatus.NO_ANSWER
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_if_active_transitions_active(session_factory):
+    call_id = await _seed_call(session_factory, status=CallStatus.DIALING, room="mf1")
+    async with session_factory() as db:
+        call = await calls_repo.mark_failed_if_active(db, call_id, end_reason="internal_error")
+        await db.commit()
+    assert call is not None
+    assert call.status is CallStatus.FAILED
+    assert call.end_reason == "internal_error"
+    assert call.ended_at is not None
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_if_active_noop_when_in_progress(session_factory):
+    call_id = await _seed_call(session_factory, status=CallStatus.DIALING, room="mf2")
+    async with session_factory() as db:
+        await calls_repo.mark_answered(db, call_id, sip_call_id="SCL")
+        await db.commit()
+    async with session_factory() as db:
+        result = await calls_repo.mark_failed_if_active(db, call_id, end_reason="internal_error")
+        await db.commit()
+    assert result is None
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.IN_PROGRESS  # not clobbered
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_if_active_noop_when_terminal(session_factory):
+    call_id = await _seed_call(session_factory, status=CallStatus.NO_ANSWER, room="mf3")
+    async with session_factory() as db:
+        result = await calls_repo.mark_failed_if_active(db, call_id, end_reason="internal_error")
+        await db.commit()
+    assert result is None
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.NO_ANSWER
