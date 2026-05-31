@@ -185,3 +185,30 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
         return None  # a sibling attempt already scheduled this retry
     await db.refresh(child)
     return child
+
+
+async def claim_due_retries(db: AsyncSession, *, now: datetime, limit: int) -> list[uuid.UUID]:
+    """Lock and claim up to ``limit`` due retry rows (QUEUED with a past
+    scheduled_at), flipping each to DIALING. FOR UPDATE SKIP LOCKED lets multiple
+    pollers run without claiming the same row.
+
+    Returns AT MOST ``limit`` ids, and possibly fewer under concurrency (other
+    pollers may hold locks on earlier-ordered rows) — never treat an under-full
+    batch as "no more work".
+    """
+    result = await db.execute(
+        select(Call)
+        .where(
+            Call.status == CallStatus.QUEUED,
+            Call.scheduled_at.is_not(None),
+            Call.scheduled_at <= now,
+        )
+        .order_by(Call.scheduled_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    claimed = list(result.scalars().all())
+    for call in claimed:
+        call.status = CallStatus.DIALING
+    await db.flush()
+    return [call.id for call in claimed]
