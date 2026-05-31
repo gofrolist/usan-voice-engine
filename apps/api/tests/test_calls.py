@@ -363,3 +363,124 @@ def test_outcome_idempotent_noop_when_already_terminal(client, mock_dispatch, as
     )
     assert second.status_code == 200
     assert second.json()["status"] == "voicemail_left"
+
+
+def _count_children(async_database_url: str, parent_id: str) -> int:
+    import asyncio
+    import uuid as _uuid
+
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.db.models import Call
+
+    async def _run() -> int:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as db:
+                result = await db.execute(
+                    select(func.count())
+                    .select_from(Call)
+                    .where(Call.parent_call_id == _uuid.UUID(parent_id))
+                )
+                return result.scalar_one()
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
+def test_outcome_voicemail_schedules_retry(client, mock_dispatch, async_database_url):
+    call_id = _answered_call(client, async_database_url)
+    r = client.post(
+        f"/v1/calls/{call_id}/outcome",
+        json={"outcome": "voicemail_left"},
+        headers={"Authorization": f"Bearer {_service_token(call_id)}"},
+    )
+    assert r.status_code == 200
+    assert _count_children(async_database_url, call_id) == 1  # voicemail_left attempt 1 -> +3h
+
+
+def test_outcome_noop_does_not_schedule_retry(client, mock_dispatch, async_database_url):
+    call_id = _answered_call(client, async_database_url)
+    headers = {"Authorization": f"Bearer {_service_token(call_id)}"}
+    # First report marks voicemail_left + schedules the one allowed retry.
+    client.post(f"/v1/calls/{call_id}/outcome", json={"outcome": "voicemail_left"}, headers=headers)
+    # A duplicate report is a no-op and must NOT schedule a second retry.
+    client.post(f"/v1/calls/{call_id}/outcome", json={"outcome": "voicemail_left"}, headers=headers)
+    assert _count_children(async_database_url, call_id) == 1  # still exactly one child
+
+
+def test_enqueue_unexpected_dispatch_error_schedules_retry(client, monkeypatch, async_database_url):
+    # NOTE: 502 raises HTTPException -> body is {"detail": ...}, no "id" field.
+    # Fetch the call ID via idempotency_key so we can count children.
+    import asyncio as _asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import calls as calls_repo
+
+    async def _raise(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(livekit_dispatch, "dispatch_agent", _raise)
+    elder_id = _create_elder(client)
+    idem_key = "err502retry"
+    r = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": idem_key, "dynamic_vars": {}},
+    )
+    assert r.status_code == 502
+
+    async def _get_id() -> str:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as db:
+                call = await calls_repo.get_by_idempotency_key(db, idem_key)
+                return str(call.id)
+        finally:
+            await engine.dispose()
+
+    call_id = _asyncio.run(_get_id())
+    # transient dispatch failure -> failed attempt 1 -> +1min child
+    assert _count_children(async_database_url, call_id) == 1
+
+
+def test_enqueue_config_error_does_not_schedule_retry(client, monkeypatch, async_database_url):
+    # NOTE: 503 raises HTTPException -> body is {"detail": ...}, no "id" field.
+    # Fetch the call ID via idempotency_key so we can count children.
+    import asyncio as _asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import calls as calls_repo
+
+    async def _raise(*args, **kwargs):
+        raise livekit_dispatch.OutboundDispatchError("not configured")
+
+    monkeypatch.setattr(livekit_dispatch, "dispatch_agent", _raise)
+    elder_id = _create_elder(client)
+    idem_key = "err503noretry"
+    r = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": idem_key, "dynamic_vars": {}},
+    )
+    assert r.status_code == 503
+
+    async def _get_id() -> str:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as db:
+                call = await calls_repo.get_by_idempotency_key(db, idem_key)
+                return str(call.id)
+        finally:
+            await engine.dispose()
+
+    call_id = _asyncio.run(_get_id())
+    assert _count_children(async_database_url, call_id) == 0  # misconfig is permanent
