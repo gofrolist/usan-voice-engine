@@ -28,3 +28,17 @@ class LogMedicationRequest(ToolCallRequest):
     medication_name: str = Field(min_length=1, max_length=200)
     taken: bool
     reported_time: datetime | None = None
+
+
+class MedicationScheduleItem(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    dosage: str | None = Field(default=None, max_length=200)
+    times: list[str] = Field(default_factory=list)
+
+
+class GetTodayMedsRequest(ToolCallRequest):
+    pass
+
+
+class TodayMedsResponse(BaseModel):
+    medications: list[MedicationScheduleItem]

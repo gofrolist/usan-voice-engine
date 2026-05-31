@@ -140,3 +140,62 @@ def test_log_medication_mismatch_403(client, mock_dispatch):
         headers=_auth(wrong),
     )
     assert r.status_code == 403
+
+
+_SCHEDULE = [
+    {"name": "Aspirin", "dosage": "81mg", "times": ["08:00"]},
+    {"name": "Metformin", "times": ["08:00", "20:00"]},
+]
+
+
+def test_get_today_meds_returns_schedule(client, mock_dispatch):
+    elder_id = _create_elder(client, metadata={"medication_schedule": _SCHEDULE})
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/get_today_meds",
+        json={"call_id": call_id},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    meds = r.json()["medications"]
+    assert len(meds) == 2
+    assert meds[0] == {"name": "Aspirin", "dosage": "81mg", "times": ["08:00"]}
+    assert meds[1] == {"name": "Metformin", "dosage": None, "times": ["08:00", "20:00"]}
+
+
+def test_get_today_meds_empty_when_no_schedule(client, mock_dispatch):
+    elder_id = _create_elder(client)  # no medication_schedule in meta
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/get_today_meds",
+        json={"call_id": call_id},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    assert r.json()["medications"] == []
+
+
+def test_get_today_meds_skips_malformed_entries(client, mock_dispatch):
+    bad = [{"name": "Good", "times": ["09:00"]}, {"dosage": "x"}, "nonsense"]
+    elder_id = _create_elder(client, metadata={"medication_schedule": bad})
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/get_today_meds",
+        json={"call_id": call_id},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    meds = r.json()["medications"]
+    assert len(meds) == 1
+    assert meds[0]["name"] == "Good"
+
+
+def test_get_today_meds_mismatch_403(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/get_today_meds",
+        json={"call_id": call_id},
+        headers=_auth(str(uuid.uuid4())),
+    )
+    assert r.status_code == 403

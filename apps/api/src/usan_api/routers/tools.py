@@ -3,15 +3,24 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.auth import require_service_token
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import medications as medications_repo
 from usan_api.repositories import wellness as wellness_repo
-from usan_api.schemas.tools import LoggedResponse, LogMedicationRequest, LogWellnessRequest
+from usan_api.schemas.tools import (
+    GetTodayMedsRequest,
+    LoggedResponse,
+    LogMedicationRequest,
+    LogWellnessRequest,
+    MedicationScheduleItem,
+    TodayMedsResponse,
+)
 
 router = APIRouter(prefix="/v1/tools", tags=["tools"])
 
@@ -72,3 +81,25 @@ async def log_medication(
     await db.commit()
     logger.bind(call_id=str(call.id)).info("Logged medication")
     return LoggedResponse(id=row.id)
+
+
+@router.post("/get_today_meds", response_model=TodayMedsResponse)
+async def get_today_meds(
+    body: GetTodayMedsRequest,
+    db: AsyncSession = Depends(get_db),
+    claims: dict[str, Any] = Depends(require_service_token),
+) -> TodayMedsResponse:
+    call = await _authorize_call(body.call_id, claims, db)
+    elder_id = _require_elder(call)
+    elder = await elders_repo.get_elder(db, elder_id)
+    if elder is None:
+        raise HTTPException(status_code=409, detail="call has no associated elder")
+    raw = elder.meta.get("medication_schedule", [])
+    items: list[MedicationScheduleItem] = []
+    if isinstance(raw, list):
+        for entry in raw:
+            try:
+                items.append(MedicationScheduleItem.model_validate(entry))
+            except ValidationError:
+                logger.bind(elder_id=str(elder_id)).warning("Skipping malformed medication entry")
+    return TodayMedsResponse(medications=items)
