@@ -33,6 +33,7 @@ def database_url() -> str:
             "LIVEKIT_API_KEY": "key",
             "LIVEKIT_API_SECRET": TEST_SECRET,
             "LIVEKIT_URL": "ws://livekit:7880",
+            "JWT_SIGNING_KEY": "s" * 32,
         }
         subprocess.run(
             [sys.executable, "-m", "alembic", "upgrade", "head"],
@@ -67,6 +68,7 @@ def client(database_url: str, async_database_url: str, monkeypatch) -> TestClien
     monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_TRUNK_ID", "ST_test")
     monkeypatch.setenv("TELNYX_CALLER_ID", "+15551230000")
     monkeypatch.setenv("AGENT_NAME", "usan-agent")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
     get_settings.cache_clear()
 
     test_engine = create_async_engine(async_database_url, poolclass=NullPool)

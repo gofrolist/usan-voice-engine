@@ -251,3 +251,115 @@ def test_enqueue_call_status_is_dialing(client, mock_dispatch):
 def test_get_unknown_call_returns_404(client):
     r = client.get(f"/v1/calls/{uuid.uuid4()}")
     assert r.status_code == 404
+
+
+def _service_token(call_id: str, secret: str = "s" * 32) -> str:
+    import time
+
+    import jwt
+
+    now = int(time.time())
+    return jwt.encode(
+        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
+        secret,
+        algorithm="HS256",
+    )
+
+
+def _answered_call(client, async_database_url) -> str:
+    """Create a call via the API, then force it to in_progress with a direct write.
+
+    Uses a local NullPool engine (not the production get_session_factory) so the
+    write runs cleanly under asyncio.run without the cross-event-loop trap.
+    """
+    import asyncio
+    import uuid as _uuid
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import calls as calls_repo
+
+    elder_id = _create_elder(client)
+    created = client.post(
+        "/v1/calls",
+        json={
+            "elder_id": elder_id,
+            "idempotency_key": f"vm-{_uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
+    )
+    call_id = created.json()["id"]
+
+    async def _answer() -> None:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as db:
+                await calls_repo.mark_answered(db, _uuid.UUID(call_id), sip_call_id="SCL")
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_answer())
+    return call_id
+
+
+def test_outcome_marks_voicemail_left(client, mock_dispatch, async_database_url):
+    call_id = _answered_call(client, async_database_url)
+    r = client.post(
+        f"/v1/calls/{call_id}/outcome",
+        json={"outcome": "voicemail_left"},
+        headers={"Authorization": f"Bearer {_service_token(call_id)}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "voicemail_left"
+
+
+def test_outcome_requires_token(client, mock_dispatch, async_database_url):
+    call_id = _answered_call(client, async_database_url)
+    r = client.post(f"/v1/calls/{call_id}/outcome", json={"outcome": "voicemail_left"})
+    assert r.status_code == 401
+
+
+def test_outcome_token_call_id_mismatch_403(client, mock_dispatch, async_database_url):
+    call_id = _answered_call(client, async_database_url)
+    wrong = _service_token("00000000-0000-0000-0000-000000000000")
+    r = client.post(
+        f"/v1/calls/{call_id}/outcome",
+        json={"outcome": "voicemail_left"},
+        headers={"Authorization": f"Bearer {wrong}"},
+    )
+    assert r.status_code == 403
+
+
+def test_outcome_unknown_call_404(client):
+    import uuid
+
+    cid = str(uuid.uuid4())
+    r = client.post(
+        f"/v1/calls/{cid}/outcome",
+        json={"outcome": "voicemail_left"},
+        headers={"Authorization": f"Bearer {_service_token(cid)}"},
+    )
+    assert r.status_code == 404
+
+
+def test_outcome_idempotent_noop_when_already_terminal(client, mock_dispatch, async_database_url):
+    # A late/duplicate report on an already-terminal call is a 200 no-op, not an error.
+    call_id = _answered_call(client, async_database_url)
+    first = client.post(
+        f"/v1/calls/{call_id}/outcome",
+        json={"outcome": "voicemail_left"},
+        headers={"Authorization": f"Bearer {_service_token(call_id)}"},
+    )
+    assert first.status_code == 200
+    assert first.json()["status"] == "voicemail_left"
+
+    second = client.post(
+        f"/v1/calls/{call_id}/outcome",
+        json={"outcome": "voicemail_left"},
+        headers={"Authorization": f"Bearer {_service_token(call_id)}"},
+    )
+    assert second.status_code == 200
+    assert second.json()["status"] == "voicemail_left"

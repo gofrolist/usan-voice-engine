@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(..., min_length=1, alias="GEMINI_API_KEY")
     default_cartesia_voice_id: str = Field(..., min_length=1, alias="DEFAULT_CARTESIA_VOICE_ID")
     agent_name: str = Field(default="usan-agent", alias="AGENT_NAME")
+    api_base_url: str = Field(..., min_length=1, alias="API_BASE_URL")
+    jwt_signing_key: str = Field(..., min_length=32, alias="JWT_SIGNING_KEY")
+    outbound_answer_timeout_s: float = Field(
+        default=50.0, ge=5.0, le=180.0, alias="OUTBOUND_ANSWER_TIMEOUT_S"
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO", alias="LOG_LEVEL"
     )

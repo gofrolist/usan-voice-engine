@@ -18,6 +18,12 @@ Keep responses short — one or two sentences. Pause to let them respond.
 
 GREETING = "Hello! This is your daily check-in from USAN. How are you feeling today?"
 
+VOICEMAIL_MESSAGE = (
+    "Hello, this is your daily check-in from USAN Retirement. "
+    "We're sorry we missed you. We'll try again a little later. "
+    "Take care, and have a wonderful day."
+)
+
 STT_MODEL = "ink-whisper"
 LLM_MODEL = "gemini-3.1-flash-lite"
 
