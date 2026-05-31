@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from loguru import logger
@@ -212,3 +212,32 @@ async def claim_due_retries(db: AsyncSession, *, now: datetime, limit: int) -> l
         call.status = CallStatus.DIALING
     await db.flush()
     return [call.id for call in claimed]
+
+
+async def reclaim_stuck_dialing(
+    db: AsyncSession, *, now: datetime, stale_after_s: int, limit: int
+) -> list[uuid.UUID]:
+    """Re-queue retry rows stranded in DIALING (ungraceful death mid-dispatch).
+
+    A genuine in-flight dial leaves DIALING within the ring timeout, so a retry
+    row still DIALING after ``stale_after_s`` (>> ring timeout) is stranded. Only
+    retry rows (scheduled_at set) are reclaimed; a stranded initial call is the
+    caller's to re-enqueue.
+    """
+    cutoff = now - timedelta(seconds=stale_after_s)
+    result = await db.execute(
+        select(Call)
+        .where(
+            Call.status == CallStatus.DIALING,
+            Call.scheduled_at.is_not(None),
+            Call.updated_at < cutoff,
+        )
+        .order_by(Call.updated_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    stuck = list(result.scalars().all())
+    for call in stuck:
+        call.status = CallStatus.QUEUED
+    await db.flush()
+    return [call.id for call in stuck]

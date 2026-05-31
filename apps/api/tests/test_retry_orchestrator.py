@@ -20,6 +20,15 @@ async def session_factory(async_database_url):
     await engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+async def _truncate_calls(session_factory):
+    from sqlalchemy import text
+
+    async with session_factory() as db:
+        await db.execute(text("TRUNCATE calls CASCADE"))
+        await db.commit()
+
+
 async def _seed(factory, *, status, scheduled_at, updated_offset_s=None):
     """Insert one call. If updated_offset_s is set, force updated_at to NOW + offset."""
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
@@ -115,3 +124,57 @@ async def test_claim_skips_locked_rows(session_factory, async_database_url):
             await db_a.commit()
     finally:
         await engine_b.dispose()
+
+
+async def _force_updated_at(factory, call_id, when):
+    from sqlalchemy import update
+
+    async with factory() as db:
+        await db.execute(update(Call).where(Call.id == call_id).values(updated_at=when))
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_reclaim_requeues_stale_dialing(session_factory):
+    cid = await _seed(
+        session_factory, status=CallStatus.DIALING, scheduled_at=NOW - timedelta(minutes=20)
+    )
+    await _force_updated_at(session_factory, cid, NOW - timedelta(seconds=600))
+    async with session_factory() as db:
+        reclaimed = await calls_repo.reclaim_stuck_dialing(db, now=NOW, stale_after_s=300, limit=10)
+        await db.commit()
+    assert reclaimed == [cid]
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, cid)
+    assert call.status is CallStatus.QUEUED  # now re-claimable by the poller
+
+
+@pytest.mark.asyncio
+async def test_reclaim_leaves_fresh_dialing_alone(session_factory):
+    cid = await _seed(
+        session_factory, status=CallStatus.DIALING, scheduled_at=NOW - timedelta(minutes=20)
+    )
+    await _force_updated_at(session_factory, cid, NOW - timedelta(seconds=10))
+    async with session_factory() as db:
+        reclaimed = await calls_repo.reclaim_stuck_dialing(db, now=NOW, stale_after_s=300, limit=10)
+        await db.commit()
+    assert reclaimed == []
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, cid)
+    assert call.status is CallStatus.DIALING
+
+
+@pytest.mark.asyncio
+async def test_reclaim_ignores_null_scheduled_and_in_progress(session_factory):
+    # A stranded INITIAL call (scheduled_at NULL) is the caller's to re-enqueue.
+    initial = await _seed(session_factory, status=CallStatus.DIALING, scheduled_at=None)
+    await _force_updated_at(session_factory, initial, NOW - timedelta(seconds=600))
+    # An answered call is IN_PROGRESS, not DIALING.
+    answered = await _seed(
+        session_factory, status=CallStatus.IN_PROGRESS, scheduled_at=NOW - timedelta(minutes=20)
+    )
+    await _force_updated_at(session_factory, answered, NOW - timedelta(seconds=600))
+    async with session_factory() as db:
+        reclaimed = await calls_repo.reclaim_stuck_dialing(db, now=NOW, stale_after_s=300, limit=10)
+        await db.commit()
+    assert reclaimed == []
