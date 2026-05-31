@@ -1,0 +1,108 @@
+import time
+import uuid
+
+import jwt
+import pytest
+
+from usan_api import livekit_dispatch
+
+
+@pytest.fixture
+def mock_dispatch(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from usan_api import dialer
+
+    monkeypatch.setattr(livekit_dispatch, "dispatch_agent", AsyncMock())
+    monkeypatch.setattr(dialer, "schedule_dial", lambda call_id, settings: None)
+
+
+def _service_token(call_id: str, secret: str = "s" * 32) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
+        secret,
+        algorithm="HS256",
+    )
+
+
+def _create_elder(client, *, metadata: dict | None = None) -> str:
+    r = client.post(
+        "/v1/elders",
+        json={
+            "name": "Ada",
+            "phone_e164": f"+1555{str(uuid.uuid4().int)[:7]}",
+            "timezone": "UTC",
+            "metadata": metadata or {},
+        },
+    )
+    assert r.status_code == 201
+    return r.json()["id"]
+
+
+def _enqueue(client, elder_id: str) -> str:
+    r = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": f"tool-{uuid.uuid4()}", "dynamic_vars": {}},
+    )
+    assert r.status_code == 202
+    return r.json()["id"]
+
+
+def _auth(call_id: str) -> dict:
+    return {"Authorization": f"Bearer {_service_token(call_id)}"}
+
+
+def test_log_wellness_ok(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/log_wellness",
+        json={"call_id": call_id, "mood": 4, "pain_level": 2, "notes": "feeling good"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    assert isinstance(r.json()["id"], int)
+
+
+def test_log_wellness_requires_token(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/log_wellness",
+        json={"call_id": call_id, "mood": 3},
+    )
+    assert r.status_code == 401
+
+
+def test_log_wellness_token_call_id_mismatch_403(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    wrong = str(uuid.uuid4())
+    r = client.post(
+        "/v1/tools/log_wellness",
+        json={"call_id": call_id, "mood": 3},
+        headers=_auth(wrong),
+    )
+    assert r.status_code == 403
+
+
+def test_log_wellness_unknown_call_404(client, mock_dispatch):
+    cid = str(uuid.uuid4())
+    r = client.post(
+        "/v1/tools/log_wellness",
+        json={"call_id": cid, "mood": 3},
+        headers=_auth(cid),
+    )
+    assert r.status_code == 404
+
+
+def test_log_wellness_out_of_range_422(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/log_wellness",
+        json={"call_id": call_id, "mood": 9},  # mood is 1..5
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 422
