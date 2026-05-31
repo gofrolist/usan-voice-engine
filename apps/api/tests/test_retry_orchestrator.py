@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -5,10 +6,12 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from usan_api import background, retry_orchestrator
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
+from usan_api.settings import Settings
 
 NOW = datetime(2026, 5, 31, 12, 0, tzinfo=UTC)
 
@@ -178,3 +181,138 @@ async def test_reclaim_ignores_null_scheduled_and_in_progress(session_factory):
         reclaimed = await calls_repo.reclaim_stuck_dialing(db, now=NOW, stale_after_s=300, limit=10)
         await db.commit()
     assert reclaimed == []
+
+
+@pytest.fixture(autouse=True)
+def _clear_background_tasks():
+    background._tasks.clear()
+    yield
+    background._tasks.clear()
+
+
+def _settings(**overrides) -> Settings:
+    base = {
+        "DATABASE_URL": "postgresql://u:p@host/db",
+        "LIVEKIT_API_KEY": "key",
+        "LIVEKIT_API_SECRET": "a" * 32,
+        "LIVEKIT_URL": "ws://livekit:7880",
+        "JWT_SIGNING_KEY": "s" * 32,
+    }
+    base.update(overrides)
+    return Settings(**base)
+
+
+@pytest.mark.asyncio
+async def test_poll_once_claims_commits_and_dispatches(session_factory, monkeypatch):
+    due1 = await _seed(
+        session_factory, status=CallStatus.QUEUED, scheduled_at=NOW - timedelta(minutes=2)
+    )
+    due2 = await _seed(
+        session_factory, status=CallStatus.QUEUED, scheduled_at=NOW - timedelta(minutes=1)
+    )
+
+    dispatched: list[uuid.UUID] = []
+
+    async def _fake_dispatch(call_id, settings):
+        dispatched.append(call_id)
+
+    monkeypatch.setattr(retry_orchestrator.livekit_dispatch, "dispatch_and_dial", _fake_dispatch)
+
+    ids = await retry_orchestrator.poll_once(session_factory, _settings(), now=NOW)
+    await background.drain(timeout=5)
+
+    assert set(ids) == {due1, due2}
+    assert set(dispatched) == {due1, due2}
+    # claim was committed before dispatch: rows are DIALING in a fresh session
+    async with session_factory() as db:
+        for cid in (due1, due2):
+            call = await calls_repo.get_call(db, cid)
+            assert call.status is CallStatus.DIALING
+
+    # Ensure updated_at is within the stale window so the reaper does not
+    # re-queue these freshly-committed DIALING rows when NOW is ahead of the
+    # real DB clock (the default stale threshold is 300 s).
+    for cid in (due1, due2):
+        await _force_updated_at(session_factory, cid, NOW)
+
+    # a second poll claims nothing (rows already DIALING)
+    ids2 = await retry_orchestrator.poll_once(session_factory, _settings(), now=NOW)
+    assert ids2 == []
+
+
+@pytest.mark.asyncio
+async def test_poll_once_reaps_then_claims_stuck_row(session_factory, monkeypatch):
+    cid = await _seed(
+        session_factory, status=CallStatus.DIALING, scheduled_at=NOW - timedelta(minutes=20)
+    )
+    await _force_updated_at(session_factory, cid, NOW - timedelta(seconds=600))
+
+    dispatched: list[uuid.UUID] = []
+
+    async def _fake_dispatch(call_id, settings):
+        dispatched.append(call_id)
+
+    monkeypatch.setattr(retry_orchestrator.livekit_dispatch, "dispatch_and_dial", _fake_dispatch)
+
+    ids = await retry_orchestrator.poll_once(
+        session_factory, _settings(RETRY_STUCK_DIALING_S="300"), now=NOW
+    )
+    await background.drain(timeout=5)
+    # the stranded row was reaped to QUEUED, then claimed and dispatched in one cycle
+    assert ids == [cid]
+    assert dispatched == [cid]
+
+
+@pytest.mark.asyncio
+async def test_run_poller_exits_promptly_when_stop_preset(monkeypatch):
+    monkeypatch.setattr(retry_orchestrator, "get_session_factory", lambda: None)
+    calls_count = {"n": 0}
+
+    async def _fake_poll(factory, settings, *, now=None):
+        calls_count["n"] += 1
+        return []
+
+    monkeypatch.setattr(retry_orchestrator, "poll_once", _fake_poll)
+
+    stop = asyncio.Event()
+    stop.set()
+    await asyncio.wait_for(retry_orchestrator.run_poller(_settings(), stop), timeout=2)
+    assert calls_count["n"] == 0  # stop preset -> never polls, never sleeps the interval
+
+
+@pytest.mark.asyncio
+async def test_run_poller_survives_poll_exception(monkeypatch):
+    monkeypatch.setattr(retry_orchestrator, "get_session_factory", lambda: None)
+    stop = asyncio.Event()
+    n = {"i": 0}
+
+    async def _flaky(factory, settings, *, now=None):
+        n["i"] += 1
+        if n["i"] == 1:
+            raise RuntimeError("transient boom")
+        stop.set()
+        return []
+
+    monkeypatch.setattr(retry_orchestrator, "poll_once", _flaky)
+
+    settings = _settings()
+    settings.retry_poll_interval_s = 0.01  # Settings has no validate_assignment; spin fast
+    await asyncio.wait_for(retry_orchestrator.run_poller(settings, stop), timeout=2)
+    assert n["i"] >= 2  # exception in cycle 1 did not kill the loop
+
+
+@pytest.mark.asyncio
+async def test_run_poller_stop_interrupts_interval_sleep(monkeypatch):
+    monkeypatch.setattr(retry_orchestrator, "get_session_factory", lambda: None)
+
+    async def _fake_poll(factory, settings, *, now=None):
+        return []
+
+    monkeypatch.setattr(retry_orchestrator, "poll_once", _fake_poll)
+
+    stop = asyncio.Event()
+    settings = _settings()  # default 30s interval
+    task = asyncio.create_task(retry_orchestrator.run_poller(settings, stop))
+    await asyncio.sleep(0.05)  # let one cycle run and enter the interval sleep
+    stop.set()
+    await asyncio.wait_for(task, timeout=2)  # must return well before 30s
