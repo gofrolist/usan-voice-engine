@@ -2,12 +2,15 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import func
+from sqlalchemy import select as _select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from usan_api import livekit_dispatch
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
+from usan_api.db.models import Call as _Call
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.settings import Settings
@@ -151,3 +154,72 @@ def _twirp_busy() -> Exception:
     exc = Exception("SIP 486 Busy Here")
     exc.metadata = {"sip_status_code": "486"}
     return exc
+
+
+async def _count_children(factory, parent_id):
+    async with factory() as db:
+        result = await db.execute(
+            _select(func.count()).select_from(_Call).where(_Call.parent_call_id == parent_id)
+        )
+        return result.scalar_one()
+
+
+@pytest.mark.asyncio
+async def test_dial_busy_schedules_retry(monkeypatch, session_factory):
+    fake = _fake_api()
+    fake.sip.create_sip_participant.side_effect = _twirp_busy()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    call_id, _ = await _seed(session_factory, room="usan-outbound-busy-retry")
+    await livekit_dispatch.dial_and_classify(call_id, _settings())
+
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.BUSY
+    assert await _count_children(session_factory, call_id) == 1  # busy attempt 1 -> +5min child
+
+
+@pytest.mark.asyncio
+async def test_dial_unconfigured_does_not_schedule_retry(monkeypatch, session_factory):
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    call_id, _ = await _seed(session_factory, room="usan-outbound-noconf-retry")
+    settings = _settings(LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None, TELNYX_CALLER_ID=None)
+    await livekit_dispatch.dial_and_classify(call_id, settings)
+
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.FAILED
+    assert call.end_reason == "not_configured"
+    assert await _count_children(session_factory, call_id) == 0  # misconfig is permanent
+
+
+@pytest.mark.asyncio
+async def test_dial_crash_marks_failed_and_retries_without_clobbering(monkeypatch, session_factory):
+    # Crash AFTER a successful answer must NOT overwrite IN_PROGRESS nor schedule a retry.
+    fake = _fake_api()
+    fake.sip.create_sip_participant.return_value = MagicMock(sip_call_id="SCL_OK")
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    call_id, _ = await _seed(session_factory, room="usan-outbound-crash")
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("kaboom")
+
+    # Make the inner routine crash AFTER it has marked the call answered/in_progress.
+    monkeypatch.setattr(livekit_dispatch, "_dial_and_classify", _boom)
+    # First mark it in_progress to simulate "already answered, then crashed".
+    async with session_factory() as db:
+        await calls_repo.mark_answered(db, call_id, sip_call_id="SCL_OK")
+        await db.commit()
+
+    await livekit_dispatch.dial_and_classify(call_id, _settings())
+
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.IN_PROGRESS  # gated mark did not clobber
+    assert await _count_children(session_factory, call_id) == 0

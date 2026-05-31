@@ -93,9 +93,11 @@ async def dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
         try:
             factory = get_session_factory()
             async with factory() as db:
-                await calls_repo.mark_dial_failure(
-                    db, call_id, CallStatus.FAILED, end_reason="internal_error"
+                failed = await calls_repo.mark_failed_if_active(
+                    db, call_id, end_reason="internal_error"
                 )
+                if failed is not None:
+                    await calls_repo.schedule_retry(db, call_id)
                 await db.commit()
         except Exception:
             logger.bind(call_id=str(call_id)).warning("Could not mark call FAILED after crash")
@@ -135,6 +137,7 @@ async def _dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
             await calls_repo.mark_dial_failure(
                 db, call_id, status, end_reason=end_reason, error=error
             )
+            await calls_repo.schedule_retry(db, call_id)
             await db.commit()
         await _delete_room(room, settings)
         log.info(
