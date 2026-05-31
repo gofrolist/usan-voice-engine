@@ -146,6 +146,8 @@ services:
       AGENT_NAME: ${AGENT_NAME}
       LOG_LEVEL: ${LOG_LEVEL}
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
+      RETRY_POLLER_ENABLED: ${RETRY_POLLER_ENABLED:-true}
+      RETRY_POLL_INTERVAL_S: ${RETRY_POLL_INTERVAL_S:-30}
     ports:
       # Host-only — the API is unauthenticated at this stage and is fronted by
       # TLS/Caddy in production (Plan 4). Reachable as localhost:8000 in dev.
