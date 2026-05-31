@@ -2,11 +2,15 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from usan_api import quiet_hours
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call
+from usan_api.db.models import Call, Elder
+from usan_api.retry_policy import next_retry_delay
 
 
 def _utcnow() -> datetime:
@@ -135,3 +139,49 @@ async def mark_voicemail_left_if_in_progress(db: AsyncSession, call_id: uuid.UUI
     await db.flush()
     await db.refresh(call)
     return call
+
+
+async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
+    """Create the next-attempt child for a call that just reached a retryable
+    terminal state (§5.3), in the caller's transaction.
+
+    Returns the child, or None when: the policy says stop, the parent/elder is
+    gone, the elder's timezone is invalid (fail CLOSED — never risk a TCPA-hour
+    call), or a retry child already exists (idempotent via the partial UNIQUE
+    index on parent_call_id).
+    """
+    parent = await db.get(Call, call_id)
+    if parent is None or parent.elder_id is None:
+        return None
+    delay = next_retry_delay(parent.status, parent.attempt)
+    if delay is None:
+        return None
+    elder = await db.get(Elder, parent.elder_id)
+    if elder is None:
+        return None
+    try:
+        scheduled_at = quiet_hours.next_allowed(_utcnow() + delay, elder.timezone)
+    except ValueError:
+        logger.bind(call_id=str(call_id), timezone=elder.timezone).error(
+            "Retry not scheduled: elder timezone is not a valid IANA zone"
+        )
+        return None
+
+    child = Call(
+        elder_id=parent.elder_id,
+        direction=CallDirection.OUTBOUND,
+        status=CallStatus.QUEUED,
+        dynamic_vars=dict(parent.dynamic_vars),
+        parent_call_id=parent.id,
+        attempt=parent.attempt + 1,
+        scheduled_at=scheduled_at,
+        livekit_room=f"usan-outbound-{uuid.uuid4()}",
+    )
+    try:
+        async with db.begin_nested():  # SAVEPOINT: a duplicate child rolls back here only
+            db.add(child)
+            await db.flush()
+    except IntegrityError:
+        return None  # a sibling attempt already scheduled this retry
+    await db.refresh(child)
+    return child
