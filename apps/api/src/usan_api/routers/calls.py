@@ -70,6 +70,7 @@ async def _create_and_dispatch(
             CallStatus.FAILED,
             error={"reason": "dispatch_error", "exc_type": type(exc).__name__},
         )
+        await calls_repo.schedule_retry(db, call.id)
         await db.commit()
         logger.bind(call_id=str(call.id)).exception("Agent dispatch failed")
         raise HTTPException(status_code=502, detail="failed to dispatch outbound call") from exc
@@ -138,8 +139,11 @@ async def report_outcome(
     if call is None:
         raise HTTPException(status_code=404, detail="call not found")
     # body.outcome is constrained to "voicemail_left"; gate on in_progress so a
-    # late/duplicate report never overrides an already-terminal call.
+    # late/duplicate report never overrides an already-terminal call. The mark and
+    # its retry share ONE commit so a crash can't leave a terminal call un-retried.
     updated = await calls_repo.mark_voicemail_left_if_in_progress(db, call_id)
+    if updated is not None:
+        await calls_repo.schedule_retry(db, call_id)
     await db.commit()
     logger.bind(call_id=str(call_id)).info("Call outcome reported: {o}", o=body.outcome)
     return CallResponse.from_model(updated or call)

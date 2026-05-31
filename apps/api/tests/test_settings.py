@@ -164,3 +164,64 @@ def test_jwt_signing_key_loads(monkeypatch):
     s = Settings()
 
     assert s.jwt_signing_key == "s" * 32
+
+
+def test_retry_settings_defaults(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+    monkeypatch.delenv("RETRY_POLL_INTERVAL_S", raising=False)
+    monkeypatch.delenv("RETRY_BATCH_SIZE", raising=False)
+    monkeypatch.delenv("RETRY_STUCK_DIALING_S", raising=False)
+    monkeypatch.delenv("RETRY_POLLER_ENABLED", raising=False)
+
+    s = Settings()
+
+    assert s.retry_poll_interval_s == 30
+    assert s.retry_batch_size == 20
+    assert s.retry_stuck_dialing_s == 300
+    assert s.retry_poller_enabled is True
+
+
+def test_retry_settings_override(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+    monkeypatch.setenv("RETRY_POLL_INTERVAL_S", "15")
+    monkeypatch.setenv("RETRY_BATCH_SIZE", "5")
+    monkeypatch.setenv("RETRY_STUCK_DIALING_S", "600")
+    monkeypatch.setenv("RETRY_POLLER_ENABLED", "false")
+
+    s = Settings()
+
+    assert s.retry_poll_interval_s == 15
+    assert s.retry_batch_size == 5
+    assert s.retry_stuck_dialing_s == 600
+    assert s.retry_poller_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("var", "value"),
+    [
+        ("RETRY_POLL_INTERVAL_S", "4"),
+        ("RETRY_POLL_INTERVAL_S", "301"),
+        ("RETRY_BATCH_SIZE", "0"),
+        ("RETRY_BATCH_SIZE", "201"),
+        ("RETRY_STUCK_DIALING_S", "119"),
+        ("RETRY_STUCK_DIALING_S", "3601"),
+    ],
+)
+def test_retry_settings_out_of_range_rejected(monkeypatch, var, value):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+    monkeypatch.setenv(var, value)
+
+    with pytest.raises(ValueError, match=var):
+        get_settings()

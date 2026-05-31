@@ -1,12 +1,16 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from usan_api import quiet_hours
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call
+from usan_api.db.models import Call, Elder
+from usan_api.retry_policy import next_retry_delay
 
 
 def _utcnow() -> datetime:
@@ -132,6 +136,129 @@ async def mark_voicemail_left_if_in_progress(db: AsyncSession, call_id: uuid.UUI
     call.end_reason = "voicemail"
     if call.answered_at is not None:
         call.duration_seconds = int((call.ended_at - call.answered_at).total_seconds())
+    await db.flush()
+    await db.refresh(call)
+    return call
+
+
+async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
+    """Create the next-attempt child for a call that just reached a retryable
+    terminal state (§5.3), in the caller's transaction.
+
+    Returns the child, or None when: the policy says stop, the parent/elder is
+    gone, the elder's timezone is invalid (fail CLOSED — never risk a TCPA-hour
+    call), or a retry child already exists (idempotent via the partial UNIQUE
+    index on parent_call_id).
+    """
+    parent = await db.get(Call, call_id)
+    if parent is None or parent.elder_id is None:
+        return None
+    delay = next_retry_delay(parent.status, parent.attempt)
+    if delay is None:
+        return None
+    elder = await db.get(Elder, parent.elder_id)
+    if elder is None:
+        return None
+    try:
+        scheduled_at = quiet_hours.next_allowed(_utcnow() + delay, elder.timezone)
+    except ValueError:
+        logger.bind(call_id=str(call_id), timezone=elder.timezone).error(
+            "Retry not scheduled: elder timezone is not a valid IANA zone"
+        )
+        return None
+
+    child = Call(
+        elder_id=parent.elder_id,
+        direction=CallDirection.OUTBOUND,
+        status=CallStatus.QUEUED,
+        dynamic_vars=dict(parent.dynamic_vars),
+        parent_call_id=parent.id,
+        attempt=parent.attempt + 1,
+        scheduled_at=scheduled_at,
+        livekit_room=f"usan-outbound-{uuid.uuid4()}",
+    )
+    try:
+        async with db.begin_nested():  # SAVEPOINT: a duplicate child rolls back here only
+            db.add(child)
+            await db.flush()
+    except IntegrityError:
+        return None  # a sibling attempt already scheduled this retry
+    await db.refresh(child)
+    return child
+
+
+async def claim_due_retries(db: AsyncSession, *, now: datetime, limit: int) -> list[uuid.UUID]:
+    """Lock and claim up to ``limit`` due retry rows (QUEUED with a past
+    scheduled_at), flipping each to DIALING. FOR UPDATE SKIP LOCKED lets multiple
+    pollers run without claiming the same row.
+
+    Returns AT MOST ``limit`` ids, and possibly fewer under concurrency (other
+    pollers may hold locks on earlier-ordered rows) — never treat an under-full
+    batch as "no more work".
+    """
+    result = await db.execute(
+        select(Call)
+        .where(
+            Call.status == CallStatus.QUEUED,
+            Call.scheduled_at.is_not(None),
+            Call.scheduled_at <= now,
+        )
+        .order_by(Call.scheduled_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    claimed = list(result.scalars().all())
+    for call in claimed:
+        call.status = CallStatus.DIALING
+    await db.flush()
+    return [call.id for call in claimed]
+
+
+async def reclaim_stuck_dialing(
+    db: AsyncSession, *, now: datetime, stale_after_s: int, limit: int
+) -> list[uuid.UUID]:
+    """Re-queue retry rows stranded in DIALING (ungraceful death mid-dispatch).
+
+    A genuine in-flight dial leaves DIALING within the ring timeout, so a retry
+    row still DIALING after ``stale_after_s`` (>> ring timeout) is stranded. Only
+    retry rows (scheduled_at set) are reclaimed; a stranded initial call is the
+    caller's to re-enqueue.
+    """
+    cutoff = now - timedelta(seconds=stale_after_s)
+    result = await db.execute(
+        select(Call)
+        .where(
+            Call.status == CallStatus.DIALING,
+            Call.scheduled_at.is_not(None),
+            Call.updated_at < cutoff,
+        )
+        .order_by(Call.updated_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    stuck = list(result.scalars().all())
+    for call in stuck:
+        call.status = CallStatus.QUEUED
+    await db.flush()
+    return [call.id for call in stuck]
+
+
+_ACTIVE_STATUSES = frozenset({CallStatus.QUEUED, CallStatus.DIALING, CallStatus.RINGING})
+
+
+async def mark_failed_if_active(
+    db: AsyncSession, call_id: uuid.UUID, *, end_reason: str
+) -> Call | None:
+    """Transition a still-active call to FAILED. No-op (returns None) if the call
+    already reached IN_PROGRESS or any terminal state, so a crash handler never
+    clobbers a committed outcome.
+    """
+    call = await db.get(Call, call_id)
+    if call is None or call.status not in _ACTIVE_STATUSES:
+        return None
+    call.status = CallStatus.FAILED
+    call.ended_at = _utcnow()
+    call.end_reason = end_reason
     await db.flush()
     await db.refresh(call)
     return call

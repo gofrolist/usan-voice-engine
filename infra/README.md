@@ -164,3 +164,35 @@ both `api` and `agent` at startup.
 
 > Telnyx AMD is intentionally NOT used (our SIP-trunk topology can't invoke it).
 > Retry of `voicemail_left` (one attempt after 3h) and TCPA quiet hours are Plan 2b-3.
+
+## Retry orchestrator
+
+The API runs an in-process poller (`retry_orchestrator.run_poller`) that re-dials
+calls per the §5.3 policy:
+
+| End state | Retries |
+|---|---|
+| `no_answer` | +30 min, then +2 h (3 attempts total) |
+| `voicemail_left` | +3 h (2 attempts total) |
+| `busy` | +5 min (2 attempts total) |
+| `failed` (transport) | +1 min (2 attempts total) |
+
+Each retry is a new `calls` row linked to its predecessor by `parent_call_id`
+(`attempt = parent.attempt + 1`). A partial UNIQUE index on `parent_call_id`
+guarantees at most one retry per attempt. DNC is re-checked at dial time.
+
+**TCPA quiet hours:** retries are never placed before 09:00 or at/after 21:00 in
+the elder's local timezone. An invalid elder timezone fails CLOSED (the retry is
+not scheduled and an ERROR is logged) rather than risking an out-of-hours call.
+
+**Initial calls** (`POST /v1/calls`) are NOT quiet-hours gated and dial
+immediately — the upstream scheduler owns quiet hours for the first attempt
+(spec §10 scopes orchestrator enforcement to retries).
+
+**Multiple replicas:** each replica runs its own poller. `FOR UPDATE SKIP LOCKED`
+plus the `parent_call_id` unique index make claiming and scheduling safe without
+leader election. Set `RETRY_POLLER_ENABLED=false` to confine the poller to a
+single replica if preferred.
+
+A stuck-`dialing` reaper re-queues retry rows left in `dialing` by an ungraceful
+process death after `RETRY_STUCK_DIALING_S` (must exceed the ring timeout).
