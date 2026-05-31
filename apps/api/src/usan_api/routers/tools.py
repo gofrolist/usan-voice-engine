@@ -95,7 +95,7 @@ async def get_today_meds(
     elder_id = _require_elder(call)
     elder = await elders_repo.get_elder(db, elder_id)
     if elder is None:
-        raise HTTPException(status_code=409, detail="call has no associated elder")
+        raise HTTPException(status_code=409, detail="elder record not found")
     raw = elder.meta.get("medication_schedule", [])
     items: list[MedicationScheduleItem] = []
     if isinstance(raw, list):
@@ -116,5 +116,5 @@ async def end_call(
     call = await _authorize_call(body.call_id, claims, db)
     updated = await calls_repo.complete_call_if_in_progress(db, call.id, end_reason=body.reason)
     await db.commit()
-    logger.bind(call_id=str(call.id)).info("end_call requested: {r}", r=body.reason)
+    logger.bind(call_id=str(call.id), reason=body.reason).info("end_call requested")
     return CallEndedResponse(status=(updated or call).status.value)

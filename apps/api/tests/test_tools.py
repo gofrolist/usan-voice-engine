@@ -264,3 +264,27 @@ def test_end_call_mismatch_403(client, mock_dispatch, async_database_url):
         headers=_auth(str(uuid.uuid4())),
     )
     assert r.status_code == 403
+
+
+def test_end_call_unknown_call_404(client, mock_dispatch):
+    cid = str(uuid.uuid4())
+    r = client.post(
+        "/v1/tools/end_call",
+        json={"call_id": cid, "reason": "x"},
+        headers=_auth(cid),
+    )
+    assert r.status_code == 404
+
+
+def test_end_call_noop_when_not_in_progress(client, mock_dispatch):
+    # A call that hasn't been answered (status "dialing") is not completed by end_call;
+    # the handler returns the call's current status unchanged.
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/end_call",
+        json={"call_id": call_id, "reason": "x"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "dialing"
