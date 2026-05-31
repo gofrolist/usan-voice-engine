@@ -106,3 +106,37 @@ def test_log_wellness_out_of_range_422(client, mock_dispatch):
         headers=_auth(call_id),
     )
     assert r.status_code == 422
+
+
+def test_log_medication_ok(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/log_medication",
+        json={"call_id": call_id, "medication_name": "Aspirin", "taken": True},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    assert isinstance(r.json()["id"], int)
+
+
+def test_log_medication_requires_token(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/log_medication",
+        json={"call_id": call_id, "medication_name": "Aspirin", "taken": False},
+    )
+    assert r.status_code == 401
+
+
+def test_log_medication_mismatch_403(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    wrong = str(uuid.uuid4())
+    r = client.post(
+        "/v1/tools/log_medication",
+        json={"call_id": call_id, "medication_name": "Aspirin", "taken": True},
+        headers=_auth(wrong),
+    )
+    assert r.status_code == 403

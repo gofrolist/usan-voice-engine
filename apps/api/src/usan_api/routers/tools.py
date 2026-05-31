@@ -9,8 +9,9 @@ from usan_api.auth import require_service_token
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import medications as medications_repo
 from usan_api.repositories import wellness as wellness_repo
-from usan_api.schemas.tools import LoggedResponse, LogWellnessRequest
+from usan_api.schemas.tools import LoggedResponse, LogMedicationRequest, LogWellnessRequest
 
 router = APIRouter(prefix="/v1/tools", tags=["tools"])
 
@@ -49,4 +50,25 @@ async def log_wellness(
     )
     await db.commit()
     logger.bind(call_id=str(call.id)).info("Logged wellness")
+    return LoggedResponse(id=row.id)
+
+
+@router.post("/log_medication", response_model=LoggedResponse)
+async def log_medication(
+    body: LogMedicationRequest,
+    db: AsyncSession = Depends(get_db),
+    claims: dict[str, Any] = Depends(require_service_token),
+) -> LoggedResponse:
+    call = await _authorize_call(body.call_id, claims, db)
+    elder_id = _require_elder(call)
+    row = await medications_repo.create_medication_log(
+        db,
+        call_id=call.id,
+        elder_id=elder_id,
+        medication_name=body.medication_name,
+        taken=body.taken,
+        reported_time=body.reported_time,
+    )
+    await db.commit()
+    logger.bind(call_id=str(call.id)).info("Logged medication")
     return LoggedResponse(id=row.id)
