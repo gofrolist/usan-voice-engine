@@ -160,3 +160,36 @@ async def test_mark_failed_if_active_noop_when_terminal(session_factory):
     async with session_factory() as db:
         call = await calls_repo.get_call(db, call_id)
     assert call.status is CallStatus.NO_ANSWER
+
+
+@pytest.mark.asyncio
+async def test_complete_call_if_in_progress_sets_reason(session_factory):
+    call_id = await _seed_call(session_factory, status=CallStatus.DIALING, room="cc1")
+    async with session_factory() as db:
+        await calls_repo.mark_answered(db, call_id, sip_call_id="SCL")
+        await db.commit()
+    async with session_factory() as db:
+        call = await calls_repo.complete_call_if_in_progress(
+            db, call_id, end_reason="check_in_complete"
+        )
+        await db.commit()
+    assert call is not None
+    assert call.status is CallStatus.COMPLETED
+    assert call.end_reason == "check_in_complete"
+    assert call.ended_at is not None
+    assert call.duration_seconds is not None
+    assert call.duration_seconds >= 0
+
+
+@pytest.mark.asyncio
+async def test_complete_call_if_in_progress_noop_when_terminal(session_factory):
+    call_id = await _seed_call(session_factory, status=CallStatus.NO_ANSWER, room="cc2")
+    async with session_factory() as db:
+        result = await calls_repo.complete_call_if_in_progress(
+            db, call_id, end_reason="check_in_complete"
+        )
+        await db.commit()
+    assert result is None
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.NO_ANSWER  # unchanged

@@ -14,6 +14,8 @@ from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import medications as medications_repo
 from usan_api.repositories import wellness as wellness_repo
 from usan_api.schemas.tools import (
+    CallEndedResponse,
+    EndCallRequest,
     GetTodayMedsRequest,
     LoggedResponse,
     LogMedicationRequest,
@@ -103,3 +105,16 @@ async def get_today_meds(
             except ValidationError:
                 logger.bind(elder_id=str(elder_id)).warning("Skipping malformed medication entry")
     return TodayMedsResponse(medications=items)
+
+
+@router.post("/end_call", response_model=CallEndedResponse)
+async def end_call(
+    body: EndCallRequest,
+    db: AsyncSession = Depends(get_db),
+    claims: dict[str, Any] = Depends(require_service_token),
+) -> CallEndedResponse:
+    call = await _authorize_call(body.call_id, claims, db)
+    updated = await calls_repo.complete_call_if_in_progress(db, call.id, end_reason=body.reason)
+    await db.commit()
+    logger.bind(call_id=str(call.id)).info("end_call requested: {r}", r=body.reason)
+    return CallEndedResponse(status=(updated or call).status.value)

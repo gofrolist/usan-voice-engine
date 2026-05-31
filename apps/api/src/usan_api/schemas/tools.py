@@ -42,3 +42,11 @@ class GetTodayMedsRequest(ToolCallRequest):
 
 class TodayMedsResponse(BaseModel):
     medications: list[MedicationScheduleItem]
+
+
+class EndCallRequest(ToolCallRequest):
+    reason: str = Field(min_length=1, max_length=100)
+
+
+class CallEndedResponse(BaseModel):
+    status: str

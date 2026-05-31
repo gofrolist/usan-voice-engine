@@ -199,3 +199,68 @@ def test_get_today_meds_mismatch_403(client, mock_dispatch):
         headers=_auth(str(uuid.uuid4())),
     )
     assert r.status_code == 403
+
+
+def _answered_call(client, async_database_url) -> str:
+    """Enqueue a call, then force it to IN_PROGRESS with a direct write."""
+    import asyncio as _asyncio
+    import uuid as _uuid
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import calls as calls_repo
+
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+
+    async def _answer() -> None:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as db:
+                await calls_repo.mark_answered(db, _uuid.UUID(call_id), sip_call_id="SCL")
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    _asyncio.run(_answer())
+    return call_id
+
+
+def test_end_call_completes_in_progress(client, mock_dispatch, async_database_url):
+    call_id = _answered_call(client, async_database_url)
+    r = client.post(
+        "/v1/tools/end_call",
+        json={"call_id": call_id, "reason": "check_in_complete"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "completed"
+
+
+def test_end_call_idempotent_noop(client, mock_dispatch, async_database_url):
+    call_id = _answered_call(client, async_database_url)
+    first = client.post(
+        "/v1/tools/end_call",
+        json={"call_id": call_id, "reason": "check_in_complete"},
+        headers=_auth(call_id),
+    )
+    assert first.status_code == 200
+    second = client.post(
+        "/v1/tools/end_call",
+        json={"call_id": call_id, "reason": "user_ended"},
+        headers=_auth(call_id),
+    )
+    assert second.status_code == 200
+    assert second.json()["status"] == "completed"  # unchanged; reason not overwritten
+
+
+def test_end_call_mismatch_403(client, mock_dispatch, async_database_url):
+    call_id = _answered_call(client, async_database_url)
+    r = client.post(
+        "/v1/tools/end_call",
+        json={"call_id": call_id, "reason": "x"},
+        headers=_auth(str(uuid.uuid4())),
+    )
+    assert r.status_code == 403
