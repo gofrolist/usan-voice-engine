@@ -47,7 +47,7 @@ async def session_factory(async_database_url):
 
 
 async def _seed_dialing_retry(factory, *, room):
-    """A claimed retry row: status=DIALING, scheduled_at set, attempt 2."""
+    """A claimed retry row: status=DIALING, attempt 2."""
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
         elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")

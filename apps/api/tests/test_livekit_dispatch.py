@@ -10,7 +10,6 @@ from sqlalchemy.pool import NullPool
 from usan_api import livekit_dispatch
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
-from usan_api.db.models import Call as _Call
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.settings import Settings
@@ -159,7 +158,7 @@ def _twirp_busy() -> Exception:
 async def _count_children(factory, parent_id):
     async with factory() as db:
         result = await db.execute(
-            _select(func.count()).select_from(_Call).where(_Call.parent_call_id == parent_id)
+            _select(func.count()).select_from(Call).where(Call.parent_call_id == parent_id)
         )
         return result.scalar_one()
 
@@ -201,7 +200,6 @@ async def test_dial_unconfigured_does_not_schedule_retry(monkeypatch, session_fa
 async def test_dial_crash_marks_failed_and_retries_without_clobbering(monkeypatch, session_factory):
     # Crash AFTER a successful answer must NOT overwrite IN_PROGRESS nor schedule a retry.
     fake = _fake_api()
-    fake.sip.create_sip_participant.return_value = MagicMock(sip_call_id="SCL_OK")
     monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
     monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
 

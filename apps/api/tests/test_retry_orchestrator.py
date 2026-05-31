@@ -32,8 +32,8 @@ async def _truncate_calls(session_factory):
         await db.commit()
 
 
-async def _seed(factory, *, status, scheduled_at, updated_offset_s=None):
-    """Insert one call. If updated_offset_s is set, force updated_at to NOW + offset."""
+async def _seed(factory, *, status, scheduled_at):
+    """Insert one call."""
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
         elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")

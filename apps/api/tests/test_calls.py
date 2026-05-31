@@ -365,6 +365,27 @@ def test_outcome_idempotent_noop_when_already_terminal(client, mock_dispatch, as
     assert second.json()["status"] == "voicemail_left"
 
 
+def _call_id_by_idempotency_key(async_database_url: str, key: str) -> str:
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import calls as calls_repo
+
+    async def _run() -> str:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as db:
+                call = await calls_repo.get_by_idempotency_key(db, key)
+                return str(call.id)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
 def _count_children(async_database_url: str, parent_id: str) -> int:
     import asyncio
     import uuid as _uuid
@@ -416,13 +437,6 @@ def test_outcome_noop_does_not_schedule_retry(client, mock_dispatch, async_datab
 def test_enqueue_unexpected_dispatch_error_schedules_retry(client, monkeypatch, async_database_url):
     # NOTE: 502 raises HTTPException -> body is {"detail": ...}, no "id" field.
     # Fetch the call ID via idempotency_key so we can count children.
-    import asyncio as _asyncio
-
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-    from sqlalchemy.pool import NullPool
-
-    from usan_api.repositories import calls as calls_repo
-
     async def _raise(*args, **kwargs):
         raise RuntimeError("boom")
 
@@ -435,17 +449,7 @@ def test_enqueue_unexpected_dispatch_error_schedules_retry(client, monkeypatch, 
     )
     assert r.status_code == 502
 
-    async def _get_id() -> str:
-        engine = create_async_engine(async_database_url, poolclass=NullPool)
-        try:
-            factory = async_sessionmaker(engine, expire_on_commit=False)
-            async with factory() as db:
-                call = await calls_repo.get_by_idempotency_key(db, idem_key)
-                return str(call.id)
-        finally:
-            await engine.dispose()
-
-    call_id = _asyncio.run(_get_id())
+    call_id = _call_id_by_idempotency_key(async_database_url, idem_key)
     # transient dispatch failure -> failed attempt 1 -> +1min child
     assert _count_children(async_database_url, call_id) == 1
 
@@ -453,13 +457,6 @@ def test_enqueue_unexpected_dispatch_error_schedules_retry(client, monkeypatch, 
 def test_enqueue_config_error_does_not_schedule_retry(client, monkeypatch, async_database_url):
     # NOTE: 503 raises HTTPException -> body is {"detail": ...}, no "id" field.
     # Fetch the call ID via idempotency_key so we can count children.
-    import asyncio as _asyncio
-
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-    from sqlalchemy.pool import NullPool
-
-    from usan_api.repositories import calls as calls_repo
-
     async def _raise(*args, **kwargs):
         raise livekit_dispatch.OutboundDispatchError("not configured")
 
@@ -472,15 +469,5 @@ def test_enqueue_config_error_does_not_schedule_retry(client, monkeypatch, async
     )
     assert r.status_code == 503
 
-    async def _get_id() -> str:
-        engine = create_async_engine(async_database_url, poolclass=NullPool)
-        try:
-            factory = async_sessionmaker(engine, expire_on_commit=False)
-            async with factory() as db:
-                call = await calls_repo.get_by_idempotency_key(db, idem_key)
-                return str(call.id)
-        finally:
-            await engine.dispose()
-
-    call_id = _asyncio.run(_get_id())
+    call_id = _call_id_by_idempotency_key(async_database_url, idem_key)
     assert _count_children(async_database_url, call_id) == 0  # misconfig is permanent
