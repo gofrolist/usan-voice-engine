@@ -9,6 +9,7 @@ from usan_api.db.base import CallStatus
 from usan_api.db.models import Call, Elder
 from usan_api.db.session import get_session_factory
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.settings import Settings
 from usan_api.sip_status import classify_dial_exception
@@ -150,3 +151,63 @@ async def _dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
         await calls_repo.mark_answered(db, call_id, sip_call_id=sip_call_id)
         await db.commit()
     log.info("Outbound call answered; in_progress")
+
+
+async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
+    """Poller dispatch entrypoint for a claimed retry (already flipped to DIALING).
+
+    Re-checks DNC at dial time (the elder may have opted out since the retry was
+    scheduled), dispatches the agent, then delegates to dial_and_classify. A
+    permanent misconfig fails the call without a retry; any other crash marks
+    FAILED and schedules a retry per §5.3.
+    """
+    factory = get_session_factory()
+    try:
+        async with factory() as db:
+            call = await calls_repo.get_call(db, call_id)
+            if call is None or call.elder_id is None or not call.livekit_room:
+                logger.bind(call_id=str(call_id)).warning("dispatch_and_dial: call not dialable")
+                return
+            elder = await elders_repo.get_elder(db, call.elder_id)
+            if elder is None:
+                await calls_repo.mark_dial_failure(
+                    db, call_id, CallStatus.FAILED, end_reason="elder_missing"
+                )
+                await db.commit()
+                return
+            room = call.livekit_room
+            # DNC re-check at dial time (closes the schedule->due window).
+            await dnc_repo.lock_phone(db, elder.phone_e164)
+            blocked = await dnc_repo.is_blocked(db, elder.phone_e164)
+            if blocked:
+                await calls_repo.set_status(db, call_id, CallStatus.DNC_BLOCKED)
+                await db.commit()
+                logger.bind(call_id=str(call_id)).info("Retry blocked by DNC")
+                await _delete_room(room, settings)
+                return
+            await db.commit()  # release the advisory lock before the slow dial
+
+        try:
+            await dispatch_agent(call, settings=settings)
+        except OutboundDispatchError:
+            async with factory() as db:
+                await calls_repo.mark_dial_failure(
+                    db, call_id, CallStatus.FAILED, end_reason="not_configured"
+                )
+                await db.commit()  # misconfig is permanent — no retry
+            await _delete_room(room, settings)
+            return
+
+        await dial_and_classify(call_id, settings)
+    except Exception:
+        logger.bind(call_id=str(call_id)).exception("dispatch_and_dial crashed")
+        try:
+            async with factory() as db:
+                failed = await calls_repo.mark_failed_if_active(
+                    db, call_id, end_reason="internal_error"
+                )
+                if failed is not None:
+                    await calls_repo.schedule_retry(db, call_id)
+                await db.commit()
+        except Exception:
+            logger.bind(call_id=str(call_id)).warning("Could not mark retry FAILED after crash")
