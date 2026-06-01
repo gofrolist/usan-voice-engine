@@ -5,7 +5,7 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from usan_api.auth import require_service_token
+from usan_api.auth import require_service_token, require_worker_token
 from usan_api.settings import get_settings
 
 SECRET = "s" * 32
@@ -17,6 +17,10 @@ def _app() -> FastAPI:
     @app.get("/protected")
     def protected(claims: dict = Depends(require_service_token)) -> dict:
         return {"call_id": claims["call_id"]}
+
+    @app.get("/worker")
+    def worker(claims: dict = Depends(require_worker_token)) -> dict:
+        return {"sub": claims.get("sub")}
 
     return app
 
@@ -70,3 +74,37 @@ def test_missing_call_id_claim_401(auth_client):
     token = jwt.encode({"sub": "usan-agent", "exp": now + 300}, SECRET, algorithm="HS256")
     r = auth_client.get("/protected", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 401
+
+
+def _worker_token_str(secret: str = SECRET, *, exp_delta: int = 300) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {"sub": "usan-agent", "iat": now, "exp": now + exp_delta}, secret, algorithm="HS256"
+    )
+
+
+def test_worker_token_without_call_id_accepted(auth_client):
+    r = auth_client.get("/worker", headers={"Authorization": f"Bearer {_worker_token_str()}"})
+    assert r.status_code == 200
+
+
+def test_worker_token_missing_401(auth_client):
+    assert auth_client.get("/worker").status_code == 401
+
+
+def test_worker_token_wrong_secret_401(auth_client):
+    bad = _worker_token_str(secret="x" * 32)
+    r = auth_client.get("/worker", headers={"Authorization": f"Bearer {bad}"})
+    assert r.status_code == 401
+
+
+def test_worker_token_expired_401(auth_client):
+    expired = _worker_token_str(exp_delta=-10)
+    r = auth_client.get("/worker", headers={"Authorization": f"Bearer {expired}"})
+    assert r.status_code == 401
+
+
+def test_worker_token_accepts_call_scoped_token(auth_client):
+    # A call-scoped token (with call_id) is also valid — we only require exp.
+    r = auth_client.get("/worker", headers={"Authorization": f"Bearer {_token()}"})
+    assert r.status_code == 200
