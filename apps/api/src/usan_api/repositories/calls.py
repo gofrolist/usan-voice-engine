@@ -246,6 +246,27 @@ async def reclaim_stuck_dialing(
 _ACTIVE_STATUSES = frozenset({CallStatus.QUEUED, CallStatus.DIALING, CallStatus.RINGING})
 
 
+async def complete_call_if_in_progress(
+    db: AsyncSession, call_id: uuid.UUID, *, end_reason: str
+) -> Call | None:
+    """Mark an in-progress call COMPLETED with a caller-supplied end_reason.
+
+    Gated on IN_PROGRESS so it is idempotent and races the room_finished webhook
+    safely: whichever marks the call COMPLETED first wins, the other no-ops.
+    """
+    call = await db.get(Call, call_id)
+    if call is None or call.status is not CallStatus.IN_PROGRESS:
+        return None
+    call.status = CallStatus.COMPLETED
+    call.ended_at = _utcnow()
+    call.end_reason = end_reason
+    if call.answered_at is not None:
+        call.duration_seconds = int((call.ended_at - call.answered_at).total_seconds())
+    await db.flush()
+    await db.refresh(call)
+    return call
+
+
 async def mark_failed_if_active(
     db: AsyncSession, call_id: uuid.UUID, *, end_reason: str
 ) -> Call | None:
