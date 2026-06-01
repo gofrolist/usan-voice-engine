@@ -36,6 +36,10 @@ Thumbs.db
 data/
 recordings/
 
+# Agent tooling local state (worktrees, scratch)
+.claude/
+.claire/
+
 # Secrets (allow templates)
 infra/.env
 !infra/.env.example
