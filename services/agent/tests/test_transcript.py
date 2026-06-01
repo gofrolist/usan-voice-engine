@@ -53,6 +53,12 @@ def test_history_to_segments_bad_tool_args_defaults_empty():
     assert segs[0]["tool_args"] == {}
 
 
+def test_history_to_segments_non_dict_tool_args_defaults_empty():
+    # Valid JSON that is not an object (e.g. a JSON array) -> tool_args = {}.
+    segs = transcript.history_to_segments([_call("x", "[1, 2]", 1.0)])
+    assert segs[0]["tool_args"] == {}
+
+
 def test_history_to_segments_empty():
     assert transcript.history_to_segments([]) == []
 
