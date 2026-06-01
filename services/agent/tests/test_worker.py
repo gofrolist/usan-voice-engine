@@ -142,38 +142,6 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
     fake_build_agent.assert_not_called()
 
 
-async def test_inbound_uses_greet_only_agent(monkeypatch):
-    _settings(monkeypatch)
-
-    captured = {}
-
-    def _fake_build_session(settings, userdata=None):
-        captured["userdata"] = userdata
-        session = MagicMock()
-        session.start = AsyncMock()
-        captured["session"] = session
-        return session
-
-    fake = MagicMock()
-    monkeypatch.setattr(worker, "build_check_in_agent", fake)
-    monkeypatch.setattr(worker, "build_session", _fake_build_session)
-    monkeypatch.setattr(worker, "greet", AsyncMock())
-
-    ctx = MagicMock()
-    ctx.connect = AsyncMock()
-    ctx.wait_for_participant = AsyncMock()
-    ctx.room.name = "usan-inbound-x"
-    ctx.job.metadata = None  # inbound
-
-    await worker.entrypoint(ctx)
-
-    assert captured["userdata"] is None  # inbound carries no check-in state
-    # The check-in agent must NOT have been built on the inbound path.
-    fake.assert_not_called()
-    # The session must have been started.
-    captured["session"].start.assert_awaited_once()
-
-
 async def test_outbound_registers_transcript_flush(monkeypatch):
     _settings(monkeypatch)
 
@@ -207,29 +175,170 @@ async def test_outbound_registers_transcript_flush(monkeypatch):
     assert registered["ctx"] is ctx
 
 
-async def test_inbound_does_not_register_transcript_flush(monkeypatch):
+def test_caller_phone_reads_sip_attribute():
+    p = MagicMock()
+    p.attributes = {"sip.phoneNumber": "+15551234567"}
+    assert worker._caller_phone(p) == "+15551234567"
+
+
+def test_caller_phone_none_when_absent():
+    p = MagicMock()
+    p.attributes = {}
+    assert worker._caller_phone(p) is None
+
+
+async def test_inbound_known_elder_runs_check_in(monkeypatch):
     _settings(monkeypatch)
 
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+        assert phone == "+15551234567"
+        assert room == "usan-inbound-x"
+        return {"call_id": "inb-1", "elder_known": True, "dynamic_vars": {"elder_name": "Ada"}}
+
+    monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
+
+    built = {}
+
+    def _fake_build_inbound_agent(dynamic_vars):
+        built["dynamic_vars"] = dynamic_vars
+        agent = MagicMock(name="inbound_agent")
+        built["agent"] = agent
+        return agent
+
+    captured = {}
+
     def _fake_build_session(settings, userdata=None):
+        captured["userdata"] = userdata
         session = MagicMock()
         session.start = AsyncMock()
+        session.generate_reply = AsyncMock()
+        captured["session"] = session
         return session
 
+    registered = {}
+
+    def _fake_register(ctx, session, call_id, settings):
+        registered["call_id"] = call_id
+
+    fake_build_agent = MagicMock()
+    monkeypatch.setattr(worker, "build_inbound_agent", _fake_build_inbound_agent)
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
-    monkeypatch.setattr(worker, "greet", AsyncMock())
+    monkeypatch.setattr(worker, "register_transcript_flush", _fake_register)
+    monkeypatch.setattr(worker, "build_agent", fake_build_agent)
 
-    called = {"n": 0}
-
-    def _count_register(*a: object, **k: object) -> None:
-        called["n"] += 1
-
-    monkeypatch.setattr(worker, "register_transcript_flush", _count_register)
+    participant = MagicMock()
+    participant.attributes = {"sip.phoneNumber": "+15551234567"}
 
     ctx = MagicMock()
     ctx.connect = AsyncMock()
-    ctx.wait_for_participant = AsyncMock()
+    ctx.wait_for_participant = AsyncMock(return_value=participant)
     ctx.room.name = "usan-inbound-x"
     ctx.job.metadata = None  # inbound
 
     await worker.entrypoint(ctx)
-    assert called["n"] == 0
+
+    assert built["dynamic_vars"] == {"elder_name": "Ada"}
+    assert captured["userdata"].call_id == "inb-1"
+    assert captured["userdata"].job_ctx is ctx
+    captured["session"].start.assert_awaited_once()
+    assert captured["session"].start.await_args.kwargs["agent"] is built["agent"]
+    captured["session"].generate_reply.assert_awaited_once()
+    assert registered["call_id"] == "inb-1"
+    fake_build_agent.assert_not_called()  # greet-only agent NOT used for a known elder
+
+
+async def test_inbound_unknown_caller_falls_back_to_greet_only(monkeypatch):
+    _settings(monkeypatch)
+
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+        return None  # unknown caller / lookup failed
+
+    monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
+
+    captured = {}
+
+    def _fake_build_session(settings, userdata=None):
+        captured["userdata"] = userdata
+        session = MagicMock()
+        session.start = AsyncMock()
+        captured["session"] = session
+        return session
+
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "greet", AsyncMock())
+    fake_inbound_agent = MagicMock()
+    monkeypatch.setattr(worker, "build_inbound_agent", fake_inbound_agent)
+
+    flushes = {"n": 0}
+
+    def _count_register(*a: object, **k: object) -> None:
+        flushes["n"] += 1
+
+    monkeypatch.setattr(worker, "register_transcript_flush", _count_register)
+
+    participant = MagicMock()
+    participant.attributes = {}  # no caller ID
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock(return_value=participant)
+    ctx.room.name = "usan-inbound-x"
+    ctx.job.metadata = None  # inbound
+
+    await worker.entrypoint(ctx)
+
+    assert captured["userdata"] is None  # greet-only carries no check-in state
+    fake_inbound_agent.assert_not_called()
+    assert flushes["n"] == 0
+    worker.greet.assert_awaited_once()
+    captured["session"].start.assert_awaited_once()
+
+
+async def test_inbound_unknown_elder_known_false_falls_back_to_greet_only(monkeypatch):
+    # The realistic unknown-caller path: the API responds with a call record but
+    # elder_known=False (the number matched no elder). Must use greet-only, not the
+    # check-in agent, and must NOT register a transcript flush.
+    _settings(monkeypatch)
+
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+        return {"call_id": "inb-9", "elder_known": False, "dynamic_vars": {}}
+
+    monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
+
+    captured = {}
+
+    def _fake_build_session(settings, userdata=None):
+        captured["userdata"] = userdata
+        session = MagicMock()
+        session.start = AsyncMock()
+        captured["session"] = session
+        return session
+
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "greet", AsyncMock())
+    fake_inbound_agent = MagicMock()
+    monkeypatch.setattr(worker, "build_inbound_agent", fake_inbound_agent)
+
+    flushes = {"n": 0}
+
+    def _count_register(*a: object, **k: object) -> None:
+        flushes["n"] += 1
+
+    monkeypatch.setattr(worker, "register_transcript_flush", _count_register)
+
+    participant = MagicMock()
+    participant.attributes = {"sip.phoneNumber": "+19998887777"}
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock(return_value=participant)
+    ctx.room.name = "usan-inbound-x"
+    ctx.job.metadata = None  # inbound
+
+    await worker.entrypoint(ctx)
+
+    assert captured["userdata"] is None  # greet-only despite a non-None API response
+    fake_inbound_agent.assert_not_called()
+    assert flushes["n"] == 0
+    worker.greet.assert_awaited_once()
+    captured["session"].start.assert_awaited_once()

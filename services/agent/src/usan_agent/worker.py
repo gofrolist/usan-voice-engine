@@ -13,7 +13,8 @@ from typing import Any
 from livekit.agents import JobContext, WorkerOptions, cli
 from loguru import logger
 
-from usan_agent.check_in import CheckInData, build_check_in_agent
+from usan_agent.api_client import start_inbound_call
+from usan_agent.check_in import CheckInData, build_check_in_agent, build_inbound_agent
 from usan_agent.logging_config import configure_logging
 from usan_agent.pipeline import build_agent, build_session, greet
 from usan_agent.settings import Settings, get_settings
@@ -49,6 +50,60 @@ def parse_metadata(raw: str | None) -> CallMetadata:
     )
 
 
+_INBOUND_OPENING = (
+    "Greet the caller warmly by name if you know it, and ask how they are feeling "
+    "today to begin the daily check-in."
+)
+
+
+def _caller_phone(participant: Any) -> str | None:
+    """Read the inbound caller's E.164 number from the SIP participant attributes.
+
+    livekit-sip populates ``sip.phoneNumber`` with the remote party's number; on
+    inbound that is the caller. ``sip.from`` is a fallback on newer sip servers.
+    """
+    attrs = getattr(participant, "attributes", None) or {}
+    return attrs.get("sip.phoneNumber") or attrs.get("sip.from") or None
+
+
+async def _run_inbound(ctx: JobContext, settings: Settings, log: Any) -> None:
+    """Inbound: wait for the caller, look them up, run a personalized check-in.
+
+    No voicemail detection on inbound (spec §7). A known elder gets the tool-driven
+    check-in with a personalized opening + transcript flush; an unknown number or a
+    failed lookup falls back to a greet-only conversation (no per-elder state, so no
+    orphaned wellness/medication logs).
+    """
+    participant = await ctx.wait_for_participant()
+    phone = _caller_phone(participant)
+    log.info("Inbound caller present (phone={phone})", phone=phone)
+
+    # The lookup precedes session.start, so the caller hears a brief silence (the
+    # API round-trip) before the agent speaks. Acceptable in v1 because the agent
+    # greets first — the caller is not yet expected to be speaking. If zero-gap
+    # audio capture is ever needed, start the session first and reconfigure the
+    # agent after the lookup.
+    info = await start_inbound_call(phone, ctx.room.name, settings)
+    if info and info.get("elder_known") and info.get("call_id"):
+        call_id = str(info["call_id"])
+        dynamic_vars = info.get("dynamic_vars") or {}
+        data = CheckInData(call_id=call_id, settings=settings, job_ctx=ctx)
+        session = build_session(settings, userdata=data)
+        agent = build_inbound_agent(dynamic_vars)
+        register_transcript_flush(ctx, session, call_id, settings)
+        await session.start(agent=agent, room=ctx.room)
+        log.info("Inbound check-in started for known elder (call_id={cid})", cid=call_id)
+        await session.generate_reply(instructions=_INBOUND_OPENING)
+        return
+
+    # Unknown caller or lookup failed: greet-only, no per-elder state.
+    session = build_session(settings)
+    agent = build_agent()
+    await session.start(agent=agent, room=ctx.room)
+    log.info("Inbound greet-only (no known elder)")
+    await greet(session)
+
+
 async def _run_detection_window(
     ctx: JobContext,
     session: Any,
@@ -82,13 +137,8 @@ async def entrypoint(ctx: JobContext) -> None:
         session = build_session(settings, userdata=data)
         agent = build_check_in_agent()
         register_transcript_flush(ctx, session, meta.call_id, settings)
-    else:
-        session = build_session(settings)
-        agent = build_agent()
-    await session.start(agent=agent, room=ctx.room)
-    log.info("Session started; waiting for participant")
-
-    if meta.direction == "outbound":
+        await session.start(agent=agent, room=ctx.room)
+        log.info("Session started; waiting for participant")
         try:
             await asyncio.wait_for(
                 ctx.wait_for_participant(), timeout=settings.outbound_answer_timeout_s
@@ -100,18 +150,14 @@ async def entrypoint(ctx: JobContext) -> None:
             log.info("No participant within answer timeout; ending job")
             ctx.shutdown(reason="no_answer_timeout")
             return
-
         watcher = VoicemailWatcher()
         session.on("user_input_transcribed", lambda ev: watcher.feed(ev.transcript))
         log.info("Participant present; running voicemail detection window")
         await _run_detection_window(ctx, session, watcher, call_id=meta.call_id, settings=settings)
         return
 
-    # Inbound: caller already present; no voicemail detection (spec §7).
-    await ctx.wait_for_participant()
-    log.info("Participant present; greeting")
-    await greet(session)
-    log.info("Greeting spoken")
+    # Inbound: caller already dialed in; no voicemail detection (spec §7).
+    await _run_inbound(ctx, settings, log)
 
 
 def main() -> None:
