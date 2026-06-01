@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -50,3 +51,20 @@ class EndCallRequest(ToolCallRequest):
 
 class CallEndedResponse(BaseModel):
     status: str
+
+
+class TranscriptSegmentIn(BaseModel):
+    role: str = Field(min_length=1, max_length=32)
+    content: str = Field(min_length=1)
+    tool_name: str | None = Field(default=None, max_length=200)
+    tool_args: dict[str, Any] | None = None
+    started_at: datetime
+    ended_at: datetime | None = None
+
+
+class LogTranscriptRequest(ToolCallRequest):
+    segments: list[TranscriptSegmentIn] = Field(min_length=1, max_length=500)
+
+
+class TranscriptLoggedResponse(BaseModel):
+    count: int

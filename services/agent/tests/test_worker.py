@@ -172,3 +172,64 @@ async def test_inbound_uses_greet_only_agent(monkeypatch):
     fake.assert_not_called()
     # The session must have been started.
     captured["session"].start.assert_awaited_once()
+
+
+async def test_outbound_registers_transcript_flush(monkeypatch):
+    _settings(monkeypatch)
+
+    def _fake_build_session(settings, userdata=None):
+        session = MagicMock()
+        session.start = AsyncMock()
+        session.on = MagicMock()
+        return session
+
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda: MagicMock())
+    monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
+
+    registered = {}
+
+    def _fake_register(ctx, session, call_id, settings):
+        registered["call_id"] = call_id
+        registered["ctx"] = ctx
+
+    monkeypatch.setattr(worker, "register_transcript_flush", _fake_register)
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock()
+    ctx.room.name = "usan-outbound-x"
+    ctx.job.metadata = '{"call_id": "call-1", "direction": "outbound", "dynamic_vars": {}}'
+
+    await worker.entrypoint(ctx)
+
+    assert registered["call_id"] == "call-1"
+    assert registered["ctx"] is ctx
+
+
+async def test_inbound_does_not_register_transcript_flush(monkeypatch):
+    _settings(monkeypatch)
+
+    def _fake_build_session(settings, userdata=None):
+        session = MagicMock()
+        session.start = AsyncMock()
+        return session
+
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "greet", AsyncMock())
+
+    called = {"n": 0}
+
+    def _count_register(*a: object, **k: object) -> None:
+        called["n"] += 1
+
+    monkeypatch.setattr(worker, "register_transcript_flush", _count_register)
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock()
+    ctx.room.name = "usan-inbound-x"
+    ctx.job.metadata = None  # inbound
+
+    await worker.entrypoint(ctx)
+    assert called["n"] == 0

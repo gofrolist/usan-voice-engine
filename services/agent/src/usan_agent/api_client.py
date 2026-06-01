@@ -95,3 +95,20 @@ async def get_today_meds(call_id: str, settings: Settings) -> list[dict[str, Any
 
 async def report_end_call(call_id: str, settings: Settings, reason: str) -> None:
     await _post_tool("end_call", call_id, settings, {"reason": reason})
+
+
+async def flush_transcript(
+    call_id: str, settings: Settings, segments: list[dict[str, Any]]
+) -> None:
+    """Best-effort: POST the call's transcript segments at call end. Never raises."""
+    url = f"{settings.api_base_url}/v1/tools/log_transcript"
+    headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                url, json={"call_id": call_id, "segments": segments}, headers=headers
+            )
+            response.raise_for_status()
+        logger.bind(call_id=call_id).info("Flushed {n} transcript segments", n=len(segments))
+    except Exception:
+        logger.bind(call_id=call_id).warning("Failed to flush transcript to API")

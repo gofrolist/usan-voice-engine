@@ -17,6 +17,7 @@ from usan_agent.check_in import CheckInData, build_check_in_agent
 from usan_agent.logging_config import configure_logging
 from usan_agent.pipeline import build_agent, build_session, greet
 from usan_agent.settings import Settings, get_settings
+from usan_agent.transcript import register_transcript_flush
 from usan_agent.voicemail import VOICEMAIL_WINDOW_S, VoicemailWatcher
 from usan_agent.voicemail_action import leave_voicemail
 
@@ -80,6 +81,7 @@ async def entrypoint(ctx: JobContext) -> None:
         data = CheckInData(call_id=meta.call_id, settings=settings, job_ctx=ctx)
         session = build_session(settings, userdata=data)
         agent = build_check_in_agent()
+        register_transcript_flush(ctx, session, meta.call_id, settings)
     else:
         session = build_session(settings)
         agent = build_agent()

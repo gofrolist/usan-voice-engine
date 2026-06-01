@@ -288,3 +288,66 @@ def test_end_call_noop_when_not_in_progress(client, mock_dispatch):
     )
     assert r.status_code == 200
     assert r.json()["status"] == "dialing"
+
+
+def test_log_transcript_inserts_segments(client, mock_dispatch, async_database_url):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/log_transcript",
+        json={
+            "call_id": call_id,
+            "segments": [
+                {"role": "assistant", "content": "Hello!", "started_at": "2026-06-01T12:00:00Z"},
+                {"role": "user", "content": "I'm good", "started_at": "2026-06-01T12:00:05Z"},
+                {
+                    "role": "tool",
+                    "content": "log_wellness",
+                    "tool_name": "log_wellness",
+                    "tool_args": {"mood": 4},
+                    "started_at": "2026-06-01T12:00:06Z",
+                },
+            ],
+        },
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    assert r.json()["count"] == 3
+
+
+def test_log_transcript_requires_token(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/log_transcript",
+        json={
+            "call_id": call_id,
+            "segments": [{"role": "user", "content": "hi", "started_at": "2026-06-01T12:00:00Z"}],
+        },
+    )
+    assert r.status_code == 401
+
+
+def test_log_transcript_mismatch_403(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/log_transcript",
+        json={
+            "call_id": call_id,
+            "segments": [{"role": "user", "content": "hi", "started_at": "2026-06-01T12:00:00Z"}],
+        },
+        headers=_auth(str(uuid.uuid4())),
+    )
+    assert r.status_code == 403
+
+
+def test_log_transcript_empty_segments_422(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/log_transcript",
+        json={"call_id": call_id, "segments": []},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 422
