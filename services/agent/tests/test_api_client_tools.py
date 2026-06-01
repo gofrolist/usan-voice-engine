@@ -1,0 +1,94 @@
+import httpx
+import pytest
+
+from usan_agent import api_client
+from usan_agent.settings import Settings
+
+
+def _settings() -> Settings:
+    return Settings(
+        LIVEKIT_API_KEY="k",
+        LIVEKIT_API_SECRET="a" * 32,
+        LIVEKIT_URL="ws://livekit:7880",
+        CARTESIA_API_KEY="c",
+        GEMINI_API_KEY="g",
+        DEFAULT_CARTESIA_VOICE_ID="v",
+        API_BASE_URL="http://api:8000",
+        JWT_SIGNING_KEY="s" * 32,
+    )
+
+
+class _FakeClient:
+    """Stands in for httpx.AsyncClient; records the request and returns a canned response."""
+
+    captured: dict = {}
+    status = 200
+    json_data: dict = {}
+
+    def __init__(self, timeout=None):
+        self._timeout = timeout
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, json, headers):
+        _FakeClient.captured = {"url": url, "json": json, "headers": headers}
+        request = httpx.Request("POST", url)
+        return httpx.Response(_FakeClient.status, json=_FakeClient.json_data, request=request)
+
+
+@pytest.fixture
+def fake_http(monkeypatch):
+    _FakeClient.captured = {}
+    _FakeClient.status = 200
+    _FakeClient.json_data = {}
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _FakeClient)
+    return _FakeClient
+
+
+async def test_log_wellness_posts_scoped_request(fake_http):
+    _FakeClient.json_data = {"id": 7}
+    await api_client.log_wellness("call-1", _settings(), mood=4, pain_level=2, notes="ok")
+    cap = fake_http.captured
+    assert cap["url"] == "http://api:8000/v1/tools/log_wellness"
+    assert cap["json"] == {"call_id": "call-1", "mood": 4, "pain_level": 2, "notes": "ok"}
+    assert cap["headers"]["Authorization"].startswith("Bearer ")
+
+
+async def test_log_medication_posts_scoped_request(fake_http):
+    _FakeClient.json_data = {"id": 9}
+    await api_client.log_medication(
+        "call-1", _settings(), medication_name="Aspirin", taken=True, reported_time=None
+    )
+    cap = fake_http.captured
+    assert cap["url"] == "http://api:8000/v1/tools/log_medication"
+    assert cap["json"] == {
+        "call_id": "call-1",
+        "medication_name": "Aspirin",
+        "taken": True,
+        "reported_time": None,
+    }
+
+
+async def test_get_today_meds_returns_medications(fake_http):
+    med_entry = {"name": "Aspirin", "dosage": "81mg", "times": ["08:00"]}
+    _FakeClient.json_data = {"medications": [med_entry]}
+    meds = await api_client.get_today_meds("call-1", _settings())
+    assert meds == [med_entry]
+    assert fake_http.captured["json"] == {"call_id": "call-1"}
+
+
+async def test_report_end_call_posts_reason(fake_http):
+    _FakeClient.json_data = {"status": "completed"}
+    await api_client.report_end_call("call-1", _settings(), "check_in_complete")
+    assert fake_http.captured["url"] == "http://api:8000/v1/tools/end_call"
+    assert fake_http.captured["json"] == {"call_id": "call-1", "reason": "check_in_complete"}
+
+
+async def test_tool_client_raises_on_http_error(fake_http):
+    _FakeClient.status = 500
+    with pytest.raises(httpx.HTTPStatusError):
+        await api_client.log_wellness("call-1", _settings(), mood=3, pain_level=None, notes=None)
