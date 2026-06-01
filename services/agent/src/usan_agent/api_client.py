@@ -6,6 +6,7 @@ to the call being mutated.
 """
 
 import time
+from typing import Any, cast
 
 import httpx
 import jwt
@@ -36,3 +37,61 @@ async def report_voicemail_left(call_id: str, settings: Settings) -> None:
         logger.bind(call_id=call_id).info("Reported voicemail_left to API")
     except Exception:
         logger.bind(call_id=call_id).warning("Failed to report voicemail_left to API")
+
+
+async def _post_tool(
+    tool: str, call_id: str, settings: Settings, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """POST a JWT-scoped tool request to the API and return the parsed JSON.
+
+    Raises httpx.HTTPStatusError on a non-2xx response; callers decide how to
+    surface that to the conversation.
+    """
+    url = f"{settings.api_base_url}/v1/tools/{tool}"
+    headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(url, json={"call_id": call_id, **payload}, headers=headers)
+        response.raise_for_status()
+        return cast(dict[str, Any], response.json())
+
+
+async def log_wellness(
+    call_id: str,
+    settings: Settings,
+    *,
+    mood: int | None,
+    pain_level: int | None,
+    notes: str | None,
+) -> None:
+    await _post_tool(
+        "log_wellness",
+        call_id,
+        settings,
+        {"mood": mood, "pain_level": pain_level, "notes": notes},
+    )
+
+
+async def log_medication(
+    call_id: str,
+    settings: Settings,
+    *,
+    medication_name: str,
+    taken: bool,
+    reported_time: str | None = None,
+) -> None:
+    await _post_tool(
+        "log_medication",
+        call_id,
+        settings,
+        {"medication_name": medication_name, "taken": taken, "reported_time": reported_time},
+    )
+
+
+async def get_today_meds(call_id: str, settings: Settings) -> list[dict[str, Any]]:
+    data = await _post_tool("get_today_meds", call_id, settings, {})
+    meds = data.get("medications", [])
+    return meds if isinstance(meds, list) else []
+
+
+async def report_end_call(call_id: str, settings: Settings, reason: str) -> None:
+    await _post_tool("end_call", call_id, settings, {"reason": reason})
