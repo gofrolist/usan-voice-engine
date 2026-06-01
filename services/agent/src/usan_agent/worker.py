@@ -13,6 +13,7 @@ from typing import Any
 from livekit.agents import JobContext, WorkerOptions, cli
 from loguru import logger
 
+from usan_agent.check_in import CheckInData, build_check_in_agent
 from usan_agent.logging_config import configure_logging
 from usan_agent.pipeline import build_agent, build_session, greet
 from usan_agent.settings import Settings, get_settings
@@ -75,8 +76,13 @@ async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     log.info("Connected to room")
 
-    session = build_session(settings)
-    agent = build_agent()
+    if meta.direction == "outbound" and meta.call_id:
+        data = CheckInData(call_id=meta.call_id, settings=settings, job_ctx=ctx)
+        session = build_session(settings, userdata=data)
+        agent = build_check_in_agent()
+    else:
+        session = build_session(settings)
+        agent = build_agent()
     await session.start(agent=agent, room=ctx.room)
     log.info("Session started; waiting for participant")
 

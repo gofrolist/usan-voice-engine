@@ -3,6 +3,8 @@
 Plan 1 scope: hardcoded greeting + single-turn loop, no tools.
 """
 
+from typing import Any
+
 from livekit.agents import AgentSession, ChatContext
 from livekit.agents.voice import Agent
 from livekit.plugins import cartesia, google, silero
@@ -28,10 +30,15 @@ STT_MODEL = "ink-whisper"
 LLM_MODEL = "gemini-3.1-flash-lite"
 
 
-def build_session(settings: Settings) -> AgentSession[None]:
-    """Construct an AgentSession wiring STT, LLM, TTS, VAD, and turn-detector."""
+def build_session(settings: Settings, userdata: Any = None) -> AgentSession[Any]:
+    """Construct an AgentSession wiring STT, LLM, TTS, VAD, and turn-detector.
+
+    ``userdata`` (a check_in.CheckInData on outbound calls) is exposed to tools via
+    RunContext.userdata; None for greet-only inbound calls.
+    """
     logger.info("Building AgentSession (cartesia STT/TTS, {model})", model=LLM_MODEL)
     return AgentSession(
+        userdata=userdata,
         vad=silero.VAD.load(),
         stt=cartesia.STT(
             model=STT_MODEL,
@@ -57,6 +64,6 @@ def build_agent() -> Agent:
     )
 
 
-async def greet(session: AgentSession[None]) -> None:
+async def greet(session: AgentSession[Any]) -> None:
     """Speak the opening greeting once the session is connected."""
     await session.say(GREETING, allow_interruptions=True)
