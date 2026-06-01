@@ -1,6 +1,7 @@
 """Factory for the LiveKit Agents 1.x voice pipeline.
 
-Plan 1 scope: hardcoded greeting + single-turn loop, no tools.
+The session can carry per-call check-in state (userdata) so the outbound agent's
+tools can act during the call; inbound stays greet-only.
 """
 
 from typing import Any

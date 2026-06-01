@@ -35,7 +35,7 @@ continue — do not repeat a failed action more than once.
 GOODBYE_MESSAGE = "Thank you for your time today. Take care, and have a wonderful day. Goodbye."
 
 
-@dataclass
+@dataclass(frozen=True)
 class CheckInData:
     """Per-call state made available to tools via RunContext.userdata."""
 

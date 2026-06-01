@@ -91,12 +91,21 @@ async def test_do_end_call_reports_says_goodbye_and_hangs_up(monkeypatch):
     session = MagicMock()
     session.say = AsyncMock()
 
+    manager = MagicMock()
+    manager.attach_mock(session.say, "say")
+    manager.attach_mock(job_ctx.delete_room, "delete_room")
+    manager.attach_mock(job_ctx.shutdown, "shutdown")
+
     await check_in._do_end_call(_data(job_ctx=job_ctx), session, "check_in_complete")
 
     report.assert_awaited_once()
     session.say.assert_awaited_once()  # goodbye
     job_ctx.delete_room.assert_awaited_once()  # hang up
     job_ctx.shutdown.assert_called_once()
+
+    # Goodbye must complete before delete_room, which must precede shutdown.
+    names = [c[0] for c in manager.mock_calls]
+    assert names.index("say") < names.index("delete_room") < names.index("shutdown")
 
 
 async def test_do_end_call_hangs_up_even_if_report_fails(monkeypatch):

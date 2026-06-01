@@ -115,6 +115,8 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
         built["agent"] = agent
         return agent
 
+    fake_build_agent = MagicMock()
+    monkeypatch.setattr(worker, "build_agent", fake_build_agent)
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
     monkeypatch.setattr(worker, "build_check_in_agent", _fake_build_check_in_agent)
     # Short-circuit the detection window so the test doesn't run the real conversation.
@@ -136,6 +138,8 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
     # The check-in agent (not the greet-only agent) was started.
     captured["session"].start.assert_awaited_once()
     assert captured["session"].start.await_args.kwargs["agent"] is built["agent"]
+    # The greet-only build_agent must NOT have been called on the outbound path.
+    fake_build_agent.assert_not_called()
 
 
 async def test_inbound_uses_greet_only_agent(monkeypatch):
@@ -147,8 +151,11 @@ async def test_inbound_uses_greet_only_agent(monkeypatch):
         captured["userdata"] = userdata
         session = MagicMock()
         session.start = AsyncMock()
+        captured["session"] = session
         return session
 
+    fake = MagicMock()
+    monkeypatch.setattr(worker, "build_check_in_agent", fake)
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
     monkeypatch.setattr(worker, "greet", AsyncMock())
 
@@ -161,3 +168,7 @@ async def test_inbound_uses_greet_only_agent(monkeypatch):
     await worker.entrypoint(ctx)
 
     assert captured["userdata"] is None  # inbound carries no check-in state
+    # The check-in agent must NOT have been built on the inbound path.
+    fake.assert_not_called()
+    # The session must have been started.
+    captured["session"].start.assert_awaited_once()
