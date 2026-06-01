@@ -44,15 +44,47 @@ livekit-cli sip list-trunk
 livekit-cli sip list-dispatch
 ```
 
-## Smoke test
-With Telnyx pointing inbound SIP at your livekit-sip endpoint and dispatch rules in place:
+## Inbound flow (Plan 3d)
 
-1. Dial your Telnyx number from a real phone
-2. Within ~2 seconds, you should hear: "Hello! This is your daily check-in from USAN. How are you feeling today?"
-3. Say something
-4. The agent should respond with an acknowledgement
-5. Hang up
-6. Check logs: `docker compose -f docker-compose.yml logs -f agent`
+Inbound is now a personalized check-in. When a call arrives, the dispatch rule
+spawns a metadata-less agent job (treated as inbound). The agent reads the SIP
+caller-ID (`sip.phoneNumber`), POSTs it to `POST /v1/calls/inbound` (worker-token
+authed), and the API looks the caller up by `phone_e164`:
+
+- **Known elder** → an inbound `calls` row (`direction=inbound`, `in_progress`,
+  `answered_at` set) is created, `dynamic_vars` (`elder_name` + last check-in) are
+  returned, and the agent runs the full tool-driven check-in (wellness + medication
+  logging, transcript flush) opening with a greeting by name.
+- **Unknown/absent number** → a call row with `elder_id = NULL` is recorded and the
+  agent gives the generic greeting only (no per-elder tools).
+
+DNC is **not** checked on inbound (DNC governs outbound dialing only).
+
+### Smoke test
+
+With Telnyx pointing inbound SIP at your livekit-sip endpoint and the dispatch rule
+applied (see "LiveKit side" above), and an elder whose `phone_e164` matches the
+number you will call from:
+
+```bash
+# Register the elder you will call in as (E.164 must match your caller-ID)
+curl -s -X POST http://localhost:8000/v1/elders -H 'content-type: application/json' \
+  -d '{"name":"Test Elder","phone_e164":"+1YOURPHONE","timezone":"America/New_York"}'
+```
+
+1. Dial your Telnyx number from that phone.
+2. Within ~2 seconds you should be greeted **by name** and asked how you're feeling.
+3. Answer; the agent logs wellness/medications and ends the call.
+4. Verify the call + transcript:
+
+```bash
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f api | grep -i inbound
+# find the inbound call_id in the logs, then:
+curl -s http://localhost:8000/v1/calls/<CALL_ID>   # direction=inbound, status completed
+```
+
+Calling from an unknown number instead yields the generic greeting and a call row
+with `elder_id: null`.
 
 ## Outbound calling (Plan 2a)
 
