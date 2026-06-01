@@ -12,6 +12,7 @@ from usan_api.db.session import get_db
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import medications as medications_repo
+from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.repositories import wellness as wellness_repo
 from usan_api.schemas.tools import (
     CallEndedResponse,
@@ -19,9 +20,11 @@ from usan_api.schemas.tools import (
     GetTodayMedsRequest,
     LoggedResponse,
     LogMedicationRequest,
+    LogTranscriptRequest,
     LogWellnessRequest,
     MedicationScheduleItem,
     TodayMedsResponse,
+    TranscriptLoggedResponse,
 )
 
 router = APIRouter(prefix="/v1/tools", tags=["tools"])
@@ -118,3 +121,18 @@ async def end_call(
     await db.commit()
     logger.bind(call_id=str(call.id), reason=body.reason).info("end_call requested")
     return CallEndedResponse(status=(updated or call).status.value)
+
+
+@router.post("/log_transcript", response_model=TranscriptLoggedResponse)
+async def log_transcript(
+    body: LogTranscriptRequest,
+    db: AsyncSession = Depends(get_db),
+    claims: dict[str, Any] = Depends(require_service_token),
+) -> TranscriptLoggedResponse:
+    call = await _authorize_call(body.call_id, claims, db)
+    count = await transcripts_repo.create_transcript_segments(
+        db, call_id=call.id, segments=body.segments
+    )
+    await db.commit()
+    logger.bind(call_id=str(call.id)).info("Logged {n} transcript segments", n=count)
+    return TranscriptLoggedResponse(count=count)
