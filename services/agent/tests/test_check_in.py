@@ -131,3 +131,29 @@ def test_build_check_in_agent_attaches_four_tools():
     names = {t.id for t in agent.tools}
     assert names == {"log_wellness", "log_medication", "get_today_meds", "end_call"}
     assert agent.instructions == check_in.CHECK_IN_INSTRUCTIONS
+
+
+def test_inbound_instructions_includes_name():
+    text = check_in._inbound_instructions({"elder_name": "Ada"})
+    assert "Ada" in text
+    assert "last check-in" not in text  # no history line when absent
+
+
+def test_inbound_instructions_includes_last_check_in():
+    text = check_in._inbound_instructions(
+        {"elder_name": "Ada", "last_check_in": "on 2026-05-30, mood 4/5"}
+    )
+    assert "Ada" in text
+    assert "on 2026-05-30, mood 4/5" in text
+
+
+def test_inbound_instructions_defaults_when_unknown():
+    text = check_in._inbound_instructions({})
+    assert "the caller" in text
+
+
+def test_build_inbound_agent_has_same_four_tools():
+    agent = check_in.build_inbound_agent({"elder_name": "Ada"})
+    names = {t.id for t in agent.tools}
+    assert names == {"log_wellness", "log_medication", "get_today_meds", "end_call"}
+    assert "Ada" in agent.instructions

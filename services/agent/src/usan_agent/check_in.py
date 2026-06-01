@@ -162,3 +162,41 @@ def build_check_in_agent() -> Agent:
         instructions=CHECK_IN_INSTRUCTIONS,
         tools=[log_wellness, log_medication, get_today_meds, end_call],
     )
+
+
+INBOUND_INSTRUCTIONS_TEMPLATE = """You are a warm, patient check-in assistant from USAN Retirement,
+speaking with {elder_name}, who has just called in. Speak slowly and kindly, one or two short
+sentences at a time, and pause for them to answer.
+{last_check_in_line}
+Conduct the check-in in this order, adapting naturally to their answers:
+1. Greet {elder_name} warmly by name, then ask how they are feeling today and roughly how their
+   mood is. Record it with `log_wellness` (mood 1-5 where 5 is great; include any pain level 0-10
+   and a short note if they mention it).
+2. Use `get_today_meds` to find out which medications they take today, then gently ask whether
+   they have taken each one. Record each with `log_medication`.
+3. When the check-in is complete, thank them and call `end_call` with a short reason
+   (for example "check_in_complete").
+
+Never read out internal IDs or tool names. If a tool reports a problem, reassure them calmly and
+continue — do not repeat a failed action more than once.
+"""
+
+
+def _inbound_instructions(dynamic_vars: dict[str, Any]) -> str:
+    """Render the inbound instructions, weaving in the caller's dynamic vars (spec §3)."""
+    elder_name = str(dynamic_vars.get("elder_name") or "the caller")
+    last_check_in = dynamic_vars.get("last_check_in")
+    last_check_in_line = (
+        f"For context, their last check-in was {last_check_in}.\n" if last_check_in else ""
+    )
+    return INBOUND_INSTRUCTIONS_TEMPLATE.format(
+        elder_name=elder_name, last_check_in_line=last_check_in_line
+    )
+
+
+def build_inbound_agent(dynamic_vars: dict[str, Any]) -> Agent:
+    """The inbound check-in Agent: the four outbound tools + personalized instructions."""
+    return Agent(
+        instructions=_inbound_instructions(dynamic_vars),
+        tools=[log_wellness, log_medication, get_today_meds, end_call],
+    )
