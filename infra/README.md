@@ -186,8 +186,8 @@ route media to, note that outbound is deferred to the Plan 4 deploy task.
 
 ## Call recording (Plan 4b)
 
-Recordings are written to a GCS bucket by the `livekit-egress` container and served
-as short-lived signed URLs by the API.
+Recordings are written to a GCS bucket by the `usan-egress` container (LiveKit Egress)
+and served as short-lived signed URLs by the API.
 
 1. `cd infra/terraform && terraform apply` — provisions the `recordings_bucket`,
    grants the VM service account `roles/storage.objectAdmin` on it and
@@ -195,7 +195,7 @@ as short-lived signed URLs by the API.
    `iamcredentials.googleapis.com`. Note the `recordings_bucket` output.
 2. Set `GCS_BUCKET=<that bucket>` in the `usan-prod-env` Secret Manager secret.
    Optionally set `RECORDING_SIGNED_URL_TTL_S`.
-3. Redeploy — the `livekit-egress` container ships with the stack and uploads using
+3. Redeploy — the `usan-egress` container ships with the stack and uploads using
    the VM's attached service account (no key files). Leaving `GCS_BUCKET` blank
    disables recording.
 
