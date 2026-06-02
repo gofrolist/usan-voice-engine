@@ -145,6 +145,17 @@ async def set_recording_uri(db: AsyncSession, livekit_room: str, recording_uri: 
     if call is None:
         return None
     call.recording_uri = recording_uri
+    call.recording_status = "complete"
+    await db.flush()
+    await db.refresh(call)
+    return call
+
+
+async def set_recording_status(db: AsyncSession, livekit_room: str, status: str) -> Call | None:
+    call = await _latest_by_room(db, livekit_room)
+    if call is None:
+        return None
+    call.recording_status = status
     await db.flush()
     await db.refresh(call)
     return call
@@ -296,6 +307,39 @@ async def reclaim_stuck_dialing(
         call.status = CallStatus.QUEUED
     await db.flush()
     return [call.id for call in stuck]
+
+
+async def reconcile_missing_recordings(
+    db: AsyncSession, *, now: datetime, grace_s: int, limit: int
+) -> list[uuid.UUID]:
+    """Flag ended calls whose egress started but never reported a result.
+
+    A call with an egress_id but no recording_uri and no recording_status, whose room
+    ended more than ``grace_s`` ago, never received an egress_ended webhook (egress
+    crashed or the delivery was lost). Mark recording_status='missing' so the gap is
+    visible and not re-flagged (spec §8); recording_uri stays NULL and the call is
+    otherwise complete. A late webhook can still recover it — it correlates by room,
+    independent of status. SKIP LOCKED lets multiple pollers run safely.
+    """
+    cutoff = now - timedelta(seconds=grace_s)
+    result = await db.execute(
+        select(Call)
+        .where(
+            Call.egress_id.is_not(None),
+            Call.recording_uri.is_(None),
+            Call.recording_status.is_(None),
+            Call.ended_at.is_not(None),
+            Call.ended_at < cutoff,
+        )
+        .order_by(Call.ended_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    stranded = list(result.scalars().all())
+    for call in stranded:
+        call.recording_status = "missing"
+    await db.flush()
+    return [call.id for call in stranded]
 
 
 _ACTIVE_STATUSES = frozenset({CallStatus.QUEUED, CallStatus.DIALING, CallStatus.RINGING})

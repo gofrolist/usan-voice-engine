@@ -189,6 +189,7 @@ def test_livekit_webhook_egress_ended_stores_recording_uri(client, async_databas
     assert r.status_code == 200
     call = asyncio.run(_read_call(async_database_url, call_id))
     assert call.recording_uri == "gs://b/recordings/2026-06-02/x.ogg"
+    assert call.recording_status == "complete"
 
 
 def test_livekit_webhook_egress_ended_failed_stores_no_recording(client, async_database_url):
@@ -202,3 +203,4 @@ def test_livekit_webhook_egress_ended_failed_stores_no_recording(client, async_d
     assert r.status_code == 200
     call = asyncio.run(_read_call(async_database_url, call_id))
     assert call.recording_uri is None
+    assert call.recording_status == "failed"

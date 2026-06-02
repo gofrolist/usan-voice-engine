@@ -39,6 +39,7 @@ class CallResponse(BaseModel):
     attempt: int
     recording_uri: str | None
     egress_id: str | None
+    recording_status: str | None
     presigned_recording_url: str | None
     created_at: datetime
 
@@ -54,6 +55,7 @@ class CallResponse(BaseModel):
             attempt=call.attempt,
             recording_uri=call.recording_uri,
             egress_id=call.egress_id,
+            recording_status=call.recording_status,
             presigned_recording_url=presigned_recording_url,
             created_at=call.created_at,
         )

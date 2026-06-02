@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     recording_signed_url_ttl_s: int = Field(
         default=3600, ge=60, le=604800, alias="RECORDING_SIGNED_URL_TTL_S"
     )
+    recording_reconcile_grace_s: int = Field(
+        default=300, ge=60, le=3600, alias="RECORDING_RECONCILE_GRACE_S"
+    )
     retry_poll_interval_s: int = Field(default=30, ge=5, le=300, alias="RETRY_POLL_INTERVAL_S")
     retry_batch_size: int = Field(default=20, ge=1, le=200, alias="RETRY_BATCH_SIZE")
     # Must exceed the ring timeout: a genuine in-flight dial leaves DIALING within

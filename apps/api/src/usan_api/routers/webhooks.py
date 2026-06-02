@@ -58,6 +58,9 @@ async def livekit_webhook(
         info = event.egress_info
         uri = _recording_uri(info, settings.gcs_bucket)
         if uri is None:
+            failed = await calls_repo.set_recording_status(db, info.room_name, "failed")
+            if failed is not None:
+                await db.commit()
             logger.bind(room=info.room_name, status=int(info.status)).warning(
                 "Egress ended without a usable recording"
             )
