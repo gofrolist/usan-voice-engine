@@ -342,3 +342,68 @@ async def test_inbound_unknown_elder_known_false_falls_back_to_greet_only(monkey
     assert flushes["n"] == 0
     worker.greet.assert_awaited_once()
     captured["session"].start.assert_awaited_once()
+
+
+async def test_outbound_starts_call_recording(monkeypatch):
+    _settings(monkeypatch)
+
+    def _fake_build_session(settings, userdata=None):
+        session = MagicMock()
+        session.start = AsyncMock()
+        session.on = MagicMock()
+        return session
+
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda: MagicMock())
+    monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
+
+    rec = AsyncMock(return_value="EG_1")
+    monkeypatch.setattr(worker, "start_call_recording", rec)
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock()
+    ctx.room.name = "usan-outbound-x"
+    ctx.job.metadata = '{"call_id": "call-1", "direction": "outbound", "dynamic_vars": {}}'
+
+    await worker.entrypoint(ctx)
+
+    rec.assert_awaited_once()
+    assert rec.await_args.args[1] == "call-1"
+
+
+async def test_inbound_known_starts_call_recording(monkeypatch):
+    _settings(monkeypatch)
+
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+        return {"call_id": "inb-1", "elder_known": True, "dynamic_vars": {"elder_name": "Ada"}}
+
+    monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
+    monkeypatch.setattr(worker, "build_inbound_agent", lambda dv: MagicMock())
+
+    def _fake_build_session(settings, userdata=None):
+        session = MagicMock()
+        session.start = AsyncMock()
+        session.generate_reply = AsyncMock()
+        session.say = AsyncMock()
+        return session
+
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
+
+    rec = AsyncMock(return_value="EG_2")
+    monkeypatch.setattr(worker, "start_call_recording", rec)
+
+    participant = MagicMock()
+    participant.attributes = {"sip.phoneNumber": "+15551234567"}
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock(return_value=participant)
+    ctx.room.name = "usan-inbound-x"
+    ctx.job.metadata = None
+
+    await worker.entrypoint(ctx)
+
+    rec.assert_awaited_once()
+    assert rec.await_args.args[1] == "inb-1"
