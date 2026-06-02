@@ -54,3 +54,22 @@ def test_get_call_with_recording_returns_signed_url(client, async_database_url, 
     body = client.get(f"/v1/calls/{call_id}").json()
     assert body["recording_uri"] == uri
     assert body["presigned_recording_url"] == f"https://signed.example/{uri}"
+
+
+def test_get_call_signing_error_returns_200_with_null_url(client, async_database_url, monkeypatch):
+    # A signing failure (e.g. GCS/IAM unavailable) must degrade gracefully: the call
+    # is still returned (200) with a null presigned URL, never a 500.
+    uri = "gs://test-bucket/recordings/2026-06-02/x.ogg"
+    call_id = asyncio.run(_seed(async_database_url, "usan-outbound-signerr", recording_uri=uri))
+    monkeypatch.setenv("GCS_BUCKET", "test-bucket")
+    get_settings.cache_clear()
+
+    def _boom(gs_uri, ttl):
+        raise RuntimeError("signBlob unavailable")
+
+    monkeypatch.setattr(object_storage, "generate_signed_url", _boom)
+    response = client.get(f"/v1/calls/{call_id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recording_uri"] == uri
+    assert body["presigned_recording_url"] is None
