@@ -212,6 +212,7 @@ async def test_inbound_known_elder_runs_check_in(monkeypatch):
         session = MagicMock()
         session.start = AsyncMock()
         session.generate_reply = AsyncMock()
+        session.say = AsyncMock()
         captured["session"] = session
         return session
 

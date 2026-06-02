@@ -21,6 +21,10 @@ Keep responses short — one or two sentences. Pause to let them respond.
 
 GREETING = "Hello! This is your daily check-in from USAN. How are you feeling today?"
 
+RECORDING_DISCLOSURE = (
+    "Before we begin, please know that this call is recorded for quality and to support your care."
+)
+
 VOICEMAIL_MESSAGE = (
     "Hello, this is your daily check-in from USAN Retirement. "
     "We're sorry we missed you. We'll try again a little later. "
@@ -66,5 +70,6 @@ def build_agent() -> Agent:
 
 
 async def greet(session: AgentSession[Any]) -> None:
-    """Speak the opening greeting once the session is connected."""
+    """Speak the recording disclosure (spec §10), then the opening greeting."""
+    await session.say(RECORDING_DISCLOSURE, allow_interruptions=False, add_to_chat_ctx=False)
     await session.say(GREETING, allow_interruptions=True)
