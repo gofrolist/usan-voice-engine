@@ -6,28 +6,15 @@ import pytest
 from usan_api import object_storage
 
 
-def test_parse_gs_uri_ok():
-    assert object_storage._parse_gs_uri("gs://b/recordings/2026-06-02/x.ogg") == (
-        "b",
-        "recordings/2026-06-02/x.ogg",
-    )
+@pytest.fixture(autouse=True)
+def _reset_signing_cache():
+    # The module caches ADC credentials; reset around each test for isolation.
+    object_storage._signing_credentials = None
+    yield
+    object_storage._signing_credentials = None
 
 
-@pytest.mark.parametrize("bad", ["http://b/x", "gs://b", "gs://b/", "gs:///x", "gs://"])
-def test_parse_gs_uri_rejects_malformed(bad):
-    with pytest.raises(ValueError, match="gs://"):
-        object_storage._parse_gs_uri(bad)
-
-
-def test_generate_signed_url_keyless(monkeypatch):
-    captured: dict = {}
-    creds = SimpleNamespace(
-        service_account_email="sa@example.iam.gserviceaccount.com",
-        token="ya29.token",
-        refresh=lambda request: None,
-    )
-    monkeypatch.setattr(object_storage.google.auth, "default", lambda scopes=None: (creds, "proj"))
-
+def _stub_storage(monkeypatch, captured):
     class _Blob:
         def generate_signed_url(self, **kwargs):
             captured.update(kwargs)
@@ -48,6 +35,31 @@ def test_generate_signed_url_keyless(monkeypatch):
 
     monkeypatch.setattr(object_storage.storage, "Client", _Client)
 
+
+def test_parse_gs_uri_ok():
+    assert object_storage._parse_gs_uri("gs://b/recordings/2026-06-02/x.ogg") == (
+        "b",
+        "recordings/2026-06-02/x.ogg",
+    )
+
+
+@pytest.mark.parametrize("bad", ["http://b/x", "gs://b", "gs://b/", "gs:///x", "gs://"])
+def test_parse_gs_uri_rejects_malformed(bad):
+    with pytest.raises(ValueError, match="gs://"):
+        object_storage._parse_gs_uri(bad)
+
+
+def test_generate_signed_url_keyless(monkeypatch):
+    captured: dict = {}
+    creds = SimpleNamespace(
+        service_account_email="sa@example.iam.gserviceaccount.com",
+        token="ya29.token",
+        valid=True,
+        refresh=lambda request: None,
+    )
+    monkeypatch.setattr(object_storage.google.auth, "default", lambda scopes=None: (creds, "proj"))
+    _stub_storage(monkeypatch, captured)
+
     url = object_storage.generate_signed_url("gs://b/recordings/2026-06-02/x.ogg", 3600)
 
     assert url == "https://signed.example/url"
@@ -58,3 +70,34 @@ def test_generate_signed_url_keyless(monkeypatch):
     assert captured["expiration"] == datetime.timedelta(seconds=3600)
     assert captured["service_account_email"] == "sa@example.iam.gserviceaccount.com"
     assert captured["access_token"] == "ya29.token"
+
+
+def test_signing_credentials_are_cached(monkeypatch):
+    # google.auth.default() + refresh() are network round-trips; they must run once
+    # and be reused across signings until the token expires.
+    default_calls: list[int] = []
+    refresh_calls: list[int] = []
+
+    def _refresh(request):
+        refresh_calls.append(1)
+        creds.valid = True  # a fresh token makes the credentials valid
+
+    creds = SimpleNamespace(
+        service_account_email="sa@example.iam.gserviceaccount.com",
+        token="ya29.token",
+        valid=False,
+        refresh=_refresh,
+    )
+
+    def _default(scopes=None):
+        default_calls.append(1)
+        return creds, "proj"
+
+    monkeypatch.setattr(object_storage.google.auth, "default", _default)
+    _stub_storage(monkeypatch, {})
+
+    object_storage.generate_signed_url("gs://b/a.ogg", 3600)
+    object_storage.generate_signed_url("gs://b/c.ogg", 3600)
+
+    assert default_calls == [1]  # ADC fetched once, then cached
+    assert refresh_calls == [1]  # refreshed once; the warm second call sees valid creds
