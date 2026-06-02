@@ -119,6 +119,41 @@ services:
           json: true
     restart: unless-stopped
 
+  egress:
+    image: livekit/egress:v1.13.0
+    container_name: usan-egress
+    init: true
+    stop_grace_period: 5s
+    depends_on:
+      redis:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+    # Room-composite egress always runs headless Chrome (audio-only just drops the
+    # video track in the same Chrome session): SYS_ADMIN is mandatory since egress
+    # v1.7.6 or Chrome won't start, and /dev/shm must be enlarged.
+    cap_add:
+      - SYS_ADMIN
+    shm_size: "1gb"
+    environment:
+      # Egress does NOT expand ${...} in a --config file, so the whole config is
+      # passed inline via EGRESS_CONFIG_BODY (compose substitutes the keys). The
+      # internal hop ws://livekit:7880 is non-TLS, hence insecure: true. No storage
+      # block: the GCS bucket + (empty) credentials are supplied per-request in the
+      # RoomCompositeEgressRequest; empty credentials => upload via Application
+      # Default Credentials (the GCE VM's attached service account).
+      EGRESS_CONFIG_BODY: |
+        api_key: ${LIVEKIT_API_KEY}
+        api_secret: ${LIVEKIT_API_SECRET}
+        ws_url: ws://livekit:7880
+        insecure: true
+        redis:
+          address: redis:6379
+        logging:
+          level: info
+          json: true
+    restart: unless-stopped
+
   api:
     image: usan-api:local
     container_name: usan-api
