@@ -21,7 +21,7 @@ Then:
    ```
    (The VM reads `latest` at boot; re-run this command + reboot/redeploy to rotate.)
 3. **Telnyx:** point the trunk's inbound SIP signaling URI at `<vm_external_ip>:5060` (UDP).
-4. **First deploy:** push a version tag (`git tag v0.1.0 && git push origin v0.1.0`) — `deploy.yml` ships the compose files and brings the stack up. Or deploy manually:
+4. **First deploy:** set the GitHub Actions secrets `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `API_DOMAIN`, and `GHCR_PAT` (a token with `read:packages`, used by the VM to pull private images from GHCR). Push a version tag (`git tag v0.1.0 && git push origin v0.1.0`) — the `deploy` job in `build.yml` waits for the image build, then ships the compose files and brings the stack up. Or deploy manually:
    ```bash
    ssh usan@<vm_external_ip>
    # compose files were scp'd to /opt/usan/infra by the workflow; to do it by hand,

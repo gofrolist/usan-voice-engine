@@ -95,14 +95,19 @@ jobs:
 
       - name: Pull images and bring stack up
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          GHCR_USER: ${{ github.repository_owner }}
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: GITHUB_REF_NAME
+          envs: GITHUB_REF_NAME,GHCR_USER,GHCR_PAT
           script: |
             set -euo pipefail
             cd /opt/usan
+            # Authenticate to GHCR so private usan-* images can be pulled.
+            echo "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             export IMAGE_TAG="${GITHUB_REF_NAME}"
             COMPOSE="docker compose --env-file infra/.env \
               -f infra/docker-compose.yml \
