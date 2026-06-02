@@ -32,3 +32,30 @@ def require_service_token(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid service token"
         ) from exc
+
+
+def require_worker_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Verify a worker JWT that is NOT yet scoped to a specific call.
+
+    Inbound calls have no call_id until the API mints one, so the agent cannot
+    present a call-scoped token to the inbound-create endpoint. This verifies the
+    HS256 signature + exp only; it proves the caller holds JWT_SIGNING_KEY (our
+    agent worker). Endpoints using it CREATE a resource rather than mutate a named
+    one; for mutating an existing call, use require_service_token.
+    """
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token")
+    try:
+        return jwt.decode(
+            credentials.credentials,
+            settings.jwt_signing_key,
+            algorithms=["HS256"],
+            options={"require": ["exp"]},
+        )
+    except jwt.PyJWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid service token"
+        ) from exc

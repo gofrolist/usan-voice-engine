@@ -112,3 +112,41 @@ async def flush_transcript(
         logger.bind(call_id=call_id).info("Flushed {n} transcript segments", n=len(segments))
     except Exception:
         logger.bind(call_id=call_id).warning("Failed to flush transcript to API")
+
+
+def _mint_worker_token(settings: Settings) -> str:
+    """Mint a worker-scoped token (no call_id) for endpoints that create a call."""
+    now = int(time.time())
+    return jwt.encode(
+        {"sub": "usan-agent", "iat": now, "exp": now + _TOKEN_TTL_S},
+        settings.jwt_signing_key,
+        algorithm="HS256",
+    )
+
+
+async def start_inbound_call(
+    phone_e164: str | None,
+    livekit_room: str,
+    settings: Settings,
+    sip_call_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Best-effort: register an inbound call and fetch elder dynamic vars.
+
+    Returns parsed {call_id, elder_known, dynamic_vars} on success, or None on any
+    failure so the worker can fall back to a greet-only inbound conversation.
+    """
+    url = f"{settings.api_base_url}/v1/calls/inbound"
+    headers = {"Authorization": f"Bearer {_mint_worker_token(settings)}"}
+    payload = {
+        "phone_e164": phone_e164,
+        "livekit_room": livekit_room,
+        "sip_call_id": sip_call_id,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            return cast(dict[str, Any], response.json())
+    except Exception:
+        logger.bind(room=livekit_room).warning("Failed to register inbound call with API")
+        return None

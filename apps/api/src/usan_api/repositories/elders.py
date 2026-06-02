@@ -1,6 +1,7 @@
 import uuid
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.models import Elder
@@ -45,3 +46,9 @@ async def update_elder(
     await db.flush()
     await db.refresh(elder)
     return elder
+
+
+async def get_elder_by_phone(db: AsyncSession, phone_e164: str) -> Elder | None:
+    """Look up an elder by E.164 phone (UNIQUE) — the inbound caller-ID lookup."""
+    result = await db.execute(select(Elder).where(Elder.phone_e164 == phone_e164))
+    return result.scalar_one_or_none()

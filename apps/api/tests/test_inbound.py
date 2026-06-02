@@ -1,0 +1,116 @@
+import time
+import uuid
+
+import jwt
+
+SECRET = "s" * 32
+
+
+def _worker_token(secret: str = SECRET) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {"sub": "usan-agent", "iat": now, "exp": now + 300}, secret, algorithm="HS256"
+    )
+
+
+def _service_token(call_id: str, secret: str = SECRET) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
+        secret,
+        algorithm="HS256",
+    )
+
+
+def _worker_auth() -> dict:
+    return {"Authorization": f"Bearer {_worker_token()}"}
+
+
+def _create_elder(client, phone: str) -> str:
+    r = client.post(
+        "/v1/elders",
+        json={"name": "Ada", "phone_e164": phone, "timezone": "UTC", "metadata": {}},
+    )
+    assert r.status_code == 201
+    return r.json()["id"]
+
+
+def _phone() -> str:
+    return f"+1555{str(uuid.uuid4().int)[:7]}"
+
+
+def test_inbound_known_elder_creates_call_and_returns_vars(client):
+    phone = _phone()
+    elder_id = _create_elder(client, phone)
+    r = client.post(
+        "/v1/calls/inbound",
+        json={"phone_e164": phone, "livekit_room": "usan-inbound-1"},
+        headers=_worker_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["elder_known"] is True
+    assert data["dynamic_vars"]["elder_name"] == "Ada"
+    call = client.get(f"/v1/calls/{data['call_id']}").json()
+    assert call["direction"] == "inbound"
+    assert call["status"] == "in_progress"
+    assert call["elder_id"] == elder_id
+
+
+def test_inbound_unknown_caller_creates_call_without_elder(client):
+    r = client.post(
+        "/v1/calls/inbound",
+        json={"phone_e164": "+19998887777", "livekit_room": "usan-inbound-2"},
+        headers=_worker_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["elder_known"] is False
+    assert data["dynamic_vars"] == {}
+    call = client.get(f"/v1/calls/{data['call_id']}").json()
+    assert call["direction"] == "inbound"
+    assert call["elder_id"] is None
+
+
+def test_inbound_no_phone_is_unknown(client):
+    r = client.post(
+        "/v1/calls/inbound",
+        json={"livekit_room": "usan-inbound-3"},
+        headers=_worker_auth(),
+    )
+    assert r.status_code == 200
+    assert r.json()["elder_known"] is False
+
+
+def test_inbound_requires_worker_token(client):
+    r = client.post(
+        "/v1/calls/inbound",
+        json={"phone_e164": "+19998887777", "livekit_room": "usan-inbound-4"},
+    )
+    assert r.status_code == 401
+
+
+def test_inbound_surfaces_last_check_in_and_call_id_works_with_tools(client):
+    phone = _phone()
+    _create_elder(client, phone)
+    first = client.post(
+        "/v1/calls/inbound",
+        json={"phone_e164": phone, "livekit_room": "usan-inbound-5a"},
+        headers=_worker_auth(),
+    ).json()
+    call_id = first["call_id"]
+    # The inbound call_id works with a call-scoped tool token (proves JWT chaining).
+    w = client.post(
+        "/v1/tools/log_wellness",
+        json={"call_id": call_id, "mood": 4, "pain_level": 1, "notes": "a bit tired"},
+        headers={"Authorization": f"Bearer {_service_token(call_id)}"},
+    )
+    assert w.status_code == 200
+    # A later inbound call from the same elder surfaces the last check-in.
+    second = client.post(
+        "/v1/calls/inbound",
+        json={"phone_e164": phone, "livekit_room": "usan-inbound-5b"},
+        headers=_worker_auth(),
+    ).json()
+    assert "last_check_in" in second["dynamic_vars"]
+    assert "mood 4/5" in second["dynamic_vars"]["last_check_in"]

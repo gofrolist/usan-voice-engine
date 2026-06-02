@@ -53,3 +53,15 @@ class CallResponse(BaseModel):
             recording_uri=call.recording_uri,
             created_at=call.created_at,
         )
+
+
+class InboundCallRequest(BaseModel):
+    phone_e164: str | None = Field(default=None, max_length=32)
+    livekit_room: str = Field(min_length=1, max_length=255)
+    sip_call_id: str | None = Field(default=None, max_length=255)
+
+
+class InboundCallResponse(BaseModel):
+    call_id: uuid.UUID
+    elder_known: bool
+    dynamic_vars: dict[str, Any]

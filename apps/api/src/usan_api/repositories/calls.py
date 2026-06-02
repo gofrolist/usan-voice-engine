@@ -214,6 +214,38 @@ async def claim_due_retries(db: AsyncSession, *, now: datetime, limit: int) -> l
     return [call.id for call in claimed]
 
 
+async def create_inbound_call(
+    db: AsyncSession,
+    *,
+    elder_id: uuid.UUID | None,
+    livekit_room: str,
+    sip_call_id: str | None = None,
+    dynamic_vars: dict[str, Any] | None = None,
+) -> Call:
+    """Create an answered inbound call (IN_PROGRESS, answered now).
+
+    Inbound calls are answered by definition (the caller is on the line), so
+    started_at/answered_at are set immediately; the room_finished webhook later
+    marks COMPLETED and computes duration_seconds from answered_at. elder_id may
+    be NULL for an unknown caller — the row still records the inbound attempt.
+    """
+    now = _utcnow()
+    call = Call(
+        elder_id=elder_id,
+        direction=CallDirection.INBOUND,
+        status=CallStatus.IN_PROGRESS,
+        livekit_room=livekit_room,
+        sip_call_id=sip_call_id,
+        dynamic_vars=dynamic_vars or {},
+        started_at=now,
+        answered_at=now,
+    )
+    db.add(call)
+    await db.flush()
+    await db.refresh(call)
+    return call
+
+
 async def reclaim_stuck_dialing(
     db: AsyncSession, *, now: datetime, stale_after_s: int, limit: int
 ) -> list[uuid.UUID]:

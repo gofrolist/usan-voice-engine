@@ -7,17 +7,37 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import dialer, livekit_dispatch
-from usan_api.auth import require_service_token
+from usan_api.auth import require_service_token, require_worker_token
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call, Elder
+from usan_api.db.models import Call, Elder, WellnessLog
 from usan_api.db.session import get_db
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
-from usan_api.schemas.call import CallOutcomeRequest, CallResponse, CreateCallRequest
+from usan_api.repositories import wellness as wellness_repo
+from usan_api.schemas.call import (
+    CallOutcomeRequest,
+    CallResponse,
+    CreateCallRequest,
+    InboundCallRequest,
+    InboundCallResponse,
+)
 from usan_api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/v1/calls", tags=["calls"])
+
+
+def _format_last_check_in(log: WellnessLog) -> str:
+    """A short human summary of the elder's most recent wellness log."""
+    parts = [f"on {log.logged_at.date().isoformat()}"]
+    if log.mood is not None:
+        parts.append(f"mood {log.mood}/5")
+    if log.pain_level is not None:
+        parts.append(f"pain {log.pain_level}/10")
+    summary = ", ".join(parts)
+    if log.notes:
+        summary += f" — note: {log.notes}"
+    return summary
 
 
 def _idempotent_replay(existing: Call, body: CreateCallRequest, response: Response) -> CallResponse:
@@ -116,6 +136,39 @@ async def enqueue_call(
         return CallResponse.from_model(call)
 
     return await _create_and_dispatch(db, body, elder, settings, response)
+
+
+@router.post("/inbound", response_model=InboundCallResponse)
+async def register_inbound_call(
+    body: InboundCallRequest,
+    db: AsyncSession = Depends(get_db),
+    claims: dict[str, Any] = Depends(require_worker_token),
+) -> InboundCallResponse:
+    """Register an answered inbound call and return per-elder dynamic vars.
+
+    Called by the agent worker once an inbound SIP caller is present (spec §3
+    step 3). Looks the caller up by phone; an unknown/absent number still gets a
+    call record (elder_id NULL). Never checks DNC — DNC governs outbound only.
+    """
+    elder = await elders_repo.get_elder_by_phone(db, body.phone_e164) if body.phone_e164 else None
+    dynamic_vars: dict[str, Any] = {}
+    if elder is not None:
+        dynamic_vars["elder_name"] = elder.name
+        last = await wellness_repo.get_latest_for_elder(db, elder.id)
+        if last is not None:
+            dynamic_vars["last_check_in"] = _format_last_check_in(last)
+    call = await calls_repo.create_inbound_call(
+        db,
+        elder_id=elder.id if elder is not None else None,
+        livekit_room=body.livekit_room,
+        sip_call_id=body.sip_call_id,
+        dynamic_vars=dynamic_vars,
+    )
+    await db.commit()
+    logger.bind(call_id=str(call.id), elder_known=elder is not None).info("Inbound call registered")
+    return InboundCallResponse(
+        call_id=call.id, elder_known=elder is not None, dynamic_vars=dynamic_vars
+    )
 
 
 @router.get("/{call_id}", response_model=CallResponse)
