@@ -1,4 +1,7 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from livekit import api
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +14,16 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 # Webhook event strings that signal a room (and thus the call) has ended.
 _ROOM_END_EVENTS = frozenset({"room_finished"})
+
+
+def _recording_uri(info: Any, gcs_bucket: str | None) -> str | None:
+    """The gs:// URI for a completed egress, or None if it produced no usable file."""
+    if info.status != api.EgressStatus.EGRESS_COMPLETE or not info.file_results:
+        return None
+    object_key = info.file_results[0].filename
+    if gcs_bucket and object_key:
+        return f"gs://{gcs_bucket}/{object_key}"
+    return info.file_results[0].location or None
 
 
 @router.post("/livekit", status_code=status.HTTP_200_OK)
@@ -33,4 +46,26 @@ async def livekit_webhook(
             logger.bind(call_id=str(call.id), room=event.room.name).info(
                 "Call completed via room_finished webhook"
             )
+    elif event.event == "egress_started" and event.egress_info.room_name:
+        info = event.egress_info
+        call = await calls_repo.set_egress_id(db, info.room_name, info.egress_id)
+        if call is not None:
+            await db.commit()
+            logger.bind(call_id=str(call.id), egress_id=info.egress_id).info(
+                "Recorded egress_id via egress_started webhook"
+            )
+    elif event.event == "egress_ended" and event.egress_info.room_name:
+        info = event.egress_info
+        uri = _recording_uri(info, settings.gcs_bucket)
+        if uri is None:
+            logger.bind(room=info.room_name, status=int(info.status)).warning(
+                "Egress ended without a usable recording"
+            )
+        else:
+            call = await calls_repo.set_recording_uri(db, info.room_name, uri)
+            if call is not None:
+                await db.commit()
+                logger.bind(call_id=str(call.id), recording_uri=uri).info(
+                    "Stored recording_uri via egress_ended webhook"
+                )
     return {"ok": True}
