@@ -1,0 +1,52 @@
+name: Deploy
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  deploy:
+    name: Deploy to VM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Copy compose files to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: "infra/docker-compose.yml,infra/docker-compose.prod.yml,infra/docker-compose.tls.yml,infra/Caddyfile"
+          target: "/opt/usan"
+          overwrite: true
+
+      - name: Pull images and bring stack up
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: GITHUB_REF_NAME
+          script: |
+            set -euo pipefail
+            cd /opt/usan
+            export IMAGE_TAG="${GITHUB_REF_NAME}"
+            COMPOSE="docker compose --env-file infra/.env \
+              -f infra/docker-compose.yml \
+              -f infra/docker-compose.prod.yml \
+              -f infra/docker-compose.tls.yml"
+            $COMPOSE pull
+            $COMPOSE up -d
+            $COMPOSE ps
+
+      - name: Post-deploy health check
+        run: |
+          set -e
+          for i in $(seq 1 30); do
+            if curl -fsS "https://${{ secrets.API_DOMAIN }}/health" | grep -q '"status":"ok"'; then
+              echo "healthy"; exit 0
+            fi
+            echo "waiting for health... ($i)"; sleep 5
+          done
+          echo "health check failed"; exit 1
