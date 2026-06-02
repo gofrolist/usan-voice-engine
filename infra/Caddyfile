@@ -1,0 +1,9 @@
+# {$API_DOMAIN} and {$LIVEKIT_DOMAIN} come from the Caddy container env.
+{$API_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy api:8000
+}
+
+{$LIVEKIT_DOMAIN} {
+	reverse_proxy livekit:7880
+}

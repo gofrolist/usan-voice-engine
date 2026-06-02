@@ -43,3 +43,9 @@ recordings/
 # Secrets (allow templates)
 infra/.env
 !infra/.env.example
+
+# Terraform (.terraform.lock.hcl IS committed for reproducible provider versions)
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/terraform.tfvars

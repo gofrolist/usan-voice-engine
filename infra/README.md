@@ -1,5 +1,39 @@
 # infra — manual setup
 
+## Production deploy (Plan 4a — GCP)
+
+One-time provisioning:
+
+```bash
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars   # fill in project, ssh key, your /32
+terraform init
+terraform apply
+terraform output vm_external_ip                # note this IP
+```
+
+Then:
+
+1. **DNS:** create A records `api.<domain>` and `lk.<domain>` -> the `vm_external_ip`.
+2. **Secrets:** fill a copy of `infra/.env.prod.example` and push it to Secret Manager:
+   ```bash
+   gcloud secrets versions add usan-prod-env --data-file=/path/to/filled.env
+   ```
+   (The VM reads `latest` at boot; re-run this command + reboot/redeploy to rotate.)
+3. **Telnyx:** point the trunk's inbound SIP signaling URI at `<vm_external_ip>:5060` (UDP).
+4. **First deploy:** set the GitHub Actions secrets `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `API_DOMAIN`, and `GHCR_PAT` (a token with `read:packages`, used by the VM to pull private images from GHCR). Push a version tag (`git tag v0.1.0 && git push origin v0.1.0`) — the `deploy` job in `build.yml` waits for the image build, then ships the compose files and brings the stack up. Or deploy manually:
+   ```bash
+   ssh usan@<vm_external_ip>
+   # compose files were scp'd to /opt/usan/infra by the workflow; to do it by hand,
+   # copy infra/*.yml + infra/Caddyfile there, then:
+   cd /opt/usan
+   docker compose --env-file infra/.env \
+     -f infra/docker-compose.yml \
+     -f infra/docker-compose.prod.yml \
+     -f infra/docker-compose.tls.yml up -d
+   ```
+5. **Verify TLS:** `curl -fsS https://api.<domain>/health` -> `{"status":"ok"}`.
+
 ## Prerequisites
 - `livekit-cli` installed: `brew install livekit-cli` or download from https://github.com/livekit/livekit-cli/releases
 - A Telnyx number, SIP trunk, and credentials configured at https://portal.telnyx.com/

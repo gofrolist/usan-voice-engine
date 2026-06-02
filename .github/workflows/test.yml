@@ -35,3 +35,16 @@ jobs:
       - name: pytest
         working-directory: services/agent
         run: uv run pytest -v --tb=short
+
+  pytest-scripts:
+    name: pytest (scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: pip install pytest
+      - name: pytest
+        run: python -m pytest scripts/tests -v --tb=short
