@@ -1,0 +1,30 @@
+# TLS overlay — adds Caddy in front of api (+ livekit signaling).
+# Use together with the base + prod overlays:
+#   docker compose --env-file infra/.env \
+#     -f infra/docker-compose.yml \
+#     -f infra/docker-compose.prod.yml \
+#     -f infra/docker-compose.tls.yml up -d
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: usan-caddy
+    init: true
+    depends_on:
+      - api
+      - livekit
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+      LIVEKIT_DOMAIN: ${LIVEKIT_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
