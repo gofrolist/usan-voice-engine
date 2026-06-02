@@ -1638,6 +1638,7 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "livekit-agents", extra = ["silero", "turn-detector"] },
+    { name = "livekit-api" },
     { name = "livekit-plugins-cartesia" },
     { name = "livekit-plugins-google" },
     { name = "loguru" },
@@ -1658,6 +1659,7 @@ dev = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "livekit-agents", extras = ["silero", "turn-detector"], specifier = ">=1.5.14" },
+    { name = "livekit-api", specifier = ">=1.0.0" },
     { name = "livekit-plugins-cartesia", specifier = ">=1.5.14" },
     { name = "livekit-plugins-google", specifier = ">=1.5.14" },
     { name = "loguru", specifier = ">=0.7.3" },
