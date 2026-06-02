@@ -36,8 +36,9 @@ resource "google_compute_instance" "usan" {
   }
 
   service_account {
-    # Default compute SA + cloud-platform scope; Secret Manager access is
-    # narrowed to the one secret via IAM in Task 3.
+    # Dedicated least-privilege SA (defined below). cloud-platform scope is the
+    # modern default — IAM roles, not legacy scopes, gate actual access.
+    email  = google_service_account.vm.email
     scopes = ["cloud-platform"]
   }
 
@@ -52,13 +53,32 @@ resource "google_secret_manager_secret" "env" {
   }
 }
 
-# Grant the VM's default compute service account read access to the secret.
-data "google_compute_default_service_account" "default" {}
+# Dedicated least-privilege runtime SA for the VM, instead of the default
+# compute SA (which typically carries broad project Editor).
+resource "google_service_account" "vm" {
+  account_id   = "usan-vm"
+  display_name = "USAN VM runtime"
+}
 
+# Read access to the one prod-env secret only.
 resource "google_secret_manager_secret_iam_member" "vm_access" {
   secret_id = google_secret_manager_secret.env.id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${data.google_compute_default_service_account.default.email}"
+  member    = "serviceAccount:${google_service_account.vm.email}"
+}
+
+# Minimal ops roles so the VM can ship logs/metrics (scoped replacements for
+# what the default SA's Editor would have covered).
+resource "google_project_iam_member" "vm_logging" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.vm.email}"
+}
+
+resource "google_project_iam_member" "vm_monitoring" {
+  project = var.project_id
+  role    = "roles/monitoring.metricWriter"
+  member  = "serviceAccount:${google_service_account.vm.email}"
 }
 
 # --- Firewall ---

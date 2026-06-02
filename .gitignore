@@ -44,9 +44,8 @@ recordings/
 infra/.env
 !infra/.env.example
 
-# Terraform
+# Terraform (.terraform.lock.hcl IS committed for reproducible provider versions)
 infra/terraform/.terraform/
 infra/terraform/*.tfstate
 infra/terraform/*.tfstate.*
 infra/terraform/terraform.tfvars
-infra/terraform/.terraform.lock.hcl
