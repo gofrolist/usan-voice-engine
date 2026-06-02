@@ -12,3 +12,8 @@ output "secret_name" {
   description = "Secret Manager secret to populate with the production .env contents (see Task 6)."
   value       = google_secret_manager_secret.env.secret_id
 }
+
+output "recordings_bucket" {
+  description = "GCS bucket holding call recordings. Set GCS_BUCKET in the prod .env to this."
+  value       = google_storage_bucket.recordings.name
+}
