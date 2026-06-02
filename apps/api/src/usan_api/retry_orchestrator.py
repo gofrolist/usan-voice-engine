@@ -53,6 +53,19 @@ async def poll_once(
             db, now=moment, limit=settings.retry_batch_size
         )
         await db.commit()
+    async with factory() as db:
+        missing = await calls_repo.reconcile_missing_recordings(
+            db,
+            now=moment,
+            grace_s=settings.recording_reconcile_grace_s,
+            limit=settings.retry_batch_size,
+        )
+        await db.commit()
+    for cid in missing:
+        logger.bind(call_id=str(cid)).warning(
+            "Recording missing: egress started but reported no result within the grace "
+            "window; recording_uri stays NULL"
+        )
     for call_id in claimed:
         background.spawn(livekit_dispatch.dispatch_and_dial(call_id, settings))
     return claimed

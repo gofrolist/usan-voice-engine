@@ -184,6 +184,25 @@ Document the outcome here: network setup (local public IP / VM), what you heard,
 and any latency observations. If you don't yet have a public IP for Telnyx to
 route media to, note that outbound is deferred to the Plan 4 deploy task.
 
+## Call recording (Plan 4b)
+
+Recordings are written to a GCS bucket by the `usan-egress` container (LiveKit Egress)
+and served as short-lived signed URLs by the API.
+
+1. `cd infra/terraform && terraform apply` — provisions the `recordings_bucket`,
+   grants the VM service account `roles/storage.objectAdmin` on it and
+   `roles/iam.serviceAccountTokenCreator` on itself, and enables
+   `iamcredentials.googleapis.com`. Note the `recordings_bucket` output.
+2. Set `GCS_BUCKET=<that bucket>` in the `usan-prod-env` Secret Manager secret.
+   Optionally set `RECORDING_SIGNED_URL_TTL_S`.
+3. Redeploy — the `usan-egress` container ships with the stack and uploads using
+   the VM's attached service account (no key files). Leaving `GCS_BUCKET` blank
+   disables recording.
+
+Recordings land at `gs://<bucket>/recordings/YYYY-MM-DD/<call_id>.ogg`
+(Opus mono); lifecycle moves them to Nearline at 30d and deletes at 1y.
+`GET /v1/calls/{id}` returns `presigned_recording_url` (1h TTL) when a recording exists.
+
 ## Call lifecycle (Plan 2b-1)
 
 After dispatch, an outbound call now transitions through real states instead of

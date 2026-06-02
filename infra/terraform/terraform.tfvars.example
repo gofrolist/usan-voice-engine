@@ -6,3 +6,6 @@ ssh_user          = "usan"
 ssh_public_key    = "ssh-ed25519 AAAA... you@host"
 operator_ssh_cidr = "203.0.113.4/32" # your workstation IP /32
 # image_tag       = "latest"
+recordings_bucket = "usan-call-recordings" # must be globally unique
+# recording_nearline_days  = 30
+# recording_retention_days = 365

@@ -5,6 +5,7 @@ description = "USAN voice engine — LiveKit Agents worker"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "livekit-agents[silero,turn-detector]>=1.5.14",
+    "livekit-api>=1.0.0",
     "livekit-plugins-cartesia>=1.5.14",
     "livekit-plugins-google>=1.5.14",
     "pydantic>=2.13.0",

@@ -16,7 +16,8 @@ from loguru import logger
 from usan_agent.api_client import start_inbound_call
 from usan_agent.check_in import CheckInData, build_check_in_agent, build_inbound_agent
 from usan_agent.logging_config import configure_logging
-from usan_agent.pipeline import build_agent, build_session, greet
+from usan_agent.pipeline import RECORDING_DISCLOSURE, build_agent, build_session, greet
+from usan_agent.recording import start_call_recording
 from usan_agent.settings import Settings, get_settings
 from usan_agent.transcript import register_transcript_flush
 from usan_agent.voicemail import VOICEMAIL_WINDOW_S, VoicemailWatcher
@@ -86,6 +87,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, log: Any) -> None:
     info = await start_inbound_call(phone, ctx.room.name, settings)
     if info and info.get("elder_known") and info.get("call_id"):
         call_id = str(info["call_id"])
+        await start_call_recording(ctx, call_id, settings)
         dynamic_vars = info.get("dynamic_vars") or {}
         data = CheckInData(call_id=call_id, settings=settings, job_ctx=ctx)
         session = build_session(settings, userdata=data)
@@ -93,6 +95,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, log: Any) -> None:
         register_transcript_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
         log.info("Inbound check-in started for known elder (call_id={cid})", cid=call_id)
+        await session.say(RECORDING_DISCLOSURE, allow_interruptions=False, add_to_chat_ctx=False)
         await session.generate_reply(instructions=_INBOUND_OPENING)
         return
 
@@ -133,6 +136,7 @@ async def entrypoint(ctx: JobContext) -> None:
     log.info("Connected to room")
 
     if meta.direction == "outbound" and meta.call_id:
+        await start_call_recording(ctx, meta.call_id, settings)
         data = CheckInData(call_id=meta.call_id, settings=settings, job_ctx=ctx)
         session = build_session(settings, userdata=data)
         agent = build_check_in_agent()

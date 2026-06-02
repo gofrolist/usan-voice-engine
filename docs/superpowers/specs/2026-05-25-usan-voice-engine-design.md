@@ -24,7 +24,7 @@ USAN Retirement provides daily wellness check-in calls for elders: medication re
 | TTS | Cartesia Sonic (streaming) | Warm voice for elder UX; "continuations" reduce per-turn latency |
 | Backend | FastAPI (Python 3.14, uv) | Mirrors blueprint `apps/api`; REST + tool endpoints + webhooks |
 | Datastore | Postgres 16 + pgvector | Single store for relational + RAG embeddings |
-| Object storage | S3-compatible (Backblaze B2 or AWS S3) | Recordings; cheap egress for replay/family review |
+| Object storage | Google Cloud Storage | Recordings; same cloud as the VM, keyless writes via the instance service account |
 | Deploy | Docker Compose + Terraform on a single VM | Same pattern as `project-800ms` blueprint |
 
 ## 3. System architecture
@@ -71,8 +71,8 @@ Three deployable units mirror the `project-800ms` blueprint shape:
        └────────┬───────────────────────┬───┘
                 ▼                       ▼
        ┌─────────────────┐    ┌────────────────────┐
-       │ Postgres 16     │    │ S3-compatible      │
-       │ + pgvector      │    │ (recordings)       │
+       │ Postgres 16     │    │ Google Cloud       │
+       │ + pgvector      │    │ Storage (GCS)      │
        └─────────────────┘    └────────────────────┘
 ```
 
@@ -83,7 +83,7 @@ Three deployable units mirror the `project-800ms` blueprint shape:
 3. API creates a LiveKit room, requests SIP outbound dial via livekit-sip (Telnyx as trunk), dispatches the agent worker.
 4. Agent enables Telnyx AMD; once SIP 200 OK is received, first ~3s of transcript also runs through voicemail-pattern matcher.
 5. **Voicemail branch:** play scripted leave-message via Cartesia → hangup → mark `voicemail_left` → schedule retry per policy.
-6. **Human branch:** conversation loop (STT → LLM with tools → TTS), supporting DTMF and interruption; on hangup, LiveKit Egress writes recording to S3 and agent flushes transcript.
+6. **Human branch:** conversation loop (STT → LLM with tools → TTS), supporting DTMF and interruption; on hangup, LiveKit Egress writes the recording to GCS and the agent flushes the transcript.
 
 ### Inbound flow
 
@@ -117,7 +117,7 @@ Three deployable units mirror the `project-800ms` blueprint shape:
 | `POST /v1/tools/end_call` | `{call_id, reason}` — graceful termination |
 
 **Webhook receivers:**
-- `POST /webhooks/livekit/egress` — recording-completed callback, updates `calls.recording_uri`.
+- `POST /webhooks/livekit` also receives LiveKit Egress events (`egress_started`/`egress_ended`), dispatched by event type: stores `calls.egress_id`, then `calls.recording_uri` on completion. (LiveKit posts every event to one webhook URL.)
 - `POST /webhooks/livekit/room` — participant join/leave events for inbound caller-ID lookup.
 
 **Internal services** (in-process, not separate processes):
@@ -154,8 +154,8 @@ agent = VoicePipelineAgent(
 | `docker-compose.yml` | Base stack: `livekit`, `livekit-sip`, `api`, `agent`, `postgres` (with pgvector). |
 | `docker-compose.prod.yml` | Prod overlay (GHCR images, healthchecks, restart policies). |
 | `docker-compose.tls.yml` | Caddy TLS termination for API + LiveKit signaling. |
-| `terraform/` | Single Hetzner CCX23 or AWS c7i.xlarge VM (no GPU — all models external). Secret loading at boot. |
-| `.env.example` | `TELNYX_*`, `LIVEKIT_*`, `CARTESIA_API_KEY`, `GEMINI_API_KEY`, `DATABASE_URL`, `S3_*`, `JWT_SIGNING_KEY`. |
+| `terraform/` | Single GCP Compute Engine VM (no GPU — all models external). Secret loading at boot via Secret Manager. |
+| `.env.example` | `TELNYX_*`, `LIVEKIT_*`, `CARTESIA_API_KEY`, `GEMINI_API_KEY`, `DATABASE_URL`, `GCS_BUCKET`, `GCS_PROJECT_ID`, `JWT_SIGNING_KEY`. |
 
 ## 5. Data model
 
@@ -366,18 +366,20 @@ On match: cancel in-flight LLM/TTS, play scripted leave-message via Cartesia, ha
 
 ## 9. Recording & transcript storage
 
-- **Recording:** LiveKit Egress (composite room track) → S3-compatible bucket. Path `recordings/{YYYY-MM-DD}/{call_id}.ogg` (Opus mono ~24kbps). Lifecycle: cold storage after 30d, delete after configurable retention (default 1y).
+- **Recording:** LiveKit Egress (RoomComposite, `audio_only`) → Google Cloud Storage. Path `recordings/{YYYY-MM-DD}/{call_id}.ogg` (Opus mono ~24kbps). Bucket lifecycle: Nearline after 30d, delete after configurable retention (default 1y). The egress container uploads with the VM's service account via ADC — no key on disk.
 - **Transcript:** agent emits segments via LiveKit data channel to `apps/api` debounced at 500ms; final flush on call end. Written to `transcripts` table.
-- **Linkage:** `calls.recording_uri` (S3 path). `GET /v1/calls/{id}` returns a presigned URL (1h TTL, access logged).
+- **Linkage:** the agent starts egress at session start; the call is correlated by room name. `calls.egress_id` is set from the `egress_started` event, `calls.recording_uri` (a `gs://` path) from `egress_ended`. `GET /v1/calls/{id}` returns a V4 signed URL (1h TTL, access logged), signed keylessly via IAM `signBlob`.
+
+**Plan 4b decisions (2026-06-02):** egress is triggered agent-side at session start (uniform across inbound/outbound); GCS auth is keyless (egress writes via ADC, signed reads via IAM `signBlob`); lifecycle tracking is minimal (`recording_uri` + `egress_id`, no separate table); a static recording-consent line is added to the greeting (per-elder config deferred).
 
 ## 10. Security & compliance
 
 **HIPAA-readiness (not certification):**
 - TLS 1.2+ everywhere (Caddy in front of API, LiveKit signaling, livekit-sip).
-- Encryption at rest: Postgres disk encryption, S3 SSE-S3.
+- Encryption at rest: Postgres disk encryption, GCS Google-managed encryption keys (default).
 - Access logging: every read of recording/transcript audit-logged with caller identity.
 - Secret management: env vars at boot, no secrets in code or images.
-- Vendor BAAs targeted before production traffic: Telnyx, Cartesia (request), Google (Gemini), AWS/B2 (S3).
+- Vendor BAAs targeted before production traffic: Telnyx, Cartesia (request), Google (Gemini + GCS).
 - Recording-consent disclosure: scripted in the opening greeting on both inbound and outbound; configurable per elder.
 
 **Other:**
@@ -444,7 +446,7 @@ GitHub Actions:
 
 ## 16. Open questions / decisions to revisit
 
-- **Object storage choice:** Backblaze B2 (cheap egress) vs AWS S3 (broader ecosystem). Resolve at infra setup.
-- **VM provider:** Hetzner (cheapest) vs AWS (BAA easier for HIPAA). Resolve based on compliance timeline.
+- **Object storage choice:** ~~Backblaze B2 vs AWS S3~~ — resolved to Google Cloud Storage (same cloud as the VM, keyless writes). 2026-06-01.
+- **VM provider:** ~~Hetzner vs AWS~~ — resolved to GCP Compute Engine (Plan 4a). 2026-06-01.
 - **RAG ingestion UX:** API-only in v1; lightweight admin UI deferred.
 - **Voice selection per elder:** default Cartesia voice in v1; per-elder voice override is in the schema but no UI yet.

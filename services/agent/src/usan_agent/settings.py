@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     agent_name: str = Field(default="usan-agent", alias="AGENT_NAME")
     api_base_url: str = Field(..., min_length=1, alias="API_BASE_URL")
     jwt_signing_key: str = Field(..., min_length=32, alias="JWT_SIGNING_KEY")
+    gcs_bucket: str | None = Field(default=None, alias="GCS_BUCKET")
     outbound_answer_timeout_s: float = Field(
         default=50.0, ge=5.0, le=180.0, alias="OUTBOUND_ANSWER_TIMEOUT_S"
     )

@@ -225,3 +225,38 @@ def test_retry_settings_out_of_range_rejected(monkeypatch, var, value):
 
     with pytest.raises(ValueError, match=var):
         get_settings()
+
+
+def test_recording_settings_defaults(monkeypatch):
+    for k, v in {
+        "DATABASE_URL": "postgresql://u:p@h:5432/d",
+        "LIVEKIT_API_KEY": "key",
+        "LIVEKIT_API_SECRET": "a" * 32,
+        "LIVEKIT_URL": "ws://livekit:7880",
+        "JWT_SIGNING_KEY": "s" * 32,
+    }.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("GCS_BUCKET", raising=False)
+    from usan_api.settings import Settings
+
+    s = Settings()
+    assert s.gcs_bucket is None
+    assert s.recording_signed_url_ttl_s == 3600
+
+
+def test_recording_settings_from_env(monkeypatch):
+    for k, v in {
+        "DATABASE_URL": "postgresql://u:p@h:5432/d",
+        "LIVEKIT_API_KEY": "key",
+        "LIVEKIT_API_SECRET": "a" * 32,
+        "LIVEKIT_URL": "ws://livekit:7880",
+        "JWT_SIGNING_KEY": "s" * 32,
+        "GCS_BUCKET": "usan-rec",
+        "RECORDING_SIGNED_URL_TTL_S": "600",
+    }.items():
+        monkeypatch.setenv(k, v)
+    from usan_api.settings import Settings
+
+    s = Settings()
+    assert s.gcs_bucket == "usan-rec"
+    assert s.recording_signed_url_ttl_s == 600

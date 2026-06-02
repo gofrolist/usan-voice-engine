@@ -54,3 +54,20 @@ variable "image_tag" {
   description = "Container image tag the VM should pull on first boot (passed into the startup script)."
   default     = "latest"
 }
+
+variable "recordings_bucket" {
+  type        = string
+  description = "Globally-unique GCS bucket name for call recordings."
+}
+
+variable "recording_nearline_days" {
+  type        = number
+  description = "Age in days after which a recording transitions to Nearline storage."
+  default     = 30
+}
+
+variable "recording_retention_days" {
+  type        = number
+  description = "Age in days after which a recording is permanently deleted."
+  default     = 365
+}
