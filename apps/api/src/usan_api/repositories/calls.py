@@ -104,17 +104,20 @@ async def mark_dial_failure(
     return call
 
 
-async def mark_completed_if_in_progress(db: AsyncSession, livekit_room: str) -> Call | None:
-    # livekit_room is not UNIQUE at the schema level (room names are uuid4 so a
-    # collision is astronomically unlikely); take the most recent match rather
-    # than scalar_one_or_none(), which would 500 on the impossible duplicate.
+async def _latest_by_room(db: AsyncSession, livekit_room: str) -> Call | None:
+    # Room names are uuid4 so a collision is astronomically unlikely; take the most
+    # recent match rather than scalar_one_or_none(), which would 500 on a duplicate.
     result = await db.execute(
         select(Call)
         .where(Call.livekit_room == livekit_room)
         .order_by(Call.created_at.desc())
         .limit(1)
     )
-    call = result.scalars().first()
+    return result.scalars().first()
+
+
+async def mark_completed_if_in_progress(db: AsyncSession, livekit_room: str) -> Call | None:
+    call = await _latest_by_room(db, livekit_room)
     if call is None or call.status is not CallStatus.IN_PROGRESS:
         return None
     call.status = CallStatus.COMPLETED
@@ -122,6 +125,26 @@ async def mark_completed_if_in_progress(db: AsyncSession, livekit_room: str) -> 
     call.end_reason = "hangup"
     if call.answered_at is not None:
         call.duration_seconds = int((call.ended_at - call.answered_at).total_seconds())
+    await db.flush()
+    await db.refresh(call)
+    return call
+
+
+async def set_egress_id(db: AsyncSession, livekit_room: str, egress_id: str) -> Call | None:
+    call = await _latest_by_room(db, livekit_room)
+    if call is None:
+        return None
+    call.egress_id = egress_id
+    await db.flush()
+    await db.refresh(call)
+    return call
+
+
+async def set_recording_uri(db: AsyncSession, livekit_room: str, recording_uri: str) -> Call | None:
+    call = await _latest_by_room(db, livekit_room)
+    if call is None:
+        return None
+    call.recording_uri = recording_uri
     await db.flush()
     await db.refresh(call)
     return call
