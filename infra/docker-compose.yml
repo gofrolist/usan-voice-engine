@@ -183,6 +183,9 @@ services:
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
       RETRY_POLLER_ENABLED: ${RETRY_POLLER_ENABLED:-true}
       RETRY_POLL_INTERVAL_S: ${RETRY_POLL_INTERVAL_S:-30}
+      # Recording (Plan 4b): blank disables it; the api signs read URLs for this bucket.
+      GCS_BUCKET: ${GCS_BUCKET:-}
+      RECORDING_SIGNED_URL_TTL_S: ${RECORDING_SIGNED_URL_TTL_S:-3600}
     ports:
       # Host-only — the API is unauthenticated at this stage and is fronted by
       # TLS/Caddy in production (Plan 4). Reachable as localhost:8000 in dev.
@@ -214,6 +217,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL}
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
       API_BASE_URL: ${API_BASE_URL}
+      # Recording (Plan 4b): blank disables egress; set to the recordings bucket.
+      GCS_BUCKET: ${GCS_BUCKET:-}
     restart: unless-stopped
 
 volumes:
