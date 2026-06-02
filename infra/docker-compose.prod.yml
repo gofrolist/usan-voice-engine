@@ -1,0 +1,70 @@
+# Production overlay. Layer on top of the base file:
+#   docker compose --env-file infra/.env \
+#     -f infra/docker-compose.yml \
+#     -f infra/docker-compose.prod.yml \
+#     -f infra/docker-compose.tls.yml up -d
+#
+# Requires in .env: IMAGE_TAG, GHCR_OWNER, API_DOMAIN, LIVEKIT_DOMAIN,
+# and LIVEKIT_URL=ws://livekit:7880 (internal hop stays plaintext on the
+# compose network; external TLS is terminated by Caddy).
+services:
+  api:
+    image: ghcr.io/${GHCR_OWNER}/usan-api:${IMAGE_TAG:-latest}
+    pull_policy: always
+    build: !reset null
+    # API is reached by Caddy over the compose network as api:8000.
+    # Keep a loopback publish so on-VM `curl localhost:8000/health` works.
+    ports: !override
+      - "127.0.0.1:8000:8000"
+
+  agent:
+    image: ghcr.io/${GHCR_OWNER}/usan-agent:${IMAGE_TAG:-latest}
+    pull_policy: always
+    build: !reset null
+
+  livekit:
+    ports: !override
+      - "127.0.0.1:7880:7880"
+      - "127.0.0.1:7881:7881/tcp"
+      - "50000-60000:50000-60000/udp"
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        redis:
+          address: redis:6379
+        rtc:
+          tcp_port: 7881
+          port_range_start: 50000
+          port_range_end: 60000
+          use_external_ip: true
+        keys:
+          ${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}
+        logging:
+          level: info
+          json: true
+        turn:
+          enabled: false
+        room:
+          empty_timeout: 60
+          max_participants: 10
+        webhook:
+          api_key: ${LIVEKIT_API_KEY}
+          urls:
+            - http://api:8000/webhooks/livekit
+
+  livekit-sip:
+    ports: !override
+      - "5060:5060/udp"
+      - "10000-20000:10000-20000/udp"
+    environment:
+      SIP_CONFIG_BODY: |
+        api_key: ${LIVEKIT_API_KEY}
+        api_secret: ${LIVEKIT_API_SECRET}
+        ws_url: ${LIVEKIT_URL}
+        redis:
+          address: redis:6379
+        sip_port: 5060
+        rtp_port: 10000-20000
+        logging:
+          level: info
+          json: true
