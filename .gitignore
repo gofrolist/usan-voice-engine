@@ -42,7 +42,9 @@ recordings/
 
 # Secrets (allow templates)
 infra/.env
+infra/.env.*
 !infra/.env.example
+!infra/.env.prod.example
 
 # Terraform (.terraform.lock.hcl IS committed for reproducible provider versions)
 infra/terraform/.terraform/
