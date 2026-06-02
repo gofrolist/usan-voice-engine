@@ -38,10 +38,12 @@ class CallResponse(BaseModel):
     livekit_room: str | None
     attempt: int
     recording_uri: str | None
+    egress_id: str | None
+    presigned_recording_url: str | None
     created_at: datetime
 
     @classmethod
-    def from_model(cls, call: Call) -> CallResponse:
+    def from_model(cls, call: Call, *, presigned_recording_url: str | None = None) -> CallResponse:
         return cls(
             id=call.id,
             elder_id=call.elder_id,
@@ -51,6 +53,8 @@ class CallResponse(BaseModel):
             livekit_room=call.livekit_room,
             attempt=call.attempt,
             recording_uri=call.recording_uri,
+            egress_id=call.egress_id,
+            presigned_recording_url=presigned_recording_url,
             created_at=call.created_at,
         )
 

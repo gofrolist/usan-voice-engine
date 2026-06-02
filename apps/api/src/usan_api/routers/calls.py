@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from typing import Any
 
@@ -6,7 +7,7 @@ from loguru import logger
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api import dialer, livekit_dispatch
+from usan_api import dialer, livekit_dispatch, object_storage
 from usan_api.auth import require_service_token, require_worker_token
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Elder, WellnessLog
@@ -171,12 +172,37 @@ async def register_inbound_call(
     )
 
 
+async def _presigned_recording_url(call: Call, settings: Settings) -> str | None:
+    """Sign a short-lived GET URL for the call's recording, or None if absent/disabled."""
+    if not call.recording_uri or not settings.gcs_bucket:
+        return None
+    try:
+        url = await asyncio.to_thread(
+            object_storage.generate_signed_url,
+            call.recording_uri,
+            settings.recording_signed_url_ttl_s,
+        )
+    except Exception:
+        logger.bind(call_id=str(call.id)).warning("Failed to sign recording URL")
+        return None
+    # Access log: every issued recording URL is recorded (spec §10).
+    logger.bind(call_id=str(call.id), recording_uri=call.recording_uri).info(
+        "Recording URL accessed"
+    )
+    return url
+
+
 @router.get("/{call_id}", response_model=CallResponse)
-async def get_call(call_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> CallResponse:
+async def get_call(
+    call_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CallResponse:
     call = await calls_repo.get_call(db, call_id)
     if call is None:
         raise HTTPException(status_code=404, detail="call not found")
-    return CallResponse.from_model(call)
+    presigned = await _presigned_recording_url(call, settings)
+    return CallResponse.from_model(call, presigned_recording_url=presigned)
 
 
 @router.post("/{call_id}/outcome", response_model=CallResponse)
