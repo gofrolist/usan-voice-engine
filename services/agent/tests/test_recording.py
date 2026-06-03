@@ -40,6 +40,23 @@ def test_recording_filepath_format():
     assert out == "recordings/2026-06-02/abc-123-deadbeef.ogg"
 
 
+@pytest.mark.parametrize("bad", ["../../etc/passwd", "call/1", "a" * 65, "", "call id"])
+def test_recording_filepath_rejects_bad_call_id(bad):
+    # The GCS object key must never be formed from an unvalidated call_id.
+    with pytest.raises(ValueError, match="call_id"):
+        recording.recording_filepath(bad)
+
+
+async def test_start_call_recording_refuses_invalid_call_id(monkeypatch, settings_with_bucket):
+    # Fail closed: an invalid call_id means no recording, not a write to a bad key.
+    made = MagicMock()
+    monkeypatch.setattr(recording.api, "LiveKitAPI", made)
+    ctx = SimpleNamespace(room=SimpleNamespace(name="room-1"))
+    result = await recording.start_call_recording(ctx, "../../evil", settings_with_bucket)
+    assert result is None
+    made.assert_not_called()
+
+
 def test_http_url_converts_ws_scheme():
     assert recording._http_url("ws://livekit:7880") == "http://livekit:7880"
     assert recording._http_url("wss://lk.example") == "https://lk.example"

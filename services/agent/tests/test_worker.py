@@ -178,6 +178,34 @@ async def test_outbound_registers_transcript_flush(monkeypatch):
     assert registered["ctx"] is ctx
 
 
+async def test_outbound_invalid_call_id_shuts_down(monkeypatch):
+    # A malformed call_id in dispatch metadata is a bad dispatch: drop the job before
+    # it reaches any URL path or the GCS recording key — never build a session.
+    _settings(monkeypatch)
+    started = {"n": 0}
+
+    def _fake_build_session(settings, userdata=None):
+        started["n"] += 1
+        return MagicMock()
+
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    rec = AsyncMock()
+    monkeypatch.setattr(worker, "start_call_recording", rec)
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.shutdown = MagicMock()
+    ctx.room.name = "usan-outbound-x"
+    ctx.job.metadata = '{"call_id": "../../evil", "direction": "outbound", "dynamic_vars": {}}'
+
+    await worker.entrypoint(ctx)
+
+    ctx.shutdown.assert_called_once()
+    assert ctx.shutdown.call_args.kwargs.get("reason") == "invalid_metadata"
+    assert started["n"] == 0
+    rec.assert_not_awaited()
+
+
 def test_caller_phone_reads_sip_attribute():
     p = MagicMock()
     p.attributes = {"sip.phoneNumber": "+15551234567"}

@@ -14,6 +14,7 @@ from typing import Any, cast
 from livekit import api
 from loguru import logger
 
+from usan_agent.ids import validate_call_id
 from usan_agent.settings import Settings
 
 
@@ -35,7 +36,11 @@ def recording_filepath(
     not overwrite), so a same-key collision would otherwise 403 and silently drop
     the PHI recording. The API learns the real key from the egress webhook, so a
     unique name here is safe.
+
+    Raises ValueError on a call_id that is not a safe id, so an unvalidated value can
+    never be interpolated into the GCS object key (path-traversal / namespace escape).
     """
+    validate_call_id(call_id)
     day = (now or datetime.datetime.now(datetime.UTC)).strftime("%Y-%m-%d")
     suffix = token or uuid.uuid4().hex[:8]
     return f"recordings/{day}/{call_id}-{suffix}.ogg"
@@ -45,6 +50,12 @@ async def start_call_recording(ctx: Any, call_id: str, settings: Settings) -> st
     """Start an audio-only OGG egress of the room to GCS. Returns the egress_id, or
     None when recording is disabled (no GCS_BUCKET) or the start failed. Never raises."""
     if not settings.gcs_bucket:
+        return None
+    try:
+        validate_call_id(call_id)
+    except ValueError:
+        # Fail closed: don't record rather than write to an attacker-shaped GCS key.
+        logger.bind(room=ctx.room.name).warning("Refusing to record: call_id failed validation")
         return None
     request = api.RoomCompositeEgressRequest(
         room_name=ctx.room.name,

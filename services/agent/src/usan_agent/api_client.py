@@ -5,7 +5,6 @@ token so the API can both authenticate the agent and confirm the token is scoped
 to the call being mutated.
 """
 
-import re
 import time
 from typing import Any, cast
 
@@ -13,20 +12,10 @@ import httpx
 import jwt
 from loguru import logger
 
+from usan_agent.ids import validate_call_id as _validate_call_id
 from usan_agent.settings import Settings
 
 _TOKEN_TTL_S = 300
-
-# call_id is a server-issued UUID; reject anything else before it reaches a URL
-# path, both as defense-in-depth against path traversal/SSRF and to fail closed on
-# a malformed id rather than emitting a garbled request.
-_CALL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-
-
-def _validate_call_id(call_id: str) -> str:
-    if not isinstance(call_id, str) or not _CALL_ID_RE.fullmatch(call_id):
-        raise ValueError("call_id must match ^[A-Za-z0-9_-]{1,64}$")
-    return call_id
 
 
 def _mint_token(call_id: str, settings: Settings) -> str:
