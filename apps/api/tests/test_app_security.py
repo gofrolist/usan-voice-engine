@@ -57,6 +57,24 @@ def test_operator_route_throttled_before_auth(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_rate_limit_429_includes_retry_after(monkeypatch):
+    # RFC 9110 §15.5.30: the 429 must tell a well-behaved client when to retry.
+    app = _app_with_env(monkeypatch, RATE_LIMIT_ENABLED="true", RATE_LIMIT_DEFAULT="2/minute")
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        url = "/v1/calls/00000000-0000-0000-0000-000000000000"
+        throttled = next(
+            (r for r in (client.get(url) for _ in range(5)) if r.status_code == 429), None
+        )
+        assert throttled is not None
+        retry_after = throttled.headers.get("Retry-After")
+        assert retry_after is not None
+        assert retry_after.isdigit()
+        assert int(retry_after) >= 1
+    finally:
+        get_settings.cache_clear()
+
+
 def test_internal_routes_not_rate_limited(monkeypatch):
     # Agent/service and health routes must never be throttled (high volume from a few
     # container IPs). Unauthenticated, tool routes return 401 from their JWT guard.

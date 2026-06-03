@@ -15,6 +15,7 @@ from loguru import logger
 
 from usan_agent.api_client import start_inbound_call
 from usan_agent.check_in import CheckInData, build_check_in_agent, build_inbound_agent
+from usan_agent.ids import validate_call_id
 from usan_agent.logging_config import configure_logging
 from usan_agent.pipeline import (
     RECORDING_DISCLOSURE,
@@ -156,10 +157,19 @@ async def entrypoint(ctx: JobContext) -> None:
     log.info("Connected to room")
 
     if meta.direction == "outbound" and meta.call_id:
-        data = CheckInData(call_id=meta.call_id, settings=settings, job_ctx=ctx)
+        # call_id comes from job-dispatch metadata (a less-trusted boundary) and flows
+        # into URL paths and the GCS recording key. Validate once here and use the
+        # checked value downstream; a malformed id means a bad dispatch — drop the job.
+        try:
+            call_id = validate_call_id(meta.call_id)
+        except ValueError:
+            log.error("Invalid call_id in job metadata; refusing outbound job")
+            ctx.shutdown(reason="invalid_metadata")
+            return
+        data = CheckInData(call_id=call_id, settings=settings, job_ctx=ctx)
         session = build_session(settings, userdata=data)
         agent = build_check_in_agent()
-        register_transcript_flush(ctx, session, meta.call_id, settings)
+        register_transcript_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
         log.info("Session started; waiting for participant")
         try:
@@ -176,11 +186,11 @@ async def entrypoint(ctx: JobContext) -> None:
         # Consent before capture: speak the disclosure to completion, then start
         # egress, so no audio is recorded before the spoken notice (consent ordering).
         await say_recording_disclosure(session)
-        await start_call_recording(ctx, meta.call_id, settings)
+        await start_call_recording(ctx, call_id, settings)
         watcher = VoicemailWatcher()
         session.on("user_input_transcribed", lambda ev: watcher.feed(ev.transcript))
         log.info("Participant present; running voicemail detection window")
-        await _run_detection_window(ctx, session, watcher, call_id=meta.call_id, settings=settings)
+        await _run_detection_window(ctx, session, watcher, call_id=call_id, settings=settings)
         return
 
     # Inbound: caller already dialed in; no voicemail detection (spec §7).

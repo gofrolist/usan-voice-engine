@@ -15,6 +15,8 @@ Behind Caddy the real client arrives in X-Forwarded-For (Caddy overwrites it wit
 the direct peer — see infra/Caddyfile), so we key on its first hop, not the proxy.
 """
 
+import time
+
 from limits import parse
 from limits.storage import MemoryStorage
 from limits.strategies import FixedWindowRateLimiter
@@ -27,7 +29,11 @@ def _client_key(request: Request) -> str:
     """The real client IP: the X-Forwarded-For first hop behind Caddy, else the peer."""
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        # A header like ", 1.2.3.4" yields an empty first hop; don't collapse every
+        # such request into one shared "" bucket — fall back to the real peer instead.
+        candidate = forwarded.split(",")[0].strip()
+        if candidate:
+            return candidate
     return request.client.host if request.client else "unknown"
 
 
@@ -54,15 +60,26 @@ class OperatorRateLimitMiddleware:
         self._limiter = FixedWindowRateLimiter(MemoryStorage())
         self._limit = parse(limit)
 
+    def _retry_after(self, key: str) -> int:
+        """Seconds until the client's window resets, for the Retry-After header (>=1)."""
+        stats = self._limiter.get_window_stats(self._limit, "operator", key)
+        return max(1, int(stats.reset_time - time.time()))
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not self.enabled:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
-        if _is_operator_route(request.method, request.url.path) and not self._limiter.hit(
-            self._limit, "operator", _client_key(request)
-        ):
-            response = JSONResponse({"detail": "rate limit exceeded"}, status_code=429)
-            await response(scope, receive, send)
-            return
+        if _is_operator_route(request.method, request.url.path):
+            key = _client_key(request)
+            if not self._limiter.hit(self._limit, "operator", key):
+                # RFC 9110 §15.5.30: a 429 SHOULD tell the client when to retry, so a
+                # well-behaved caller backs off instead of hammering the window.
+                response = JSONResponse(
+                    {"detail": "rate limit exceeded"},
+                    status_code=429,
+                    headers={"Retry-After": str(self._retry_after(key))},
+                )
+                await response(scope, receive, send)
+                return
         await self.app(scope, receive, send)

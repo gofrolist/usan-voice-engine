@@ -90,19 +90,10 @@ def test_api_base_url_https_external_works(monkeypatch):
     assert get_settings().api_base_url == "https://api.usan.example.com"
 
 
-def test_api_base_url_warns_on_external_http(monkeypatch, caplog):
-    import logging
-
-    from usan_agent import settings as settings_mod
-
+def test_api_base_url_rejects_external_http(monkeypatch):
+    # PHI must not cross an untrusted network in the clear: a non-local plaintext http
+    # host is rejected at startup, not merely warned.
     _base_env(monkeypatch)
     monkeypatch.setenv("API_BASE_URL", "http://api.usan.example.com")
-
-    handler_id = settings_mod.logger.add(caplog.handler, level="WARNING", format="{message}")
-    try:
-        with caplog.at_level(logging.WARNING):
-            assert get_settings().api_base_url == "http://api.usan.example.com"
-    finally:
-        settings_mod.logger.remove(handler_id)
-
-    assert any("plaintext http" in r.message for r in caplog.records)
+    with pytest.raises(ValueError, match="API_BASE_URL"):
+        get_settings()

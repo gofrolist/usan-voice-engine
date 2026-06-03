@@ -45,3 +45,9 @@ def test_remove_dnc_requires_operator_token(client):
     assert client.delete("/v1/dnc/%2B15550008888").status_code == 401
     wrong = {"Authorization": "Bearer " + "x" * 32}
     assert client.delete("/v1/dnc/%2B15550008888", headers=wrong).status_code == 401
+
+
+def test_remove_dnc_rejects_malformed_phone(client):
+    # The DELETE path param is held to the same E.164 contract as the POST body.
+    assert client.delete("/v1/dnc/not-a-phone", headers=_OP).status_code == 422
+    assert client.delete("/v1/dnc/5550001111", headers=_OP).status_code == 422

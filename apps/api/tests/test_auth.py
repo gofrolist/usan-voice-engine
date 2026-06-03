@@ -133,3 +133,20 @@ def test_operator_token_wrong_key_401(auth_client):
 def test_operator_token_non_bearer_scheme_401(auth_client):
     r = auth_client.get("/operator", headers={"Authorization": f"Basic {OPERATOR_KEY}"})
     assert r.status_code == 401
+
+
+def test_operator_401_includes_www_authenticate(auth_client):
+    # RFC 7235 §3.1: every 401 must carry a WWW-Authenticate challenge.
+    missing = auth_client.get("/operator")
+    assert missing.status_code == 401
+    assert missing.headers.get("WWW-Authenticate") == "Bearer"
+    wrong = auth_client.get("/operator", headers={"Authorization": "Bearer " + "x" * 32})
+    assert wrong.status_code == 401
+    assert wrong.headers.get("WWW-Authenticate") == "Bearer"
+
+
+def test_service_and_worker_401_include_www_authenticate(auth_client):
+    for path in ("/protected", "/worker"):
+        r = auth_client.get(path)
+        assert r.status_code == 401
+        assert r.headers.get("WWW-Authenticate") == "Bearer"

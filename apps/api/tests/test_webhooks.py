@@ -102,11 +102,12 @@ def test_livekit_webhook_unknown_event_ignored(client):
 
 
 def test_livekit_webhook_stale_event_rejected(client):
-    # A signature-valid but ancient (replayed) delivery is rejected with 400.
+    # A signature-valid but ancient (replayed) delivery is rejected with 401 — the same
+    # status as a forged signature, so the response is not a signature-validity oracle.
     body = _event("room_finished", "usan-outbound-stale", created_at=1)
     token = _sign(body, "key", "a" * 32)
     r = client.post("/webhooks/livekit", content=body, headers={"Authorization": token})
-    assert r.status_code == 400
+    assert r.status_code == 401
 
 
 # ---------------------------------------------------------------------------

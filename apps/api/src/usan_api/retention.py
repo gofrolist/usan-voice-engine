@@ -46,11 +46,12 @@ def _utcnow() -> datetime:
 async def purge_expired(
     session: AsyncSession, *, days: int, now: datetime | None = None
 ) -> tuple[int, int]:
-    """Delete old transcripts and null dynamic_vars on old terminal calls.
+    """Delete old transcripts and null dynamic_vars + recording_uri on old terminal calls.
 
     Returns ``(transcripts_deleted, calls_scrubbed)``. The caller commits — this
     keeps both mutations in a single transaction so a crash can't leave a partial
-    purge. ``now`` overrides the clock for deterministic tests.
+    purge. Nulling recording_uri stops the API issuing fresh signed URLs for audio
+    whose retention window has elapsed. ``now`` overrides the clock for tests.
     """
     moment = now if now is not None else _utcnow()
     cutoff = moment - timedelta(days=days)
@@ -67,9 +68,13 @@ async def purge_expired(
             .where(
                 Call.status.in_(_TERMINAL_STATUSES),
                 or_(Call.ended_at < cutoff, Call.ended_at.is_(None) & (Call.created_at < cutoff)),
-                Call.dynamic_vars != {},
+                # Match a row that still holds PHI in either field, so the rowcount
+                # reflects real work and the UPDATE is idempotent on re-run.
+                or_(Call.dynamic_vars != {}, Call.recording_uri.is_not(None)),
             )
-            .values(dynamic_vars={})
+            # Null recording_uri too: otherwise GET /calls/{id} keeps minting signed
+            # URLs for the PHI audio until the (independent) GCS lifecycle rule fires.
+            .values(dynamic_vars={}, recording_uri=None)
         ),
     )
     return deleted.rowcount or 0, scrubbed.rowcount or 0

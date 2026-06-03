@@ -22,12 +22,18 @@ from usan_agent.settings import Settings
 # data, not trusted instructions). Removing "{"/"}" closes both a prompt-injection
 # vector and an str.format KeyError/IndexError on attacker-controlled slots.
 _PROMPT_UNSAFE = re.compile(
-    # format-slot braces, ASCII control chars, and Unicode invisible/directional
-    # chars (zero-width, bidi overrides) that could smuggle instructions past the LLM.
-    r"[{}\x00-\x1f\x7f\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]"
+    # format-slot braces; ASCII control chars; the Unicode line/paragraph separators
+    # NEL (U+0085), LS (U+2028), PS (U+2029); and invisible/directional chars
+    # (zero-width, bidi overrides) that could smuggle instructions or new lines past
+    # the LLM. Separators are listed explicitly so the regex alone suffices and does
+    # not silently rely on the later str.split() to drop them.
+    r"[{}\x00-\x1f\x7f\x85\u00ad\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\ufeff]"
 )
 _NAME_MAX_LEN = 100
 _CONTEXT_MAX_LEN = 300
+_MED_NAME_MAX_LEN = 80
+_MED_DOSAGE_MAX_LEN = 40
+_MED_TIME_MAX_LEN = 20
 
 
 def _sanitize_prompt_value(value: Any, *, max_len: int) -> str:
@@ -112,10 +118,18 @@ async def _do_get_today_meds(data: CheckInData) -> str:
     for med in meds:
         if not isinstance(med, dict):
             continue
-        name = str(med.get("name") or "a medication")
+        # These fields come from the API and are spoken back to the LLM as a tool
+        # result, so sanitize them like caller dynamic_vars — defense-in-depth against
+        # a poisoned/compromised upstream embedding instructions in a med name.
+        raw_name = med.get("name") or "a medication"
+        name = _sanitize_prompt_value(raw_name, max_len=_MED_NAME_MAX_LEN) or "a medication"
         times = _format_times(med.get("times")) or "today"
-        dosage = med.get("dosage")
-        dosage_str = f" ({dosage})" if dosage else ""
+        dosage_raw = med.get("dosage")
+        dosage_str = (
+            f" ({_sanitize_prompt_value(dosage_raw, max_len=_MED_DOSAGE_MAX_LEN)})"
+            if dosage_raw
+            else ""
+        )
         parts.append(f"{name}{dosage_str} at {times}")
     if not parts:
         return "There are no medications scheduled for today."
@@ -130,7 +144,8 @@ def _format_times(times: Any) -> str:
     """
     if not isinstance(times, list):
         return ""
-    return ", ".join(str(t) for t in times if t)
+    cleaned = (_sanitize_prompt_value(t, max_len=_MED_TIME_MAX_LEN) for t in times if t)
+    return ", ".join(seg for seg in cleaned if seg)
 
 
 async def _do_end_call(data: CheckInData, session: Any, reason: str) -> None:

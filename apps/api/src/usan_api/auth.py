@@ -9,6 +9,10 @@ from usan_api.settings import Settings, get_settings
 
 _bearer = HTTPBearer(auto_error=False)
 
+# RFC 7235 §3.1: a 401 MUST carry a WWW-Authenticate challenge so standards-compliant
+# clients and gateways know how to authenticate.
+_WWW_AUTH = {"WWW-Authenticate": "Bearer"}
+
 
 def require_operator_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
@@ -21,10 +25,18 @@ def require_operator_token(
     message is deliberately generic so it leaks nothing about why it failed.
     """
     if credentials is None or credentials.scheme.lower() != "bearer":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token")
-    if not hmac.compare_digest(credentials.credentials, settings.operator_api_key):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid operator token"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing bearer token",
+            headers=_WWW_AUTH,
+        )
+    if not hmac.compare_digest(
+        credentials.credentials, settings.operator_api_key.get_secret_value()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid operator token",
+            headers=_WWW_AUTH,
         )
 
 
@@ -39,17 +51,23 @@ def require_service_token(
     the `call_id` claim matches the resource being mutated.
     """
     if credentials is None or credentials.scheme.lower() != "bearer":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing bearer token",
+            headers=_WWW_AUTH,
+        )
     try:
         return jwt.decode(
             credentials.credentials,
-            settings.jwt_signing_key,
+            settings.jwt_signing_key.get_secret_value(),
             algorithms=["HS256"],
             options={"require": ["exp", "call_id"]},
         )
     except jwt.PyJWTError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid service token"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid service token",
+            headers=_WWW_AUTH,
         ) from exc
 
 
@@ -66,15 +84,21 @@ def require_worker_token(
     one; for mutating an existing call, use require_service_token.
     """
     if credentials is None or credentials.scheme.lower() != "bearer":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing bearer token",
+            headers=_WWW_AUTH,
+        )
     try:
         return jwt.decode(
             credentials.credentials,
-            settings.jwt_signing_key,
+            settings.jwt_signing_key.get_secret_value(),
             algorithms=["HS256"],
             options={"require": ["exp"]},
         )
     except jwt.PyJWTError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid service token"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid service token",
+            headers=_WWW_AUTH,
         ) from exc
