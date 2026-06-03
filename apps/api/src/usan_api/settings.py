@@ -15,10 +15,20 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO", alias="LOG_LEVEL"
     )
+    # Optional override: pin a specific LiveKit SIP outbound trunk ID (ST_...).
+    # When unset, the API auto-provisions (or reuses) a trunk named
+    # ``livekit_outbound_trunk_name`` from the Telnyx SIP credentials below, so
+    # no environment-specific trunk ID needs to be configured by hand.
     livekit_sip_outbound_trunk_id: str | None = Field(
         default=None, alias="LIVEKIT_SIP_OUTBOUND_TRUNK_ID"
     )
+    livekit_outbound_trunk_name: str = Field(
+        default="usan-telnyx-outbound", alias="LIVEKIT_OUTBOUND_TRUNK_NAME"
+    )
     telnyx_caller_id: str | None = Field(default=None, alias="TELNYX_CALLER_ID")
+    telnyx_sip_host: str = Field(default="sip.telnyx.com", alias="TELNYX_SIP_HOST")
+    telnyx_sip_username: str | None = Field(default=None, alias="TELNYX_SIP_USERNAME")
+    telnyx_sip_password: str | None = Field(default=None, alias="TELNYX_SIP_PASSWORD")
     agent_name: str = Field(default="usan-agent", alias="AGENT_NAME")
     outbound_ringing_timeout_s: int = Field(
         default=45, ge=5, le=120, alias="OUTBOUND_RINGING_TIMEOUT_S"
@@ -40,6 +50,21 @@ class Settings(BaseSettings):
     # outbound_ringing_timeout_s, so a row still DIALING past this is stranded.
     retry_stuck_dialing_s: int = Field(default=300, ge=120, le=3600, alias="RETRY_STUCK_DIALING_S")
     retry_poller_enabled: bool = Field(default=True, alias="RETRY_POLLER_ENABLED")
+
+    @field_validator(
+        "telnyx_caller_id",
+        "telnyx_sip_username",
+        "telnyx_sip_password",
+        "livekit_sip_outbound_trunk_id",
+        mode="before",
+    )
+    @classmethod
+    def _blank_to_none(cls, v: object) -> object:
+        # Compose passes unset optional vars as "" (e.g. ${VAR:-}); treat blank or
+        # whitespace-only values as unset so truthiness checks behave correctly.
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
     @field_validator("livekit_url")
     @classmethod

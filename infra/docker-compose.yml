@@ -176,8 +176,14 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       LIVEKIT_URL: ${LIVEKIT_URL}
-      LIVEKIT_SIP_OUTBOUND_TRUNK_ID: ${LIVEKIT_SIP_OUTBOUND_TRUNK_ID}
-      TELNYX_CALLER_ID: ${TELNYX_CALLER_ID}
+      # Outbound trunk: the API auto-provisions/reuses a trunk named
+      # usan-telnyx-outbound from the Telnyx SIP creds below. Pin
+      # LIVEKIT_SIP_OUTBOUND_TRUNK_ID only to override (blank = auto).
+      LIVEKIT_SIP_OUTBOUND_TRUNK_ID: ${LIVEKIT_SIP_OUTBOUND_TRUNK_ID:-}
+      TELNYX_CALLER_ID: ${TELNYX_CALLER_ID:-}
+      TELNYX_SIP_HOST: ${TELNYX_SIP_HOST:-sip.telnyx.com}
+      TELNYX_SIP_USERNAME: ${TELNYX_SIP_USERNAME:-}
+      TELNYX_SIP_PASSWORD: ${TELNYX_SIP_PASSWORD:-}
       AGENT_NAME: ${AGENT_NAME}
       LOG_LEVEL: ${LOG_LEVEL}
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}

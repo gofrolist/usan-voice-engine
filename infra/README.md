@@ -126,24 +126,27 @@ Outbound calls need a LiveKit **SIP outbound trunk** pointing at Telnyx, plus a
 caller-ID number. The agent worker is now **named** (`AGENT_NAME=usan-agent`), so
 both inbound (dispatch rule) and outbound (explicit dispatch) reference that name.
 
-### 1. Create the outbound trunk
+### 1. Outbound trunk (auto-provisioned)
 
-With the stack running and `infra/.env` populated (Telnyx SIP credentials + `TELNYX_CALLER_ID`):
+The API **auto-provisions** the outbound trunk on the first outbound dial: it
+reuses a trunk named `usan-telnyx-outbound` if one already exists, otherwise it
+creates one from the Telnyx SIP credentials in `infra/.env` (`TELNYX_SIP_USERNAME`,
+`TELNYX_SIP_PASSWORD`, `TELNYX_SIP_HOST`) with `TELNYX_CALLER_ID` as the number,
+then caches the resolved `ST_...` ID for the process lifetime. **No manual step
+and no `LIVEKIT_SIP_OUTBOUND_TRUNK_ID` are required — leave it blank.** Override
+the trunk name with `LIVEKIT_OUTBOUND_TRUNK_NAME` if desired.
+
+To **pin** a specific trunk instead (skipping auto-provisioning), create it
+manually and set its ID:
 
 ```bash
 set -a; . infra/.env; set +a
 envsubst < infra/livekit-sip-outbound-trunk.json > /tmp/outbound.json
-
 livekit-cli sip create-trunk \
   --url "$LIVEKIT_URL" --api-key "$LIVEKIT_API_KEY" --api-secret "$LIVEKIT_API_SECRET" \
   --file /tmp/outbound.json
-```
-
-Copy the returned trunk ID (`ST_...`) into `infra/.env` as `LIVEKIT_SIP_OUTBOUND_TRUNK_ID`,
-then recreate the `api` container so it picks up the new env:
-
-```bash
-make up   # or: docker compose --env-file infra/.env -f infra/docker-compose.yml up -d api
+# Copy the returned ST_... into infra/.env as LIVEKIT_SIP_OUTBOUND_TRUNK_ID, then
+# recreate api: docker compose --env-file infra/.env -f infra/docker-compose.yml up -d api
 ```
 
 ### 2. (Re)apply the inbound dispatch rule with the agent name

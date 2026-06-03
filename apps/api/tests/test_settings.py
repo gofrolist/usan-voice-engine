@@ -114,6 +114,44 @@ def test_outbound_fields_default_none_and_agent_name(monkeypatch):
     assert s.agent_name == "usan-agent"
 
 
+def test_outbound_autoprovision_fields_defaults(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+    monkeypatch.delenv("TELNYX_SIP_USERNAME", raising=False)
+    monkeypatch.delenv("TELNYX_SIP_PASSWORD", raising=False)
+    monkeypatch.delenv("TELNYX_SIP_HOST", raising=False)
+    monkeypatch.delenv("LIVEKIT_OUTBOUND_TRUNK_NAME", raising=False)
+
+    s = Settings()
+
+    assert s.telnyx_sip_username is None
+    assert s.telnyx_sip_password is None
+    assert s.telnyx_sip_host == "sip.telnyx.com"
+    assert s.livekit_outbound_trunk_name == "usan-telnyx-outbound"
+
+
+def test_outbound_autoprovision_fields_from_env(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+    monkeypatch.setenv("TELNYX_SIP_USERNAME", "user1")
+    monkeypatch.setenv("TELNYX_SIP_PASSWORD", "pass1")
+    monkeypatch.setenv("TELNYX_SIP_HOST", "sip.example.com")
+    monkeypatch.setenv("LIVEKIT_OUTBOUND_TRUNK_NAME", "custom-trunk")
+
+    s = Settings()
+
+    assert s.telnyx_sip_username == "user1"
+    assert s.telnyx_sip_password == "pass1"
+    assert s.telnyx_sip_host == "sip.example.com"
+    assert s.livekit_outbound_trunk_name == "custom-trunk"
+
+
 def test_outbound_dial_timeouts_have_defaults(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host/db")
     monkeypatch.setenv("LIVEKIT_API_KEY", "key")
