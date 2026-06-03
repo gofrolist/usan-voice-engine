@@ -191,7 +191,12 @@ async def _presigned_recording_url(
             expected_bucket=settings.gcs_bucket,
         )
     except Exception:
-        logger.bind(call_id=str(call.id)).warning("Failed to sign recording URL")
+        # Keep the silent-None fallback for the caller, but capture the traceback so
+        # operators can tell a bucket-mismatch/path rejection from a transient GCS or
+        # credential failure (this path was hardened with expected_bucket=).
+        logger.bind(call_id=str(call.id)).opt(exception=True).warning(
+            "Failed to sign recording URL"
+        )
         return None
     # Access log: every issued recording URL is audit-logged with the caller's host
     # (spec §10). The gs:// URI itself is PHI-adjacent, so it is omitted here.

@@ -21,9 +21,14 @@ def verify_livekit_webhook(body: str, auth_token: str, settings: Settings) -> ap
         api.TokenVerifier(settings.livekit_api_key, settings.livekit_api_secret)
     )
     event = receiver.receive(body, auth_token)
+    # Skip the age check only when there is genuinely no timestamp. ``> 0`` (not mere
+    # truthiness) is deliberate: the protobuf default and a never-set field are both 0,
+    # and a negative value is nonsensical — both should fail open on age, not raise.
     created_at = getattr(event, "created_at", 0)
-    if created_at and time.time() - created_at > settings.webhook_max_age_s:
-        raise WebhookReplayError(
-            f"webhook is {int(time.time() - created_at)}s old (max {settings.webhook_max_age_s}s)"
-        )
+    if created_at > 0:
+        age_s = time.time() - created_at
+        if age_s > settings.webhook_max_age_s:
+            raise WebhookReplayError(
+                f"webhook is {int(age_s)}s old (max {settings.webhook_max_age_s}s)"
+            )
     return event

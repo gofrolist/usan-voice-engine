@@ -1,6 +1,6 @@
 from functools import lru_cache
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from loguru import logger
 from pydantic import Field, SecretStr, ValidationError, field_validator
@@ -40,10 +40,11 @@ class Settings(BaseSettings):
     outbound_max_call_duration_s: int = Field(
         default=1800, ge=60, le=7200, alias="OUTBOUND_MAX_CALL_DURATION_S"
     )
-    jwt_signing_key: str = Field(..., min_length=32, alias="JWT_SIGNING_KEY")
+    jwt_signing_key: SecretStr = Field(..., min_length=32, alias="JWT_SIGNING_KEY")
     # Static bearer token guarding the operator/management plane (elders, DNC, and
-    # outbound call enqueue/lookup). Distinct from the agent's per-call JWTs.
-    operator_api_key: str = Field(..., min_length=16, alias="OPERATOR_API_KEY")
+    # outbound call enqueue/lookup). Distinct from the agent's per-call JWTs. Held as
+    # SecretStr so it is masked in repr()/model_dump()/tracebacks, never logged raw.
+    operator_api_key: SecretStr = Field(..., min_length=16, alias="OPERATOR_API_KEY")
     gcs_bucket: str | None = Field(default=None, alias="GCS_BUCKET")
     recording_signed_url_ttl_s: int = Field(
         default=3600, ge=60, le=3600, alias="RECORDING_SIGNED_URL_TTL_S"
@@ -111,16 +112,21 @@ class Settings(BaseSettings):
         return url
 
     def warn_if_db_tls_disabled(self) -> None:
-        """Warn (never fail) when a non-local DATABASE_URL has no sslmode.
+        """Warn (never fail) when a non-local DATABASE_URL has no TLS configured.
 
         Local/dev and the test container use plaintext loopback connections, so a
-        missing sslmode there is expected. For a remote host it means PHI could
-        cross the wire unencrypted — surface it loudly so operators notice.
+        missing TLS param there is expected. For a remote host it means PHI could
+        cross the wire unencrypted — surface it loudly so operators notice. Both the
+        libpq ``sslmode=`` and the asyncpg-native ``ssl=`` query params count as TLS
+        configured; parsing the query (not a substring scan) also avoids a false
+        positive when ``ssl`` appears in the password.
         """
         url = self.database_url.get_secret_value()
-        if "sslmode=" in url:
+        parts = urlsplit(url)
+        query = parse_qs(parts.query)
+        if "sslmode" in query or "ssl" in query:
             return
-        host = (urlsplit(url).hostname or "").lower()
+        host = (parts.hostname or "").lower()
         if host in _LOCAL_HOSTS:
             return
         logger.bind(db_host=host).warning(

@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.auth import require_operator_token
 from usan_api.db.session import get_db
 from usan_api.repositories import dnc as dnc_repo
+from usan_api.schemas._validators import E164_PATTERN, PHONE_MAX_LENGTH
 from usan_api.schemas.dnc import DNCCreate, DNCResponse
 
 router = APIRouter(prefix="/v1/dnc", tags=["dnc"])
@@ -29,7 +30,12 @@ async def add_dnc(body: DNCCreate, db: AsyncSession = Depends(get_db)) -> DNCRes
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_operator_token)],
 )
-async def remove_dnc(phone_e164: str, db: AsyncSession = Depends(get_db)) -> None:
+async def remove_dnc(
+    phone_e164: str = Path(min_length=1, max_length=PHONE_MAX_LENGTH, pattern=E164_PATTERN),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    # Validate the path param to the same E.164 contract as the POST body, so a
+    # malformed/oversized id is rejected (422) before it reaches the repository.
     removed = await dnc_repo.remove_entry(db, phone_e164)
     if not removed:
         raise HTTPException(status_code=404, detail="not on DNC list")

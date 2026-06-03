@@ -37,7 +37,12 @@ async def livekit_webhook(
     try:
         event = livekit_webhooks.verify_livekit_webhook(body, auth, settings)
     except livekit_webhooks.WebhookReplayError as exc:
-        raise HTTPException(status_code=400, detail="webhook too old") from exc
+        # A replayed (signature-valid but stale) delivery. Surface it as 401 — the
+        # SAME status as a forged signature — so the response cannot be used as an
+        # oracle distinguishing a genuine-but-stale payload from an invalid one. The
+        # distinct exception type is kept only for this internal log line.
+        logger.warning("Rejected replayed (stale) LiveKit webhook: {reason}", reason=str(exc))
+        raise HTTPException(status_code=401, detail="invalid webhook signature") from exc
     except Exception as exc:  # invalid signature / hash mismatch / malformed
         raise HTTPException(status_code=401, detail="invalid webhook signature") from exc
 

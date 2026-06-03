@@ -82,6 +82,24 @@ async def test_purge_scrubs_dynamic_vars_on_terminal_calls(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_purge_nulls_recording_uri_on_terminal_calls(session_factory):
+    # A terminal call whose only remaining PHI is the recording URI must still be
+    # scrubbed, so GET /calls/{id} can no longer mint a signed URL for the audio.
+    call_id = await _seed_call(session_factory, status=CallStatus.COMPLETED, dynamic_vars={})
+    async with session_factory() as db:
+        row = await db.get(Call, call_id)
+        row.recording_uri = "gs://bkt/recordings/2099-01-01/x.ogg"
+        await db.commit()
+    async with session_factory() as db:
+        _, scrubbed = await retention.purge_expired(db, days=30, now=_FUTURE)
+        await db.commit()
+    assert scrubbed == 1
+    async with session_factory() as db:
+        row = await db.get(Call, call_id)
+    assert row.recording_uri is None
+
+
+@pytest.mark.asyncio
 async def test_purge_leaves_non_terminal_calls_untouched(session_factory):
     call_id = await _seed_call(
         session_factory, status=CallStatus.IN_PROGRESS, dynamic_vars={"elder_name": "Ada"}

@@ -205,7 +205,7 @@ def test_jwt_signing_key_loads(monkeypatch):
 
     s = Settings()
 
-    assert s.jwt_signing_key == "s" * 32
+    assert s.jwt_signing_key.get_secret_value() == "s" * 32
 
 
 def test_retry_settings_defaults(monkeypatch):
@@ -388,6 +388,21 @@ def test_db_tls_no_warning_for_local_or_sslmode(monkeypatch):
     try:
         local.warn_if_db_tls_disabled()
         remote_tls.warn_if_db_tls_disabled()
+    finally:
+        logger.remove(handler_id)
+    assert not any("sslmode" in m for m in messages)
+
+
+def test_db_tls_no_warning_for_asyncpg_ssl_param(monkeypatch):
+    # asyncpg-native TLS uses ?ssl=require (not libpq's sslmode=); it must not trip
+    # the PHI-in-transit warning, or operators learn to ignore a real one.
+    _base_env(monkeypatch)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@db.example.com:5432/d?ssl=require")
+    s = Settings()
+    messages: list[str] = []
+    handler_id = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
+    try:
+        s.warn_if_db_tls_disabled()
     finally:
         logger.remove(handler_id)
     assert not any("sslmode" in m for m in messages)

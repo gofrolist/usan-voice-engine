@@ -56,18 +56,17 @@ def _signing_creds() -> google.auth.credentials.Credentials:
         return _signing_credentials
 
 
-def generate_signed_url(
-    gs_uri: str, ttl_seconds: int, *, expected_bucket: str | None = None
-) -> str:
+def generate_signed_url(gs_uri: str, ttl_seconds: int, *, expected_bucket: str) -> str:
     """Return a V4 signed GET URL for a gs:// object, signed keylessly via IAM signBlob.
 
     The signBlob call is unavoidably per-URL (keyless V4 signing); the ADC refresh it
-    needs is cached across requests (see _signing_creds). When ``expected_bucket`` is
-    given, the parsed bucket must match it — fail closed rather than sign a URL for an
-    object in some other (attacker-influenced) bucket.
+    needs is cached across requests (see _signing_creds). ``expected_bucket`` is
+    required: the parsed bucket must match it — fail closed rather than sign a URL for
+    an object in some other (attacker-influenced) bucket. Making it mandatory (no
+    default) means a future caller cannot silently skip the confinement check.
     """
     bucket_name, blob_name = _parse_gs_uri(gs_uri)
-    if expected_bucket is not None and bucket_name != expected_bucket:
+    if bucket_name != expected_bucket:
         raise ValueError(
             f"gs:// bucket {bucket_name!r} does not match expected {expected_bucket!r}"
         )

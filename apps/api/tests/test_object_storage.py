@@ -73,7 +73,9 @@ def test_generate_signed_url_keyless(monkeypatch):
     monkeypatch.setattr(object_storage.google.auth, "default", lambda scopes=None: (creds, "proj"))
     _stub_storage(monkeypatch, captured)
 
-    url = object_storage.generate_signed_url("gs://b/recordings/2026-06-02/x.ogg", 3600)
+    url = object_storage.generate_signed_url(
+        "gs://b/recordings/2026-06-02/x.ogg", 3600, expected_bucket="b"
+    )
 
     assert url == "https://signed.example/url"
     assert captured["bucket"] == "b"
@@ -141,8 +143,8 @@ def test_signing_credentials_are_cached(monkeypatch):
     monkeypatch.setattr(object_storage.google.auth, "default", _default)
     _stub_storage(monkeypatch, {})
 
-    object_storage.generate_signed_url("gs://b/a.ogg", 3600)
-    object_storage.generate_signed_url("gs://b/c.ogg", 3600)
+    object_storage.generate_signed_url("gs://b/a.ogg", 3600, expected_bucket="b")
+    object_storage.generate_signed_url("gs://b/c.ogg", 3600, expected_bucket="b")
 
     assert default_calls == [1]  # ADC fetched once, then cached
     assert refresh_calls == [1]  # refreshed once; the warm second call sees valid creds
