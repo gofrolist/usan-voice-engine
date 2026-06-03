@@ -132,9 +132,9 @@ resource "google_compute_firewall" "media" {
   target_tags   = ["usan"]
 }
 
-# SIP signaling (udp/5060) split out so it can be restricted to Telnyx's
-# published signaling CIDRs. Defaults to 0.0.0.0/0 to preserve current
-# behavior; set var.telnyx_sip_signaling_source_ranges to lock it down.
+# SIP signaling (udp/5060) split out so it is restricted to Telnyx's published
+# signaling CIDRs. var.telnyx_sip_signaling_source_ranges is REQUIRED (no
+# default), forcing an explicit allowlist rather than a silent world-open port.
 resource "google_compute_firewall" "sip" {
   name      = "usan-allow-sip"
   network   = "default"
