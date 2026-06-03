@@ -146,3 +146,48 @@ async def test_start_inbound_call_returns_none_on_error(monkeypatch):
     monkeypatch.setattr(api_client.httpx, "AsyncClient", _BoomClient)
     result = await api_client.start_inbound_call(None, "usan-inbound-2", _settings())
     assert result is None  # best-effort: worker falls back to greet-only
+
+
+@pytest.mark.parametrize(
+    "call_id",
+    [
+        "../../v1/calls/secret",  # path traversal
+        "call 1",  # space
+        "call/1",  # slash
+        "",  # empty
+        "a" * 65,  # too long
+        "call?x=1",  # query injection
+    ],
+)
+async def test_post_tool_rejects_malformed_call_id(call_id):
+    # A non-UUID-shaped call_id must be rejected before it reaches a URL path.
+    with pytest.raises(ValueError, match="call_id"):
+        await api_client.report_end_call(call_id, _settings(), "x")
+
+
+@pytest.mark.parametrize("call_id", ["abc-123_DEF", "a", "a" * 64])
+def test_validate_call_id_accepts_uuid_shape(call_id):
+    assert api_client._validate_call_id(call_id) == call_id
+
+
+async def test_report_voicemail_left_swallows_bad_call_id(monkeypatch):
+    # The best-effort contract must hold even for a malformed call_id: never raise.
+    called = {"n": 0}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            called["n"] += 1
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            raise AssertionError("must not POST a malformed call_id")
+
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _Client)
+    await api_client.report_voicemail_left("bad id", _settings())
+    assert called["n"] == 0  # validation failed closed before any network call

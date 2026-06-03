@@ -5,6 +5,7 @@ token so the API can both authenticate the agent and confirm the token is scoped
 to the call being mutated.
 """
 
+import re
 import time
 from typing import Any, cast
 
@@ -15,6 +16,17 @@ from loguru import logger
 from usan_agent.settings import Settings
 
 _TOKEN_TTL_S = 300
+
+# call_id is a server-issued UUID; reject anything else before it reaches a URL
+# path, both as defense-in-depth against path traversal/SSRF and to fail closed on
+# a malformed id rather than emitting a garbled request.
+_CALL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _validate_call_id(call_id: str) -> str:
+    if not isinstance(call_id, str) or not _CALL_ID_RE.fullmatch(call_id):
+        raise ValueError("call_id must match ^[A-Za-z0-9_-]{1,64}$")
+    return call_id
 
 
 def _mint_token(call_id: str, settings: Settings) -> str:
@@ -28,9 +40,10 @@ def _mint_token(call_id: str, settings: Settings) -> str:
 
 async def report_voicemail_left(call_id: str, settings: Settings) -> None:
     """Best-effort report that a call reached voicemail. Never raises."""
-    url = f"{settings.api_base_url}/v1/calls/{call_id}/outcome"
-    headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
     try:
+        call_id = _validate_call_id(call_id)
+        url = f"{settings.api_base_url}/v1/calls/{call_id}/outcome"
+        headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(url, json={"outcome": "voicemail_left"}, headers=headers)
             response.raise_for_status()
@@ -44,9 +57,10 @@ async def _post_tool(
 ) -> dict[str, Any]:
     """POST a JWT-scoped tool request to the API and return the parsed JSON.
 
-    Raises httpx.HTTPStatusError on a non-2xx response; callers decide how to
-    surface that to the conversation.
+    Raises ValueError on a malformed call_id and httpx.HTTPStatusError on a
+    non-2xx response; callers decide how to surface that to the conversation.
     """
+    call_id = _validate_call_id(call_id)
     url = f"{settings.api_base_url}/v1/tools/{tool}"
     headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -101,9 +115,10 @@ async def flush_transcript(
     call_id: str, settings: Settings, segments: list[dict[str, Any]]
 ) -> None:
     """Best-effort: POST the call's transcript segments at call end. Never raises."""
-    url = f"{settings.api_base_url}/v1/tools/log_transcript"
-    headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
     try:
+        call_id = _validate_call_id(call_id)
+        url = f"{settings.api_base_url}/v1/tools/log_transcript"
+        headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
                 url, json={"call_id": call_id, "segments": segments}, headers=headers

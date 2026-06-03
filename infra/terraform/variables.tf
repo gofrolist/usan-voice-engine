@@ -43,6 +43,20 @@ variable "operator_ssh_cidr" {
   description = "CIDR allowed to reach SSH (port 22). Restrict to your IP, e.g. 203.0.113.4/32. Do NOT use 0.0.0.0/0."
 }
 
+variable "telnyx_sip_signaling_source_ranges" {
+  type = list(string)
+  # REQUIRED (no default): the operator must explicitly choose who may reach SIP
+  # signaling (udp/5060) rather than silently leaving it open to the world.
+  # Set to Telnyx's CURRENT published SIP signaling CIDRs — verify at
+  # https://sip.telnyx.com, which Telnyx rotates/expands and also publishes as a
+  # machine-readable JSON feed. As of 2026-06 the published signaling ranges were:
+  # 36.255.198.128/25, 50.114.136.128/25, 50.114.144.0/21, 64.16.226.0/24,
+  # 64.16.227.0/24, 64.16.228.0/24, 64.16.229.0/24, 64.16.230.0/24, 64.16.248.0/24,
+  # 64.16.249.0/24, 103.115.244.128/25, 103.115.247.128/27, 185.246.41.128/25,
+  # 185.246.42.128/28. Pass ["0.0.0.0/0"] only to deliberately accept a world-open port.
+  description = "Source CIDRs allowed to reach SIP signaling (udp/5060). REQUIRED; set to Telnyx's current published signaling CIDRs (see https://sip.telnyx.com). Wrong/stale values silently break inbound calls."
+}
+
 variable "secret_name" {
   type        = string
   description = "GCP Secret Manager secret holding the production .env file contents."
@@ -51,8 +65,7 @@ variable "secret_name" {
 
 variable "image_tag" {
   type        = string
-  description = "Container image tag the VM should pull on first boot (passed into the startup script)."
-  default     = "latest"
+  description = "Container image tag the VM should pull on first boot (passed into the startup script). Must be an explicit immutable tag; no 'latest' fallback."
 }
 
 variable "recordings_bucket" {
@@ -70,4 +83,10 @@ variable "recording_retention_days" {
   type        = number
   description = "Age in days after which a recording is permanently deleted."
   default     = 365
+}
+
+variable "recording_noncurrent_retention_days" {
+  type        = number
+  description = "Days a noncurrent (superseded/deleted) object version is retained before permanent deletion, bounding versioning storage growth."
+  default     = 30
 }

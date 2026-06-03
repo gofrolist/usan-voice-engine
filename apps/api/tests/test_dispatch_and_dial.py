@@ -24,6 +24,7 @@ def _settings(**overrides) -> Settings:
         "LIVEKIT_SIP_OUTBOUND_TRUNK_ID": "ST_x",
         "TELNYX_CALLER_ID": "+15551230000",
         "JWT_SIGNING_KEY": "s" * 32,
+        "OPERATOR_API_KEY": "o" * 32,
     }
     base.update(overrides)
     return Settings(**base)

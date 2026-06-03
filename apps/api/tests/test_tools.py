@@ -6,6 +6,9 @@ import pytest
 
 from usan_api import livekit_dispatch
 
+# Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
+_OP = {"Authorization": "Bearer " + "o" * 32}
+
 
 @pytest.fixture
 def mock_dispatch(monkeypatch):
@@ -35,6 +38,7 @@ def _create_elder(client, *, metadata: dict | None = None) -> str:
             "timezone": "UTC",
             "metadata": metadata or {},
         },
+        headers=_OP,
     )
     assert r.status_code == 201
     return r.json()["id"]
@@ -44,6 +48,7 @@ def _enqueue(client, elder_id: str) -> str:
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": f"tool-{uuid.uuid4()}", "dynamic_vars": {}},
+        headers=_OP,
     )
     assert r.status_code == 202
     return r.json()["id"]

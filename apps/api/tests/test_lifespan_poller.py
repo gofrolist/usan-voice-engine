@@ -16,6 +16,7 @@ def _set_env(monkeypatch):
     monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
     monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+    monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
 
 
 @pytest.fixture(autouse=True)

@@ -10,6 +10,9 @@ from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.settings import get_settings
 
+# Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
+_OP = {"Authorization": "Bearer " + "o" * 32}
+
 
 async def _seed(async_database_url: str, room: str, *, recording_uri=None) -> uuid.UUID:
     engine = create_async_engine(async_database_url, poolclass=NullPool)
@@ -35,7 +38,7 @@ async def _seed(async_database_url: str, room: str, *, recording_uri=None) -> uu
 
 def test_get_call_without_recording_has_no_presigned_url(client, async_database_url):
     call_id = asyncio.run(_seed(async_database_url, "usan-outbound-norec"))
-    body = client.get(f"/v1/calls/{call_id}").json()
+    body = client.get(f"/v1/calls/{call_id}", headers=_OP).json()
     assert body["recording_uri"] is None
     assert body["presigned_recording_url"] is None
     assert body["egress_id"] is None
@@ -49,9 +52,9 @@ def test_get_call_with_recording_returns_signed_url(client, async_database_url, 
     monkeypatch.setattr(
         object_storage,
         "generate_signed_url",
-        lambda gs_uri, ttl: f"https://signed.example/{gs_uri}",
+        lambda gs_uri, ttl, *, expected_bucket=None: f"https://signed.example/{gs_uri}",
     )
-    body = client.get(f"/v1/calls/{call_id}").json()
+    body = client.get(f"/v1/calls/{call_id}", headers=_OP).json()
     assert body["recording_uri"] == uri
     assert body["presigned_recording_url"] == f"https://signed.example/{uri}"
 
@@ -64,11 +67,11 @@ def test_get_call_signing_error_returns_200_with_null_url(client, async_database
     monkeypatch.setenv("GCS_BUCKET", "test-bucket")
     get_settings.cache_clear()
 
-    def _boom(gs_uri, ttl):
+    def _boom(gs_uri, ttl, *, expected_bucket=None):
         raise RuntimeError("signBlob unavailable")
 
     monkeypatch.setattr(object_storage, "generate_signed_url", _boom)
-    response = client.get(f"/v1/calls/{call_id}")
+    response = client.get(f"/v1/calls/{call_id}", headers=_OP)
     assert response.status_code == 200
     body = response.json()
     assert body["recording_uri"] == uri

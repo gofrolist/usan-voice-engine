@@ -197,6 +197,7 @@ def _settings(**overrides) -> Settings:
         "LIVEKIT_API_SECRET": "a" * 32,
         "LIVEKIT_URL": "ws://livekit:7880",
         "JWT_SIGNING_KEY": "s" * 32,
+        "OPERATOR_API_KEY": "o" * 32,
     }
     base.update(overrides)
     return Settings(**base)

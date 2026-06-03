@@ -6,6 +6,12 @@ resource "google_storage_bucket" "recordings" {
   public_access_prevention    = "enforced"
   force_destroy               = false
 
+  # Retain prior generations of any overwritten/deleted recording (accidental or
+  # malicious clobber recovery on PHI); noncurrent versions are reaped below.
+  versioning {
+    enabled = true
+  }
+
   # Cheaper cold storage after a month, then delete past the retention window (spec §9).
   lifecycle_rule {
     condition {
@@ -25,13 +31,32 @@ resource "google_storage_bucket" "recordings" {
       type = "Delete"
     }
   }
+
+  # Bound noncurrent-version accumulation so versioning doesn't grow storage forever.
+  lifecycle_rule {
+    condition {
+      days_since_noncurrent_time = var.recording_noncurrent_retention_days
+    }
+    action {
+      type = "Delete"
+    }
+  }
 }
 
-# Egress (on the VM, via ADC) creates objects; the API (same SA) reads them to sign.
-# objectAdmin covers create + get for both roles in one binding.
-resource "google_storage_bucket_iam_member" "vm_recordings" {
+# Least-privilege split of the former objectAdmin grant (spec §9):
+# the API (same SA) only needs to GET objects to sign V4 read URLs...
+resource "google_storage_bucket_iam_member" "vm_recordings_read" {
   bucket = google_storage_bucket.recordings.name
-  role   = "roles/storage.objectAdmin"
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.vm.email}"
+}
+
+# ...and Egress (on the VM, via ADC) only needs to CREATE recording objects.
+# objectCreator grants create without delete/overwrite, so it cannot clobber
+# existing recordings.
+resource "google_storage_bucket_iam_member" "vm_recordings_write" {
+  bucket = google_storage_bucket.recordings.name
+  role   = "roles/storage.objectCreator"
   member = "serviceAccount:${google_service_account.vm.email}"
 }
 

@@ -5,11 +5,12 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from usan_api import background, retry_orchestrator
+from usan_api import background, retention, retry_orchestrator
 from usan_api.db.session import dispose_engine
 from usan_api.logging_config import configure_logging
+from usan_api.ratelimit import OperatorRateLimitMiddleware
 from usan_api.routers import calls, dnc, elders, tools, webhooks
-from usan_api.settings import get_settings
+from usan_api.settings import Settings, get_settings
 
 
 class HealthResponse(BaseModel):
@@ -20,17 +21,20 @@ class HealthResponse(BaseModel):
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     stop = asyncio.Event()
-    poller_task: asyncio.Task[None] | None = None
+    poller_tasks: list[asyncio.Task[None]] = []
     if settings.retry_poller_enabled:
-        poller_task = asyncio.create_task(retry_orchestrator.run_poller(settings, stop))
+        poller_tasks.append(asyncio.create_task(retry_orchestrator.run_poller(settings, stop)))
+    if settings.phi_retention_days is not None:
+        poller_tasks.append(asyncio.create_task(retention.run_poller(settings, stop)))
     try:
         yield
     finally:
         stop.set()
-        if poller_task is not None:
-            poller_task.cancel()
+        for task in poller_tasks:
+            task.cancel()
+        for task in poller_tasks:
             with suppress(asyncio.CancelledError):
-                await poller_task
+                await task
         # Drain longer than the longest blocking dial (ringing timeout) so an
         # in-flight dial finishes and writes its outcome before the engine closes;
         # otherwise it would write against a disposed engine and stick at 'dialing'.
@@ -39,11 +43,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await dispose_engine()
 
 
+def _install_rate_limiting(app: FastAPI, settings: Settings) -> None:
+    """Throttle the operator/management plane per client, before authentication.
+
+    Internal service/webhook/health routes are never matched (see
+    usan_api.ratelimit). A no-op when RATE_LIMIT_ENABLED is false.
+    """
+    app.add_middleware(
+        OperatorRateLimitMiddleware,
+        limit=settings.rate_limit_default,
+        enabled=settings.rate_limit_enabled,
+    )
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
 
-    app = FastAPI(title="USAN Voice Engine API", version="0.1.0", lifespan=lifespan)
+    # Secure by default: no OpenAPI schema or docs UIs unless DOCS_ENABLED is set.
+    docs_url = "/docs" if settings.docs_enabled else None
+    redoc_url = "/redoc" if settings.docs_enabled else None
+    openapi_url = "/openapi.json" if settings.docs_enabled else None
+
+    app = FastAPI(
+        title="USAN Voice Engine API",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url=docs_url,
+        redoc_url=redoc_url,
+        openapi_url=openapi_url,
+    )
+    _install_rate_limiting(app, settings)
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:

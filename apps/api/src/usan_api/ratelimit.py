@@ -1,0 +1,68 @@
+"""Pre-auth, per-client rate limiting for the operator/management plane.
+
+A small ASGI middleware throttles only the externally reachable operator routes
+(elders, DNC, outbound call enqueue/lookup) — BEFORE authentication, so an
+unauthenticated flood is bounded too. Internal service routes (agent /v1/tools/*,
+the inbound/outcome call hooks, LiveKit webhooks, and /health) are never matched,
+so a busy call pipeline driving them from a few container IPs is never throttled.
+
+State is a single in-memory fixed-window counter, so the configured limit is
+per-process. That is correct for the current single-uvicorn-worker, single-API-
+container deployment; move to a shared backend (e.g. Redis via limits' storage)
+if the API is ever scaled horizontally.
+
+Behind Caddy the real client arrives in X-Forwarded-For (Caddy overwrites it with
+the direct peer — see infra/Caddyfile), so we key on its first hop, not the proxy.
+"""
+
+from limits import parse
+from limits.storage import MemoryStorage
+from limits.strategies import FixedWindowRateLimiter
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+
+def _client_key(request: Request) -> str:
+    """The real client IP: the X-Forwarded-For first hop behind Caddy, else the peer."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _is_operator_route(method: str, path: str) -> bool:
+    """True only for the six externally reachable operator/management endpoints.
+
+    The internal /v1/calls routes (POST /inbound, POST /{id}/outcome) and every
+    /v1/tools/*, /webhooks/*, and /health path fall through unthrottled.
+    """
+    if path.startswith("/v1/elders") or path.startswith("/v1/dnc"):
+        return True
+    if path == "/v1/calls" and method == "POST":  # enqueue_call
+        return True
+    # get_call: GET on a specific call; excludes POST /inbound and /{id}/outcome.
+    return path.startswith("/v1/calls/") and method == "GET"
+
+
+class OperatorRateLimitMiddleware:
+    """Fixed-window per-client throttle on the operator plane; no-op when disabled."""
+
+    def __init__(self, app: ASGIApp, *, limit: str, enabled: bool) -> None:
+        self.app = app
+        self.enabled = enabled
+        self._limiter = FixedWindowRateLimiter(MemoryStorage())
+        self._limit = parse(limit)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not self.enabled:
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope)
+        if _is_operator_route(request.method, request.url.path) and not self._limiter.hit(
+            self._limit, "operator", _client_key(request)
+        ):
+            response = JSONResponse({"detail": "rate limit exceeded"}, status_code=429)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)

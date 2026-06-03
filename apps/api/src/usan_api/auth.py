@@ -1,3 +1,4 @@
+import hmac
 from typing import Any
 
 import jwt
@@ -7,6 +8,24 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from usan_api.settings import Settings, get_settings
 
 _bearer = HTTPBearer(auto_error=False)
+
+
+def require_operator_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    """Authenticate an operator on the management plane via a static bearer token.
+
+    Guards human/back-office routes (elders, DNC, outbound enqueue/lookup). The
+    presented token is compared to OPERATOR_API_KEY in constant time. The mismatch
+    message is deliberately generic so it leaks nothing about why it failed.
+    """
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token")
+    if not hmac.compare_digest(credentials.credentials, settings.operator_api_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid operator token"
+        )
 
 
 def require_service_token(

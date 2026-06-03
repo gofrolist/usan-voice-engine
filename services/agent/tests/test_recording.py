@@ -36,7 +36,8 @@ def settings_no_bucket(monkeypatch):
 
 def test_recording_filepath_format():
     fixed = datetime.datetime(2026, 6, 2, 15, 0, tzinfo=datetime.UTC)
-    assert recording.recording_filepath("abc-123", now=fixed) == "recordings/2026-06-02/abc-123.ogg"
+    out = recording.recording_filepath("abc-123", now=fixed, token="deadbeef")
+    assert out == "recordings/2026-06-02/abc-123-deadbeef.ogg"
 
 
 def test_http_url_converts_ws_scheme():
@@ -82,7 +83,9 @@ async def test_start_call_recording_builds_audio_only_ogg_request(
     out = req.file_outputs[0]
     assert out.file_type == recording.api.EncodedFileType.OGG
     assert out.filepath.startswith("recordings/")
-    assert out.filepath.endswith("/call-9.ogg")
+    # unique per-attempt token suffix keeps the key non-overwriting (objectCreator-safe)
+    assert "/call-9-" in out.filepath
+    assert out.filepath.endswith(".ogg")
     assert out.gcp.bucket == "usan-rec"
     assert out.gcp.credentials == ""
 

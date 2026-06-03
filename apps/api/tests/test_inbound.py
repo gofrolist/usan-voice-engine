@@ -4,6 +4,8 @@ import uuid
 import jwt
 
 SECRET = "s" * 32
+# Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
+_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 def _worker_token(secret: str = SECRET) -> str:
@@ -30,6 +32,7 @@ def _create_elder(client, phone: str) -> str:
     r = client.post(
         "/v1/elders",
         json={"name": "Ada", "phone_e164": phone, "timezone": "UTC", "metadata": {}},
+        headers=_OP,
     )
     assert r.status_code == 201
     return r.json()["id"]
@@ -51,7 +54,7 @@ def test_inbound_known_elder_creates_call_and_returns_vars(client):
     data = r.json()
     assert data["elder_known"] is True
     assert data["dynamic_vars"]["elder_name"] == "Ada"
-    call = client.get(f"/v1/calls/{data['call_id']}").json()
+    call = client.get(f"/v1/calls/{data['call_id']}", headers=_OP).json()
     assert call["direction"] == "inbound"
     assert call["status"] == "in_progress"
     assert call["elder_id"] == elder_id
@@ -67,7 +70,7 @@ def test_inbound_unknown_caller_creates_call_without_elder(client):
     data = r.json()
     assert data["elder_known"] is False
     assert data["dynamic_vars"] == {}
-    call = client.get(f"/v1/calls/{data['call_id']}").json()
+    call = client.get(f"/v1/calls/{data['call_id']}", headers=_OP).json()
     assert call["direction"] == "inbound"
     assert call["elder_id"] is None
 

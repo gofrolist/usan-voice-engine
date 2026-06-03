@@ -69,7 +69,21 @@ def build_agent() -> Agent:
     )
 
 
-async def greet(session: AgentSession[Any]) -> None:
-    """Speak the recording disclosure (spec §10), then the opening greeting."""
+async def say_recording_disclosure(session: AgentSession[Any]) -> None:
+    """Speak the non-interruptible recording disclosure (spec §10) to completion.
+
+    Awaiting this before starting egress guarantees the consent notice is heard
+    before any audio is captured.
+    """
     await session.say(RECORDING_DISCLOSURE, allow_interruptions=False, add_to_chat_ctx=False)
+
+
+async def greet(session: AgentSession[Any], *, include_disclosure: bool = True) -> None:
+    """Speak the recording disclosure (spec §10), then the opening greeting.
+
+    ``include_disclosure=False`` skips the disclosure when the caller has split it
+    out to gate egress on consent (outbound), so it is never spoken twice.
+    """
+    if include_disclosure:
+        await say_recording_disclosure(session)
     await session.say(GREETING, allow_interruptions=True)

@@ -8,6 +8,7 @@ stop on hangup (the agent already deletes the room).
 """
 
 import datetime
+import uuid
 from typing import Any, cast
 
 from livekit import api
@@ -24,10 +25,20 @@ def _http_url(ws_url: str) -> str:
     return ws_url
 
 
-def recording_filepath(call_id: str, *, now: datetime.datetime | None = None) -> str:
-    """The GCS object key for a call's recording: recordings/YYYY-MM-DD/<call_id>.ogg."""
+def recording_filepath(
+    call_id: str, *, now: datetime.datetime | None = None, token: str | None = None
+) -> str:
+    """The GCS object key: recordings/YYYY-MM-DD/<call_id>-<token>.ogg.
+
+    The per-attempt random token keeps the key unique so a restarted egress never
+    overwrites an existing object — the write SA holds only objectCreator (create,
+    not overwrite), so a same-key collision would otherwise 403 and silently drop
+    the PHI recording. The API learns the real key from the egress webhook, so a
+    unique name here is safe.
+    """
     day = (now or datetime.datetime.now(datetime.UTC)).strftime("%Y-%m-%d")
-    return f"recordings/{day}/{call_id}.ogg"
+    suffix = token or uuid.uuid4().hex[:8]
+    return f"recordings/{day}/{call_id}-{suffix}.ogg"
 
 
 async def start_call_recording(ctx: Any, call_id: str, settings: Settings) -> str | None:

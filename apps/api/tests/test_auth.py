@@ -5,10 +5,11 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from usan_api.auth import require_service_token, require_worker_token
+from usan_api.auth import require_operator_token, require_service_token, require_worker_token
 from usan_api.settings import get_settings
 
 SECRET = "s" * 32
+OPERATOR_KEY = "o" * 32
 
 
 def _app() -> FastAPI:
@@ -22,6 +23,10 @@ def _app() -> FastAPI:
     def worker(claims: dict = Depends(require_worker_token)) -> dict:
         return {"sub": claims.get("sub")}
 
+    @app.get("/operator")
+    def operator(_: None = Depends(require_operator_token)) -> dict:
+        return {"ok": True}
+
     return app
 
 
@@ -32,6 +37,7 @@ def auth_client(monkeypatch) -> TestClient:
     monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
     monkeypatch.setenv("JWT_SIGNING_KEY", SECRET)
+    monkeypatch.setenv("OPERATOR_API_KEY", OPERATOR_KEY)
     get_settings.cache_clear()
     try:
         yield TestClient(_app())
@@ -108,3 +114,22 @@ def test_worker_token_accepts_call_scoped_token(auth_client):
     # A call-scoped token (with call_id) is also valid — we only require exp.
     r = auth_client.get("/worker", headers={"Authorization": f"Bearer {_token()}"})
     assert r.status_code == 200
+
+
+def test_operator_token_accepted(auth_client):
+    r = auth_client.get("/operator", headers={"Authorization": f"Bearer {OPERATOR_KEY}"})
+    assert r.status_code == 200
+
+
+def test_operator_token_missing_401(auth_client):
+    assert auth_client.get("/operator").status_code == 401
+
+
+def test_operator_token_wrong_key_401(auth_client):
+    r = auth_client.get("/operator", headers={"Authorization": "Bearer " + "x" * 32})
+    assert r.status_code == 401
+
+
+def test_operator_token_non_bearer_scheme_401(auth_client):
+    r = auth_client.get("/operator", headers={"Authorization": f"Basic {OPERATOR_KEY}"})
+    assert r.status_code == 401

@@ -16,6 +16,9 @@ from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.routers.webhooks import _recording_uri
 
+# Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
+_OP = {"Authorization": "Bearer " + "o" * 32}
+
 
 def _sign(body: str, key: str, secret: str) -> str:
     digest = base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
@@ -24,8 +27,9 @@ def _sign(body: str, key: str, secret: str) -> str:
     return jwt.encode(claims, secret, algorithm="HS256")
 
 
-def _event(event: str, room: str) -> str:
-    return json.dumps({"event": event, "room": {"name": room}, "id": "ev1", "createdAt": 1})
+def _event(event: str, room: str, *, created_at: int | None = None) -> str:
+    when = int(time.time()) if created_at is None else created_at
+    return json.dumps({"event": event, "room": {"name": room}, "id": "ev1", "createdAt": when})
 
 
 async def _seed_call(async_database_url, room, *, status, answered=False):
@@ -63,7 +67,7 @@ def test_livekit_webhook_room_finished_completes_call(client, async_database_url
         headers={"Authorization": token, "Content-Type": "application/webhook+json"},
     )
     assert r.status_code == 200
-    follow = client.get(f"/v1/calls/{call_id}")
+    follow = client.get(f"/v1/calls/{call_id}", headers=_OP)
     assert follow.json()["status"] == "completed"
 
 
@@ -76,7 +80,7 @@ def test_livekit_webhook_does_not_complete_terminal_call(client, async_database_
     token = _sign(body, "key", "a" * 32)
     r = client.post("/webhooks/livekit", content=body, headers={"Authorization": token})
     assert r.status_code == 200
-    follow = client.get(f"/v1/calls/{call_id}")
+    follow = client.get(f"/v1/calls/{call_id}", headers=_OP)
     assert follow.json()["status"] == "no_answer"
 
 
@@ -95,6 +99,14 @@ def test_livekit_webhook_unknown_event_ignored(client):
     token = _sign(body, "key", "a" * 32)
     r = client.post("/webhooks/livekit", content=body, headers={"Authorization": token})
     assert r.status_code == 200
+
+
+def test_livekit_webhook_stale_event_rejected(client):
+    # A signature-valid but ancient (replayed) delivery is rejected with 400.
+    body = _event("room_finished", "usan-outbound-stale", created_at=1)
+    token = _sign(body, "key", "a" * 32)
+    r = client.post("/webhooks/livekit", content=body, headers={"Authorization": token})
+    assert r.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +164,9 @@ def _egress_event(
     info = {"egressId": egress_id, "roomName": room, "status": status}
     if event == "egress_ended":
         info["fileResults"] = [{"filename": filename, "location": location}]
-    return json.dumps({"event": event, "egressInfo": info, "id": "ev1", "createdAt": 1})
+    return json.dumps(
+        {"event": event, "egressInfo": info, "id": "ev1", "createdAt": int(time.time())}
+    )
 
 
 async def _read_call(async_database_url, call_id):

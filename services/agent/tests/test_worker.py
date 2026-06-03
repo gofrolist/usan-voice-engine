@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from usan_agent import worker
+from usan_agent.pipeline import RECORDING_DISCLOSURE
 from usan_agent.voicemail import VoicemailWatcher
 from usan_agent.worker import CallMetadata, parse_metadata
 
@@ -49,7 +50,7 @@ async def test_run_detection_window_triggers_voicemail(monkeypatch):
     ctx = MagicMock()
     greeted = []
 
-    async def _greet(_s):
+    async def _greet(_s, *, include_disclosure=True):
         greeted.append(True)
 
     monkeypatch.setattr(worker, "greet", _greet)
@@ -104,6 +105,7 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
         captured["userdata"] = userdata
         session = MagicMock()
         session.start = AsyncMock()
+        session.say = AsyncMock()
         session.on = MagicMock()
         captured["session"] = session
         return session
@@ -148,6 +150,7 @@ async def test_outbound_registers_transcript_flush(monkeypatch):
     def _fake_build_session(settings, userdata=None):
         session = MagicMock()
         session.start = AsyncMock()
+        session.say = AsyncMock()
         session.on = MagicMock()
         return session
 
@@ -348,10 +351,14 @@ async def test_inbound_unknown_elder_known_false_falls_back_to_greet_only(monkey
 async def test_outbound_starts_call_recording(monkeypatch):
     _settings(monkeypatch)
 
+    captured = {}
+
     def _fake_build_session(settings, userdata=None):
         session = MagicMock()
         session.start = AsyncMock()
+        session.say = AsyncMock()
         session.on = MagicMock()
+        captured["session"] = session
         return session
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
@@ -373,6 +380,11 @@ async def test_outbound_starts_call_recording(monkeypatch):
     rec.assert_awaited_once()
     assert rec.await_args.args[1] == "call-1"
 
+    # Consent ordering: the spoken recording disclosure must precede egress start.
+    say = captured["session"].say
+    say.assert_awaited()
+    assert say.await_args_list[0].args[0] == RECORDING_DISCLOSURE
+
 
 async def test_inbound_known_starts_call_recording(monkeypatch):
     _settings(monkeypatch)
@@ -383,11 +395,14 @@ async def test_inbound_known_starts_call_recording(monkeypatch):
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
     monkeypatch.setattr(worker, "build_inbound_agent", lambda dv: MagicMock())
 
+    captured = {}
+
     def _fake_build_session(settings, userdata=None):
         session = MagicMock()
         session.start = AsyncMock()
         session.generate_reply = AsyncMock()
         session.say = AsyncMock()
+        captured["session"] = session
         return session
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
@@ -408,3 +423,7 @@ async def test_inbound_known_starts_call_recording(monkeypatch):
 
     rec.assert_awaited_once()
     assert rec.await_args.args[1] == "inb-1"
+
+    # Consent ordering: the spoken recording disclosure must precede egress start.
+    say = captured["session"].say
+    assert say.await_args_list[0].args[0] == RECORDING_DISCLOSURE

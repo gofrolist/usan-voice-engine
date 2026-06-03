@@ -1,10 +1,14 @@
 import pytest
+from loguru import logger
 
 from usan_api.settings import Settings, get_settings
 
 
 @pytest.fixture(autouse=True)
-def _clear_settings_cache():
+def _clear_settings_cache(monkeypatch):
+    # OPERATOR_API_KEY is now required; provide it for every settings test so the
+    # cases below stay focused on the var each one is actually exercising.
+    monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -20,7 +24,7 @@ def test_settings_loads_from_env(monkeypatch):
 
     s = get_settings()
 
-    assert s.database_url == "postgresql://u:p@host/db"
+    assert s.database_url.get_secret_value() == "postgresql://u:p@host/db"
     assert s.livekit_api_key == "key"
     assert s.livekit_api_secret == "a" * 32
     assert s.livekit_url == "ws://livekit:7880"
@@ -298,3 +302,92 @@ def test_recording_settings_from_env(monkeypatch):
     s = Settings()
     assert s.gcs_bucket == "usan-rec"
     assert s.recording_signed_url_ttl_s == 600
+
+
+def _base_env(monkeypatch) -> None:
+    for k, v in {
+        "DATABASE_URL": "postgresql://u:p@host/db",
+        "LIVEKIT_API_KEY": "key",
+        "LIVEKIT_API_SECRET": "a" * 32,
+        "LIVEKIT_URL": "ws://livekit:7880",
+        "JWT_SIGNING_KEY": "s" * 32,
+    }.items():
+        monkeypatch.setenv(k, v)
+
+
+def test_operator_api_key_required(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.delenv("OPERATOR_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="OPERATOR_API_KEY"):
+        get_settings()
+
+
+def test_operator_api_key_too_short_rejected(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("OPERATOR_API_KEY", "short")
+    with pytest.raises(ValueError, match="OPERATOR_API_KEY"):
+        get_settings()
+
+
+def test_recording_ttl_max_is_one_hour(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("RECORDING_SIGNED_URL_TTL_S", "3601")
+    with pytest.raises(ValueError, match="RECORDING_SIGNED_URL_TTL_S"):
+        get_settings()
+
+
+def test_security_settings_defaults(monkeypatch):
+    _base_env(monkeypatch)
+    for var in ("RATE_LIMIT_ENABLED", "RATE_LIMIT_DEFAULT", "DOCS_ENABLED", "WEBHOOK_MAX_AGE_S"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("PHI_RETENTION_DAYS", raising=False)
+    s = Settings()
+    assert s.rate_limit_enabled is True
+    assert s.rate_limit_default == "60/minute"
+    assert s.docs_enabled is False
+    assert s.webhook_max_age_s == 300
+    assert s.phi_retention_days is None
+
+
+def test_security_settings_from_env(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("RATE_LIMIT_DEFAULT", "10/second")
+    monkeypatch.setenv("DOCS_ENABLED", "true")
+    monkeypatch.setenv("WEBHOOK_MAX_AGE_S", "120")
+    monkeypatch.setenv("PHI_RETENTION_DAYS", "30")
+    s = Settings()
+    assert s.rate_limit_enabled is False
+    assert s.rate_limit_default == "10/second"
+    assert s.docs_enabled is True
+    assert s.webhook_max_age_s == 120
+    assert s.phi_retention_days == 30
+
+
+def test_db_tls_warning_for_remote_host_without_sslmode(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/d")
+    s = Settings()
+    messages: list[str] = []
+    handler_id = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
+    try:
+        s.warn_if_db_tls_disabled()
+    finally:
+        logger.remove(handler_id)
+    assert any("sslmode" in m for m in messages)
+
+
+def test_db_tls_no_warning_for_local_or_sslmode(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/d")
+    local = Settings()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/d?sslmode=require")
+    remote_tls = Settings()
+    messages: list[str] = []
+    handler_id = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
+    try:
+        local.warn_if_db_tls_disabled()
+        remote_tls.warn_if_db_tls_disabled()
+    finally:
+        logger.remove(handler_id)
+    assert not any("sslmode" in m for m in messages)

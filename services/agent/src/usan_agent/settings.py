@@ -1,8 +1,15 @@
 from functools import lru_cache
 from typing import Any, Literal
+from urllib.parse import urlparse
 
+from loguru import logger
 from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Hosts where plaintext http:// is expected: the API runs on the Docker bridge in
+# prod, reachable as http://api:8000 with no transport TLS. Any other host over
+# plaintext http risks PHI traversing an untrusted network, so we warn.
+_LOCAL_HTTP_HOSTS = frozenset({"localhost", "127.0.0.1", "api"})
 
 
 class Settings(BaseSettings):
@@ -30,6 +37,20 @@ class Settings(BaseSettings):
     def _ws_scheme(cls, v: str) -> str:
         if not v.startswith(("ws://", "wss://")):
             raise ValueError("must be a ws:// or wss:// URL")
+        return v
+
+    @field_validator("api_base_url")
+    @classmethod
+    def _http_scheme(cls, v: str) -> str:
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("must be an http:// or https:// URL")
+        if parsed.scheme == "http" and (parsed.hostname or "") not in _LOCAL_HTTP_HOSTS:
+            logger.bind(host=parsed.hostname).warning(
+                "API_BASE_URL uses plaintext http with non-local host {host}; "
+                "PHI should travel over https or an internal-only network",
+                host=parsed.hostname,
+            )
         return v
 
 

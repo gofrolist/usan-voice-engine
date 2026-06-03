@@ -7,6 +7,7 @@ failure never crashes the call. end_call mirrors leave_voicemail: report → say
 goodbye → delete_room → shutdown.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +16,31 @@ from loguru import logger
 
 from usan_agent import api_client
 from usan_agent.settings import Settings
+
+# Control characters and the format-slot braces are stripped from any API-supplied
+# string before it reaches an LLM prompt (design spec §3 dynamic vars are caller
+# data, not trusted instructions). Removing "{"/"}" closes both a prompt-injection
+# vector and an str.format KeyError/IndexError on attacker-controlled slots.
+_PROMPT_UNSAFE = re.compile(
+    # format-slot braces, ASCII control chars, and Unicode invisible/directional
+    # chars (zero-width, bidi overrides) that could smuggle instructions past the LLM.
+    r"[{}\x00-\x1f\x7f\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]"
+)
+_NAME_MAX_LEN = 100
+_CONTEXT_MAX_LEN = 300
+
+
+def _sanitize_prompt_value(value: Any, *, max_len: int) -> str:
+    """Neutralize an API-supplied string for safe interpolation into LLM instructions.
+
+    Strips format-slot braces and control characters (including newlines), collapses
+    surrounding whitespace, and caps the length so a hostile value can neither inject
+    new instructions nor introduce ``str.format`` slots.
+    """
+    text = _PROMPT_UNSAFE.sub(" ", str(value))
+    text = " ".join(text.split())
+    return text[:max_len].strip()
+
 
 CHECK_IN_INSTRUCTIONS = """You are a warm, patient daily check-in caller from USAN Retirement,
 speaking to an elder on the phone. Speak slowly and kindly, one or two short sentences at a time,
@@ -84,11 +110,27 @@ async def _do_get_today_meds(data: CheckInData) -> str:
         return "There are no medications scheduled for today."
     parts = []
     for med in meds:
-        name = med.get("name", "a medication")
-        times = ", ".join(med.get("times", [])) or "today"
+        if not isinstance(med, dict):
+            continue
+        name = str(med.get("name") or "a medication")
+        times = _format_times(med.get("times")) or "today"
         dosage = med.get("dosage")
-        parts.append(f"{name}{f' ({dosage})' if dosage else ''} at {times}")
+        dosage_str = f" ({dosage})" if dosage else ""
+        parts.append(f"{name}{dosage_str} at {times}")
+    if not parts:
+        return "There are no medications scheduled for today."
     return "Today's medications are: " + "; ".join(parts) + "."
+
+
+def _format_times(times: Any) -> str:
+    """Join a medication's scheduled times defensively.
+
+    The API payload is trusted-but-validated: a non-list ``times`` (or one holding
+    non-string entries) must never crash the call or produce garbled speech.
+    """
+    if not isinstance(times, list):
+        return ""
+    return ", ".join(str(t) for t in times if t)
 
 
 async def _do_end_call(data: CheckInData, session: Any, reason: str) -> None:
@@ -183,9 +225,21 @@ continue — do not repeat a failed action more than once.
 
 
 def _inbound_instructions(dynamic_vars: dict[str, Any]) -> str:
-    """Render the inbound instructions, weaving in the caller's dynamic vars (spec §3)."""
-    elder_name = str(dynamic_vars.get("elder_name") or "the caller")
-    last_check_in = dynamic_vars.get("last_check_in")
+    """Render the inbound instructions, weaving in the caller's dynamic vars (spec §3).
+
+    The dynamic vars are API-supplied (ultimately caller-derived) data, so each value
+    is sanitized before interpolation: it can introduce neither new format slots nor
+    fresh prompt instructions.
+    """
+    elder_name = (
+        _sanitize_prompt_value(
+            dynamic_vars.get("elder_name") or "the caller", max_len=_NAME_MAX_LEN
+        )
+        or "the caller"
+    )
+    last_check_in = _sanitize_prompt_value(
+        dynamic_vars.get("last_check_in") or "", max_len=_CONTEXT_MAX_LEN
+    )
     last_check_in_line = (
         f"For context, their last check-in was {last_check_in}.\n" if last_check_in else ""
     )
