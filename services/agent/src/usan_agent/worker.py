@@ -16,7 +16,13 @@ from loguru import logger
 from usan_agent.api_client import start_inbound_call
 from usan_agent.check_in import CheckInData, build_check_in_agent, build_inbound_agent
 from usan_agent.logging_config import configure_logging
-from usan_agent.pipeline import RECORDING_DISCLOSURE, build_agent, build_session, greet
+from usan_agent.pipeline import (
+    RECORDING_DISCLOSURE,
+    build_agent,
+    build_session,
+    greet,
+    say_recording_disclosure,
+)
 from usan_agent.recording import start_call_recording
 from usan_agent.settings import Settings, get_settings
 from usan_agent.transcript import register_transcript_flush
@@ -67,6 +73,16 @@ def _caller_phone(participant: Any) -> str | None:
     return attrs.get("sip.phoneNumber") or attrs.get("sip.from") or None
 
 
+def _mask_phone(phone: str | None) -> str:
+    """Mask a caller's phone for logs: keep only the last 4 digits (PHI minimization).
+
+    A full E.164 number identifies a patient, so it must never reach the logs.
+    """
+    if not phone:
+        return "unknown"
+    return "***" + phone[-4:]
+
+
 async def _run_inbound(ctx: JobContext, settings: Settings, log: Any) -> None:
     """Inbound: wait for the caller, look them up, run a personalized check-in.
 
@@ -77,7 +93,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, log: Any) -> None:
     """
     participant = await ctx.wait_for_participant()
     phone = _caller_phone(participant)
-    log.info("Inbound caller present (phone={phone})", phone=phone)
+    log.info("Inbound caller present (phone={phone})", phone=_mask_phone(phone))
 
     # The lookup precedes session.start, so the caller hears a brief silence (the
     # API round-trip) before the agent speaks. Acceptable in v1 because the agent
@@ -87,7 +103,6 @@ async def _run_inbound(ctx: JobContext, settings: Settings, log: Any) -> None:
     info = await start_inbound_call(phone, ctx.room.name, settings)
     if info and info.get("elder_known") and info.get("call_id"):
         call_id = str(info["call_id"])
-        await start_call_recording(ctx, call_id, settings)
         dynamic_vars = info.get("dynamic_vars") or {}
         data = CheckInData(call_id=call_id, settings=settings, job_ctx=ctx)
         session = build_session(settings, userdata=data)
@@ -95,7 +110,10 @@ async def _run_inbound(ctx: JobContext, settings: Settings, log: Any) -> None:
         register_transcript_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
         log.info("Inbound check-in started for known elder (call_id={cid})", cid=call_id)
+        # Consent before capture: the disclosure must finish playing before egress
+        # starts, so no audio is recorded prior to the spoken notice (consent ordering).
         await session.say(RECORDING_DISCLOSURE, allow_interruptions=False, add_to_chat_ctx=False)
+        await start_call_recording(ctx, call_id, settings)
         await session.generate_reply(instructions=_INBOUND_OPENING)
         return
 
@@ -119,7 +137,9 @@ async def _run_detection_window(
     # The watcher is already subscribed to user_input_transcribed (in entrypoint),
     # so a voicemail greeting spoken DURING this greeting's playout still feeds the
     # watcher; wait_until_detected returns immediately if the event is already set.
-    await greet(session)
+    # The recording disclosure was already spoken (gating egress on consent) before
+    # this window, so the greeting here must not repeat it.
+    await greet(session, include_disclosure=False)
     if await watcher.wait_until_detected(VOICEMAIL_WINDOW_S):
         await leave_voicemail(ctx, session, call_id, settings)
     # else: a human answered — the conversation continues (single-turn in Plan 1).
@@ -136,7 +156,6 @@ async def entrypoint(ctx: JobContext) -> None:
     log.info("Connected to room")
 
     if meta.direction == "outbound" and meta.call_id:
-        await start_call_recording(ctx, meta.call_id, settings)
         data = CheckInData(call_id=meta.call_id, settings=settings, job_ctx=ctx)
         session = build_session(settings, userdata=data)
         agent = build_check_in_agent()
@@ -154,6 +173,10 @@ async def entrypoint(ctx: JobContext) -> None:
             log.info("No participant within answer timeout; ending job")
             ctx.shutdown(reason="no_answer_timeout")
             return
+        # Consent before capture: speak the disclosure to completion, then start
+        # egress, so no audio is recorded before the spoken notice (consent ordering).
+        await say_recording_disclosure(session)
+        await start_call_recording(ctx, meta.call_id, settings)
         watcher = VoicemailWatcher()
         session.on("user_input_transcribed", lambda ev: watcher.feed(ev.transcript))
         log.info("Participant present; running voicemail detection window")
