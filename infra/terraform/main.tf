@@ -112,8 +112,11 @@ resource "google_compute_firewall" "web" {
   target_tags   = ["usan"]
 }
 
-# Telephony + media UDP: SIP signaling, livekit-sip RTP, LiveKit SFU media.
-# These are DIRECT to the VM IP — never proxied by Caddy.
+# Media/RTP UDP: livekit-sip RTP, LiveKit SFU media. DIRECT to the VM IP —
+# never proxied by Caddy. These stay at 0.0.0.0/0: the originating media
+# (RTP) source IPs vary per call/relay and cannot be pinned to a stable CIDR
+# without dropping legitimate audio. Signaling (5060) is split out below so it
+# CAN be locked down without affecting media.
 resource "google_compute_firewall" "media" {
   name      = "usan-allow-media"
   network   = "default"
@@ -121,11 +124,25 @@ resource "google_compute_firewall" "media" {
   allow {
     protocol = "udp"
     ports = [
-      "5060",        # SIP signaling
       "10000-20000", # livekit-sip RTP (widened from dev's 10000-10100)
       "50000-60000", # LiveKit SFU rtc media (widened from dev's 50000-50100)
     ]
   }
-  source_ranges = ["0.0.0.0/0"] # Telnyx media origin IPs vary; lock down later if Telnyx publishes ranges.
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["usan"]
+}
+
+# SIP signaling (udp/5060) split out so it can be restricted to Telnyx's
+# published signaling CIDRs. Defaults to 0.0.0.0/0 to preserve current
+# behavior; set var.telnyx_sip_signaling_source_ranges to lock it down.
+resource "google_compute_firewall" "sip" {
+  name      = "usan-allow-sip"
+  network   = "default"
+  direction = "INGRESS"
+  allow {
+    protocol = "udp"
+    ports    = ["5060"]
+  }
+  source_ranges = var.telnyx_sip_signaling_source_ranges
   target_tags   = ["usan"]
 }

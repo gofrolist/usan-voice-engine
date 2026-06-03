@@ -9,7 +9,7 @@
 # compose network; external TLS is terminated by Caddy).
 services:
   api:
-    image: ghcr.io/${GHCR_OWNER}/usan-api:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER}/usan-api:${IMAGE_TAG:?IMAGE_TAG must be set to an explicit tag}
     pull_policy: always
     build: !reset null
     # API is reached by Caddy over the compose network as api:8000.
@@ -18,7 +18,7 @@ services:
       - "127.0.0.1:8000:8000"
 
   agent:
-    image: ghcr.io/${GHCR_OWNER}/usan-agent:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER}/usan-agent:${IMAGE_TAG:?IMAGE_TAG must be set to an explicit tag}
     pull_policy: always
     build: !reset null
 

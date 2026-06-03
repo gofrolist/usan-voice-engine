@@ -43,6 +43,12 @@ variable "operator_ssh_cidr" {
   description = "CIDR allowed to reach SSH (port 22). Restrict to your IP, e.g. 203.0.113.4/32. Do NOT use 0.0.0.0/0."
 }
 
+variable "telnyx_sip_signaling_source_ranges" {
+  type        = list(string)
+  description = "Source CIDRs allowed to reach SIP signaling (udp/5060). Defaults to 0.0.0.0/0 to preserve current behavior; set this to Telnyx's published SIP signaling CIDRs to lock down 5060. Do NOT guess specific IPs — wrong values silently break inbound calls."
+  default     = ["0.0.0.0/0"]
+}
+
 variable "secret_name" {
   type        = string
   description = "GCP Secret Manager secret holding the production .env file contents."
@@ -51,8 +57,7 @@ variable "secret_name" {
 
 variable "image_tag" {
   type        = string
-  description = "Container image tag the VM should pull on first boot (passed into the startup script)."
-  default     = "latest"
+  description = "Container image tag the VM should pull on first boot (passed into the startup script). Must be an explicit immutable tag; no 'latest' fallback."
 }
 
 variable "recordings_bucket" {
@@ -70,4 +75,10 @@ variable "recording_retention_days" {
   type        = number
   description = "Age in days after which a recording is permanently deleted."
   default     = 365
+}
+
+variable "recording_noncurrent_retention_days" {
+  type        = number
+  description = "Days a noncurrent (superseded/deleted) object version is retained before permanent deletion, bounding versioning storage growth."
+  default     = 30
 }

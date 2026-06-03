@@ -1,7 +1,15 @@
 # {$API_DOMAIN} and {$LIVEKIT_DOMAIN} come from the Caddy container env.
 {$API_DOMAIN} {
 	encode zstd gzip
-	reverse_proxy api:8000
+	# The operator/management endpoints (/v1/elders, /v1/dnc, /v1/calls) are
+	# authenticated at the app layer via OPERATOR_API_KEY. An operator may add a
+	# defense-in-depth IP allowlist for those paths here (e.g. a matcher with
+	# `remote_ip` + `abort`) — not required for correctness.
+	reverse_proxy api:8000 {
+		# Overwrite X-Forwarded-For with the direct client so the API rate
+		# limiter keys on the real (non-spoofable) caller IP, not this proxy's.
+		header_up X-Forwarded-For {remote_host}
+	}
 }
 
 {$LIVEKIT_DOMAIN} {

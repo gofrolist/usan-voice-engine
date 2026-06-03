@@ -134,6 +134,10 @@ services:
     # v1.7.6 or Chrome won't start, and /dev/shm must be enlarged.
     cap_add:
       - SYS_ADMIN
+    # SYS_ADMIN is required by headless Chrome but is broad; block any further
+    # privilege escalation (setuid binaries gaining caps) on top of it.
+    security_opt:
+      - "no-new-privileges:true"
     shm_size: "1gb"
     environment:
       # Egress does NOT expand ${...} in a --config file, so the whole config is
@@ -187,11 +191,30 @@ services:
       AGENT_NAME: ${AGENT_NAME}
       LOG_LEVEL: ${LOG_LEVEL}
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
+      # Operator/management API plane auth (GET/POST /v1/elders, /v1/dnc, /v1/calls).
+      OPERATOR_API_KEY: ${OPERATOR_API_KEY}
+      # OpenAPI docs (/docs, /redoc) — off by default; enable explicitly in dev.
+      DOCS_ENABLED: ${DOCS_ENABLED:-false}
+      # Per-client request rate limiting.
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_DEFAULT: ${RATE_LIMIT_DEFAULT:-60/minute}
+      # Reject webhooks whose signed timestamp is older than this (seconds).
+      WEBHOOK_MAX_AGE_S: ${WEBHOOK_MAX_AGE_S:-300}
+      # PHI retention purge horizon (days); blank = purge disabled.
+      PHI_RETENTION_DAYS: ${PHI_RETENTION_DAYS:-}
       RETRY_POLLER_ENABLED: ${RETRY_POLLER_ENABLED:-true}
       RETRY_POLL_INTERVAL_S: ${RETRY_POLL_INTERVAL_S:-30}
       # Recording (Plan 4b): blank disables it; the api signs read URLs for this bucket.
       GCS_BUCKET: ${GCS_BUCKET:-}
       RECORDING_SIGNED_URL_TTL_S: ${RECORDING_SIGNED_URL_TTL_S:-3600}
+    # The API is stateless: no on-disk writes outside /tmp, so run the root
+    # filesystem read-only and block privilege escalation. /tmp is a tmpfs for
+    # any transient scratch (e.g. signed-URL staging).
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+    tmpfs:
+      - /tmp
     ports:
       # Host-only — the API is unauthenticated at this stage and is fronted by
       # TLS/Caddy in production (Plan 4). Reachable as localhost:8000 in dev.
@@ -225,6 +248,10 @@ services:
       API_BASE_URL: ${API_BASE_URL}
       # Recording (Plan 4b): blank disables egress; set to the recordings bucket.
       GCS_BUCKET: ${GCS_BUCKET:-}
+    # Block privilege escalation. read_only is intentionally NOT set: the agent
+    # needs writable model/turn-detector caches and tmp scratch at runtime.
+    security_opt:
+      - "no-new-privileges:true"
     restart: unless-stopped
 
 volumes:
