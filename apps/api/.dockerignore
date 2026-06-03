@@ -1,0 +1,33 @@
+# Secrets — never copy into the image (PHI system, fail closed)
+.env
+.env.*
+
+# VCS
+.git
+.gitignore
+
+# Python bytecode / build artifacts
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+
+# Local virtualenv (image builds its own .venv via uv sync)
+.venv/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Tests are not needed at runtime
+tests/
+
+# Docs
+*.md
+
+# Local state / OS cruft
+*.log
+.DS_Store
+data/
+recordings/

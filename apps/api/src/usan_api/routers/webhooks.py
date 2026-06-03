@@ -36,6 +36,8 @@ async def livekit_webhook(
     auth = request.headers.get("Authorization", "")
     try:
         event = livekit_webhooks.verify_livekit_webhook(body, auth, settings)
+    except livekit_webhooks.WebhookReplayError as exc:
+        raise HTTPException(status_code=400, detail="webhook too old") from exc
     except Exception as exc:  # invalid signature / hash mismatch / malformed
         raise HTTPException(status_code=401, detail="invalid webhook signature") from exc
 
@@ -68,7 +70,7 @@ async def livekit_webhook(
             call = await calls_repo.set_recording_uri(db, info.room_name, uri)
             if call is not None:
                 await db.commit()
-                logger.bind(call_id=str(call.id), recording_uri=uri).info(
+                logger.bind(call_id=str(call.id), has_recording=True).info(
                     "Stored recording_uri via egress_ended webhook"
                 )
     return {"ok": True}

@@ -8,10 +8,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import dialer, livekit_dispatch, object_storage
-from usan_api.auth import require_service_token, require_worker_token
+from usan_api.auth import require_operator_token, require_service_token, require_worker_token
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Elder, WellnessLog
 from usan_api.db.session import get_db
+from usan_api.ratelimit import limiter, operator_limit
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
@@ -103,8 +104,15 @@ async def _create_and_dispatch(
     return CallResponse.from_model(dialing or call)
 
 
-@router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=CallResponse)
+@router.post(
+    "",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=CallResponse,
+    dependencies=[Depends(require_operator_token)],
+)
+@limiter.limit(operator_limit)
 async def enqueue_call(
+    request: Request,
     body: CreateCallRequest,
     response: Response,
     db: AsyncSession = Depends(get_db),
@@ -183,19 +191,25 @@ async def _presigned_recording_url(
             object_storage.generate_signed_url,
             call.recording_uri,
             settings.recording_signed_url_ttl_s,
+            expected_bucket=settings.gcs_bucket,
         )
     except Exception:
         logger.bind(call_id=str(call.id)).warning("Failed to sign recording URL")
         return None
     # Access log: every issued recording URL is audit-logged with the caller's host
-    # (spec §10; full caller identity awaits authn, out of scope for v1).
-    logger.bind(call_id=str(call.id), recording_uri=call.recording_uri, client=client_host).info(
+    # (spec §10). The gs:// URI itself is PHI-adjacent, so it is omitted here.
+    logger.bind(call_id=str(call.id), client=client_host, has_recording=True).info(
         "Recording URL accessed"
     )
     return url
 
 
-@router.get("/{call_id}", response_model=CallResponse)
+@router.get(
+    "/{call_id}",
+    response_model=CallResponse,
+    dependencies=[Depends(require_operator_token)],
+)
+@limiter.limit(operator_limit)
 async def get_call(
     call_id: uuid.UUID,
     request: Request,

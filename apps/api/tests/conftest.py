@@ -34,6 +34,7 @@ def database_url() -> str:
             "LIVEKIT_API_SECRET": TEST_SECRET,
             "LIVEKIT_URL": "ws://livekit:7880",
             "JWT_SIGNING_KEY": "s" * 32,
+            "OPERATOR_API_KEY": "o" * 32,
         }
         subprocess.run(
             [sys.executable, "-m", "alembic", "upgrade", "head"],
@@ -69,6 +70,8 @@ def client(database_url: str, async_database_url: str, monkeypatch) -> TestClien
     monkeypatch.setenv("TELNYX_CALLER_ID", "+15551230000")
     monkeypatch.setenv("AGENT_NAME", "usan-agent")
     monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+    monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     get_settings.cache_clear()
 
     test_engine = create_async_engine(async_database_url, poolclass=NullPool)
@@ -89,3 +92,8 @@ def client(database_url: str, async_database_url: str, monkeypatch) -> TestClien
     finally:
         asyncio.run(_truncate_and_dispose(test_engine))
         get_settings.cache_clear()
+
+
+@pytest.fixture
+def operator_headers() -> dict[str, str]:
+    return {"Authorization": "Bearer " + "o" * 32}

@@ -16,12 +16,19 @@ from google.cloud import storage
 
 
 def _parse_gs_uri(uri: str) -> tuple[str, str]:
-    """Split gs://bucket/object/key into (bucket, key). Raises ValueError if malformed."""
+    """Split gs://bucket/object/key into (bucket, key). Raises ValueError if malformed.
+
+    Rejects keys that begin with '/' or contain a '..' path segment, so a crafted
+    recording_uri cannot escape its prefix or be coerced into an unexpected object.
+    """
     if not uri.startswith("gs://"):
         raise ValueError(f"not a gs:// URI: {uri!r}")
     bucket, _, key = uri[len("gs://") :].partition("/")
     if not bucket or not key:
         raise ValueError(f"gs:// URI missing bucket or object key: {uri!r}")
+    segments = key.split("/")
+    if key.startswith("/") or "%" in key or any(seg in ("..", ".") for seg in segments):
+        raise ValueError(f"gs:// object key has an unsafe path: {uri!r}")
     return bucket, key
 
 
@@ -49,13 +56,21 @@ def _signing_creds() -> google.auth.credentials.Credentials:
         return _signing_credentials
 
 
-def generate_signed_url(gs_uri: str, ttl_seconds: int) -> str:
+def generate_signed_url(
+    gs_uri: str, ttl_seconds: int, *, expected_bucket: str | None = None
+) -> str:
     """Return a V4 signed GET URL for a gs:// object, signed keylessly via IAM signBlob.
 
     The signBlob call is unavoidably per-URL (keyless V4 signing); the ADC refresh it
-    needs is cached across requests (see _signing_creds).
+    needs is cached across requests (see _signing_creds). When ``expected_bucket`` is
+    given, the parsed bucket must match it — fail closed rather than sign a URL for an
+    object in some other (attacker-influenced) bucket.
     """
     bucket_name, blob_name = _parse_gs_uri(gs_uri)
+    if expected_bucket is not None and bucket_name != expected_bucket:
+        raise ValueError(
+            f"gs:// bucket {bucket_name!r} does not match expected {expected_bucket!r}"
+        )
     credentials = _signing_creds()
     sa_email = credentials.service_account_email  # type: ignore[attr-defined]
 

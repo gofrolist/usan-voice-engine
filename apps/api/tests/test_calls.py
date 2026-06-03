@@ -5,11 +5,15 @@ import pytest
 
 from usan_api import livekit_dispatch
 
+# Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
+_OP = {"Authorization": "Bearer " + "o" * 32}
+
 
 def _create_elder(client) -> str:
     r = client.post(
         "/v1/elders",
         json={"name": "Ada", "phone_e164": "+15551234567", "timezone": "UTC"},
+        headers=_OP,
     )
     assert r.status_code == 201
     return r.json()["id"]
@@ -36,6 +40,7 @@ def test_enqueue_call_dispatches_and_returns_202(client, mock_dispatch):
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "k1", "dynamic_vars": {}},
+        headers=_OP,
     )
     assert r.status_code == 202
     body = r.json()
@@ -50,10 +55,12 @@ def test_enqueue_call_idempotent_replay_returns_200(client, mock_dispatch):
     r1 = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "dup", "dynamic_vars": {}},
+        headers=_OP,
     )
     r2 = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "dup", "dynamic_vars": {}},
+        headers=_OP,
     )
     assert r1.status_code == 202
     assert r2.status_code == 200
@@ -66,11 +73,13 @@ def test_enqueue_call_conflicting_idempotency_returns_409(client, mock_dispatch)
     first = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "x", "dynamic_vars": {"a": 1}},
+        headers=_OP,
     )
     assert first.status_code == 202
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "x", "dynamic_vars": {"a": 2}},
+        headers=_OP,
     )
     assert r.status_code == 409
 
@@ -78,12 +87,15 @@ def test_enqueue_call_conflicting_idempotency_returns_409(client, mock_dispatch)
 def test_enqueue_call_dnc_blocked(client, mock_dispatch):
     elder_id = _create_elder(client)
     assert (
-        client.post("/v1/dnc", json={"phone_e164": "+15551234567", "reason": "test"}).status_code
+        client.post(
+            "/v1/dnc", json={"phone_e164": "+15551234567", "reason": "test"}, headers=_OP
+        ).status_code
         == 201
     )
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "d1", "dynamic_vars": {}},
+        headers=_OP,
     )
     assert r.status_code == 200
     assert r.json()["status"] == "dnc_blocked"
@@ -98,6 +110,7 @@ def test_enqueue_call_unknown_elder_returns_404(client, mock_dispatch):
             "idempotency_key": "z",
             "dynamic_vars": {},
         },
+        headers=_OP,
     )
     assert r.status_code == 404
 
@@ -107,9 +120,10 @@ def test_get_call_returns_status(client, mock_dispatch):
     created = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "g1", "dynamic_vars": {}},
+        headers=_OP,
     )
     call_id = created.json()["id"]
-    r = client.get(f"/v1/calls/{call_id}")
+    r = client.get(f"/v1/calls/{call_id}", headers=_OP)
     assert r.status_code == 200
     assert r.json()["id"] == call_id
 
@@ -125,12 +139,14 @@ def test_enqueue_call_dispatch_config_error_returns_503(client, monkeypatch):
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "err503", "dynamic_vars": {}},
+        headers=_OP,
     )
     assert r.status_code == 503
     assert "LIVEKIT_SIP_OUTBOUND_TRUNK_ID" not in r.json()["detail"]
     replay = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "err503", "dynamic_vars": {}},
+        headers=_OP,
     )
     assert replay.status_code == 200
     assert replay.json()["status"] == "failed"
@@ -145,6 +161,7 @@ def test_enqueue_call_unexpected_dispatch_error_returns_502(client, monkeypatch)
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "err502", "dynamic_vars": {}},
+        headers=_OP,
     )
     assert r.status_code == 502
 
@@ -159,6 +176,7 @@ def test_enqueue_call_idempotency_race_returns_200(client, mock_dispatch, monkey
     first = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "race", "dynamic_vars": {}},
+        headers=_OP,
     )
     assert first.status_code == 202
 
@@ -175,6 +193,7 @@ def test_enqueue_call_idempotency_race_returns_200(client, mock_dispatch, monkey
     second = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "race", "dynamic_vars": {}},
+        headers=_OP,
     )
     assert second.status_code == 200
     assert second.json()["id"] == first.json()["id"]
@@ -187,6 +206,7 @@ def test_enqueue_call_idempotency_race_conflict_returns_409(client, mock_dispatc
     first = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "race2", "dynamic_vars": {"a": 1}},
+        headers=_OP,
     )
     assert first.status_code == 202
 
@@ -201,6 +221,7 @@ def test_enqueue_call_idempotency_race_conflict_returns_409(client, mock_dispatc
     second = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "race2", "dynamic_vars": {"a": 2}},
+        headers=_OP,
     )
     assert second.status_code == 409
 
@@ -222,6 +243,7 @@ def test_enqueue_call_acquires_phone_advisory_lock(client, mock_dispatch, monkey
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "lock", "dynamic_vars": {}},
+        headers=_OP,
     )
     assert r.status_code == 202
     assert seen == ["+15551234567"]
@@ -233,6 +255,7 @@ def test_enqueue_call_oversized_dynamic_vars_returns_422(client, mock_dispatch):
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "big", "dynamic_vars": big},
+        headers=_OP,
     )
     assert r.status_code == 422
     mock_dispatch.assert_not_awaited()
@@ -243,14 +266,30 @@ def test_enqueue_call_status_is_dialing(client, mock_dispatch):
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": "dl", "dynamic_vars": {}},
+        headers=_OP,
     )
     assert r.status_code == 202
     assert r.json()["status"] == "dialing"
 
 
 def test_get_unknown_call_returns_404(client):
-    r = client.get(f"/v1/calls/{uuid.uuid4()}")
+    r = client.get(f"/v1/calls/{uuid.uuid4()}", headers=_OP)
     assert r.status_code == 404
+
+
+def test_enqueue_call_requires_operator_token(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    payload = {"elder_id": elder_id, "idempotency_key": "noauth", "dynamic_vars": {}}
+    assert client.post("/v1/calls", json=payload).status_code == 401
+    wrong = {"Authorization": "Bearer " + "x" * 32}
+    assert client.post("/v1/calls", json=payload, headers=wrong).status_code == 401
+
+
+def test_get_call_requires_operator_token(client, mock_dispatch):
+    r = client.get(f"/v1/calls/{uuid.uuid4()}")
+    assert r.status_code == 401
+    wrong = {"Authorization": "Bearer " + "x" * 32}
+    assert client.get(f"/v1/calls/{uuid.uuid4()}", headers=wrong).status_code == 401
 
 
 def _service_token(call_id: str, secret: str = "s" * 32) -> str:
@@ -288,6 +327,7 @@ def _answered_call(client, async_database_url) -> str:
             "idempotency_key": f"vm-{_uuid.uuid4()}",
             "dynamic_vars": {},
         },
+        headers=_OP,
     )
     call_id = created.json()["id"]
 
@@ -446,6 +486,7 @@ def test_enqueue_unexpected_dispatch_error_schedules_retry(client, monkeypatch, 
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": idem_key, "dynamic_vars": {}},
+        headers=_OP,
     )
     assert r.status_code == 502
 
@@ -466,6 +507,7 @@ def test_enqueue_config_error_does_not_schedule_retry(client, monkeypatch, async
     r = client.post(
         "/v1/calls",
         json={"elder_id": elder_id, "idempotency_key": idem_key, "dynamic_vars": {}},
+        headers=_OP,
     )
     assert r.status_code == 503
 

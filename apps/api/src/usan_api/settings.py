@@ -1,14 +1,18 @@
 from functools import lru_cache
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import Field, ValidationError, field_validator
+from loguru import logger
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ""})
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
-    database_url: str = Field(..., min_length=1, alias="DATABASE_URL")
+    database_url: SecretStr = Field(..., min_length=1, alias="DATABASE_URL")
     livekit_api_key: str = Field(..., min_length=1, alias="LIVEKIT_API_KEY")
     livekit_api_secret: str = Field(..., min_length=32, alias="LIVEKIT_API_SECRET")
     livekit_url: str = Field(..., min_length=1, alias="LIVEKIT_URL")
@@ -37,10 +41,21 @@ class Settings(BaseSettings):
         default=1800, ge=60, le=7200, alias="OUTBOUND_MAX_CALL_DURATION_S"
     )
     jwt_signing_key: str = Field(..., min_length=32, alias="JWT_SIGNING_KEY")
+    # Static bearer token guarding the operator/management plane (elders, DNC, and
+    # outbound call enqueue/lookup). Distinct from the agent's per-call JWTs.
+    operator_api_key: str = Field(..., min_length=16, alias="OPERATOR_API_KEY")
     gcs_bucket: str | None = Field(default=None, alias="GCS_BUCKET")
     recording_signed_url_ttl_s: int = Field(
-        default=3600, ge=60, le=604800, alias="RECORDING_SIGNED_URL_TTL_S"
+        default=3600, ge=60, le=3600, alias="RECORDING_SIGNED_URL_TTL_S"
     )
+    rate_limit_enabled: bool = Field(default=True, alias="RATE_LIMIT_ENABLED")
+    rate_limit_default: str = Field(default="60/minute", alias="RATE_LIMIT_DEFAULT")
+    docs_enabled: bool = Field(default=False, alias="DOCS_ENABLED")
+    webhook_max_age_s: int = Field(default=300, ge=30, le=3600, alias="WEBHOOK_MAX_AGE_S")
+    # When set, a background poller purges PHI (transcripts + terminal-call dynamic
+    # vars) older than this many days. Default None means retention never runs, so
+    # existing deployments are unaffected.
+    phi_retention_days: int | None = Field(default=None, alias="PHI_RETENTION_DAYS")
     recording_reconcile_grace_s: int = Field(
         default=300, ge=60, le=3600, alias="RECORDING_RECONCILE_GRACE_S"
     )
@@ -76,7 +91,7 @@ class Settings(BaseSettings):
     @property
     def database_url_async(self) -> str:
         """DATABASE_URL with the asyncpg driver, for SQLAlchemy's async engine."""
-        url = self.database_url
+        url = self.database_url.get_secret_value()
         if url.startswith("postgresql+asyncpg://"):
             return url
         if url.startswith("postgresql://"):
@@ -95,6 +110,25 @@ class Settings(BaseSettings):
             return "http://" + url[len("ws://") :]
         return url
 
+    def warn_if_db_tls_disabled(self) -> None:
+        """Warn (never fail) when a non-local DATABASE_URL has no sslmode.
+
+        Local/dev and the test container use plaintext loopback connections, so a
+        missing sslmode there is expected. For a remote host it means PHI could
+        cross the wire unencrypted — surface it loudly so operators notice.
+        """
+        url = self.database_url.get_secret_value()
+        if "sslmode=" in url:
+            return
+        host = (urlsplit(url).hostname or "").lower()
+        if host in _LOCAL_HOSTS:
+            return
+        logger.bind(db_host=host).warning(
+            "DATABASE_URL has no sslmode= and host {db_host} is not local; "
+            "PHI may transit unencrypted — set sslmode=require",
+            db_host=host,
+        )
+
 
 def _field_names(errors: list[Any], *, error_type: str | None = None) -> list[str]:
     """Field names (env-var aliases) from Pydantic errors, optionally filtered by type."""
@@ -112,7 +146,7 @@ def get_settings() -> Settings:
     # lru_cache never caches a raised exception, so a fixed environment is
     # picked up on the next call — do not wrap callers expecting otherwise.
     try:
-        return Settings()
+        settings = Settings()
     except ValidationError as e:
         # Re-raise as ValueError naming the offending env vars, so the message
         # is stable and callers don't depend on Pydantic's internal wording.
@@ -121,3 +155,5 @@ def get_settings() -> Settings:
             raise ValueError(f"Missing required environment variables: {', '.join(missing)}") from e
         invalid = _field_names(e.errors())
         raise ValueError(f"Invalid configuration for: {', '.join(invalid)}") from e
+    settings.warn_if_db_tls_disabled()
+    return settings
