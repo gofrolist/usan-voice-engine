@@ -1,4 +1,5 @@
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -33,10 +34,22 @@ def _fake_api() -> MagicMock:
     fake = MagicMock()
     fake.agent_dispatch.create_dispatch = AsyncMock()
     fake.sip.create_sip_participant = AsyncMock()
+    fake.sip.list_outbound_trunk = AsyncMock(return_value=SimpleNamespace(items=[]))
+    fake.sip.create_outbound_trunk = AsyncMock(
+        return_value=SimpleNamespace(sip_trunk_id="ST_created")
+    )
     fake.room.delete_room = AsyncMock()
     fake.__aenter__ = AsyncMock(return_value=fake)
     fake.__aexit__ = AsyncMock(return_value=False)
     return fake
+
+
+@pytest.fixture(autouse=True)
+def _clear_trunk_cache():
+    # The resolver caches the provisioned trunk ID per process; isolate tests.
+    livekit_dispatch._outbound_trunk_id_cache.clear()
+    yield
+    livekit_dispatch._outbound_trunk_id_cache.clear()
 
 
 @pytest.fixture
@@ -221,3 +234,233 @@ async def test_dial_crash_marks_failed_and_retries_without_clobbering(monkeypatc
         call = await calls_repo.get_call(db, call_id)
     assert call.status is CallStatus.IN_PROGRESS  # gated mark did not clobber
     assert await _count_children(session_factory, call_id) == 0
+
+
+# --- Outbound trunk auto-provisioning (Option B) -----------------------------
+
+
+def test_outbound_configured_matrix():
+    # override + caller id -> configured
+    assert livekit_dispatch.outbound_configured(_settings()) is True
+    # no override, no SIP creds -> not configured
+    assert (
+        livekit_dispatch.outbound_configured(_settings(LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None)) is False
+    )
+    # no override but SIP creds present -> configured (can auto-provision)
+    assert (
+        livekit_dispatch.outbound_configured(
+            _settings(
+                LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None,
+                TELNYX_SIP_USERNAME="u",
+                TELNYX_SIP_PASSWORD="p",
+            )
+        )
+        is True
+    )
+    # no caller id -> never configured
+    assert livekit_dispatch.outbound_configured(_settings(TELNYX_CALLER_ID=None)) is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_uses_override_without_calling_api(monkeypatch):
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    tid = await livekit_dispatch.resolve_outbound_trunk_id(_settings())  # override ST_x
+    assert tid == "ST_x"
+    fake.sip.list_outbound_trunk.assert_not_awaited()
+    fake.sip.create_outbound_trunk.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_reuses_existing_trunk_by_name(monkeypatch):
+    fake = _fake_api()
+    fake.sip.list_outbound_trunk.return_value = SimpleNamespace(
+        items=[SimpleNamespace(name="usan-telnyx-outbound", sip_trunk_id="ST_existing")]
+    )
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    s = _settings(
+        LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None, TELNYX_SIP_USERNAME="u", TELNYX_SIP_PASSWORD="p"
+    )
+    tid = await livekit_dispatch.resolve_outbound_trunk_id(s)
+    assert tid == "ST_existing"
+    fake.sip.create_outbound_trunk.assert_not_awaited()  # reused, not created
+
+
+@pytest.mark.asyncio
+async def test_resolve_creates_trunk_when_absent(monkeypatch):
+    fake = _fake_api()  # list -> empty, create -> ST_created
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    s = _settings(
+        LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None,
+        TELNYX_SIP_USERNAME="txu",
+        TELNYX_SIP_PASSWORD="txp",
+        TELNYX_CALLER_ID="+15550001111",
+    )
+    tid = await livekit_dispatch.resolve_outbound_trunk_id(s)
+    assert tid == "ST_created"
+    fake.sip.create_outbound_trunk.assert_awaited_once()
+    req = fake.sip.create_outbound_trunk.await_args.args[0]
+    assert req.trunk.name == s.livekit_outbound_trunk_name
+    assert req.trunk.address == "sip.telnyx.com"
+    assert list(req.trunk.numbers) == ["+15550001111"]
+    assert req.trunk.auth_username == "txu"
+    assert req.trunk.auth_password == "txp"
+
+
+@pytest.mark.asyncio
+async def test_resolve_caches_after_first_provision(monkeypatch):
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    s = _settings(
+        LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None, TELNYX_SIP_USERNAME="u", TELNYX_SIP_PASSWORD="p"
+    )
+    first = await livekit_dispatch.resolve_outbound_trunk_id(s)
+    second = await livekit_dispatch.resolve_outbound_trunk_id(s)
+    assert first == second == "ST_created"
+    fake.sip.list_outbound_trunk.assert_awaited_once()  # second call served from cache
+    fake.sip.create_outbound_trunk.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resolve_raises_without_credentials(monkeypatch):
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    s = _settings(
+        LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None,
+        TELNYX_SIP_USERNAME=None,
+        TELNYX_SIP_PASSWORD=None,
+    )
+    with pytest.raises(livekit_dispatch.OutboundDispatchError):
+        await livekit_dispatch.resolve_outbound_trunk_id(s)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_agent_ok_with_sip_creds_no_override(monkeypatch):
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    call = Call(
+        id=uuid.uuid4(), direction=CallDirection.OUTBOUND, livekit_room="r2", dynamic_vars={}
+    )
+    s = _settings(
+        LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None, TELNYX_SIP_USERNAME="u", TELNYX_SIP_PASSWORD="p"
+    )
+    await livekit_dispatch.dispatch_agent(call, settings=s)
+    fake.agent_dispatch.create_dispatch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dial_success_autoprovisions_trunk(monkeypatch, session_factory):
+    fake = _fake_api()
+    fake.sip.create_sip_participant.return_value = MagicMock(sip_call_id="SCL_AP")
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    call_id, _ = await _seed(session_factory, room="usan-outbound-ap")
+    s = _settings(
+        LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None, TELNYX_SIP_USERNAME="u", TELNYX_SIP_PASSWORD="p"
+    )
+    await livekit_dispatch.dial_and_classify(call_id, s)
+
+    fake.sip.create_sip_participant.assert_awaited_once()
+    sip_req = fake.sip.create_sip_participant.await_args.args[0]
+    assert sip_req.sip_trunk_id == "ST_created"  # auto-provisioned, not a static env var
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.IN_PROGRESS
+
+
+# --- Auto-provisioning robustness (review hardening) --------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_provisioning_failure_is_sanitized(monkeypatch):
+    # A LiveKit error whose text echoes the request (with the SIP password) must
+    # NOT propagate — resolve raises a sanitized OutboundProvisioningError.
+    secret = "SuperSecretPass987"
+    fake = _fake_api()
+    fake.sip.create_outbound_trunk.side_effect = RuntimeError(
+        f"twirp error: trunk {{ auth_password: {secret} }}"
+    )
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    s = _settings(
+        LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None,
+        TELNYX_SIP_USERNAME="u",
+        TELNYX_SIP_PASSWORD=secret,
+    )
+    with pytest.raises(livekit_dispatch.OutboundProvisioningError) as ei:
+        await livekit_dispatch.resolve_outbound_trunk_id(s)
+    assert secret not in str(ei.value)
+    assert ei.value.__cause__ is None  # cause dropped so no traceback carries the secret
+    assert livekit_dispatch._outbound_trunk_id_cache == {}  # nothing cached on failure
+
+
+@pytest.mark.asyncio
+async def test_dial_provisioning_failure_marks_failed_and_retries(monkeypatch, session_factory):
+    fake = _fake_api()
+    fake.sip.create_outbound_trunk.side_effect = RuntimeError("livekit unavailable")
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    call_id, _ = await _seed(session_factory, room="usan-outbound-provfail")
+    s = _settings(
+        LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None, TELNYX_SIP_USERNAME="u", TELNYX_SIP_PASSWORD="p"
+    )
+    await livekit_dispatch.dial_and_classify(call_id, s)
+
+    fake.sip.create_sip_participant.assert_not_awaited()  # never reached the dial
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.FAILED
+    assert call.end_reason == "dial_error"
+    assert await _count_children(session_factory, call_id) == 1  # transient -> retry
+
+
+@pytest.mark.asyncio
+async def test_dial_invalidates_stale_trunk_cache_on_dial_error(monkeypatch, session_factory):
+    fake = _fake_api()
+    # Cache a stale trunk id; the dial then fails with a non-SIP error.
+    livekit_dispatch._outbound_trunk_id_cache["usan-telnyx-outbound"] = "ST_stale"
+    fake.sip.create_sip_participant.side_effect = RuntimeError("sip trunk ST_stale not found")
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    call_id, _ = await _seed(session_factory, room="usan-outbound-stale")
+    s = _settings(
+        LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None, TELNYX_SIP_USERNAME="u", TELNYX_SIP_PASSWORD="p"
+    )
+    await livekit_dispatch.dial_and_classify(call_id, s)
+
+    sip_req = fake.sip.create_sip_participant.await_args.args[0]
+    assert sip_req.sip_trunk_id == "ST_stale"  # used the cached (stale) id
+    # Cache dropped so the scheduled retry will re-provision instead of reusing it.
+    assert "usan-telnyx-outbound" not in livekit_dispatch._outbound_trunk_id_cache
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.end_reason == "dial_error"
+    assert await _count_children(session_factory, call_id) == 1  # retry scheduled
+
+
+@pytest.mark.asyncio
+async def test_dial_outbound_dispatch_error_fails_without_retry(monkeypatch, session_factory):
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    async def _raise_dispatch(_s):
+        raise livekit_dispatch.OutboundDispatchError("missing creds at resolve")
+
+    monkeypatch.setattr(livekit_dispatch, "resolve_outbound_trunk_id", _raise_dispatch)
+
+    call_id, _ = await _seed(session_factory, room="usan-outbound-resolve-misconfig")
+    s = _settings(
+        LIVEKIT_SIP_OUTBOUND_TRUNK_ID=None, TELNYX_SIP_USERNAME="u", TELNYX_SIP_PASSWORD="p"
+    )
+    await livekit_dispatch.dial_and_classify(call_id, s)
+
+    fake.sip.create_sip_participant.assert_not_awaited()
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.FAILED
+    assert call.end_reason == "not_configured"
+    assert await _count_children(session_factory, call_id) == 0  # permanent -> no retry
+    fake.room.delete_room.assert_awaited_once()

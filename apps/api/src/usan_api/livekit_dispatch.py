@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 
@@ -16,7 +17,15 @@ from usan_api.sip_status import classify_dial_exception
 
 
 class OutboundDispatchError(Exception):
-    """Raised when an outbound call cannot be dispatched (misconfig)."""
+    """Raised when an outbound call cannot be dispatched (permanent misconfig)."""
+
+
+class OutboundProvisioningError(Exception):
+    """Raised when the outbound SIP trunk could not be resolved/created.
+
+    Carries a sanitized message only — never the LiveKit request, which holds the
+    Telnyx SIP password. Treated as a (bounded-)retryable dial failure upstream.
+    """
 
 
 def build_livekit_api(settings: Settings) -> api.LiveKitAPI:
@@ -25,6 +34,102 @@ def build_livekit_api(settings: Settings) -> api.LiveKitAPI:
         api_key=settings.livekit_api_key,
         api_secret=settings.livekit_api_secret,
     )
+
+
+# The LiveKit SIP outbound trunk ID (ST_...) is environment-specific — it only
+# exists inside a particular LiveKit instance. Rather than require operators to
+# create the trunk by hand and pin its ID in an env var, we resolve it at first
+# dial: reuse a trunk named ``settings.livekit_outbound_trunk_name`` if present,
+# otherwise create one from the Telnyx SIP credentials, then cache the result for
+# the process lifetime. An explicit LIVEKIT_SIP_OUTBOUND_TRUNK_ID still wins as
+# an override. The cache is per-process; a stale entry (trunk deleted out-of-band)
+# self-heals because a dial failure with no SIP status code invalidates it (see
+# _dial_and_classify), so the next retry re-provisions. NOTE: with multiple API
+# instances the resolve is not globally locked, so a first-ever concurrent dial
+# across instances could create duplicate same-named trunks; the current deploy
+# is single-instance. Pin LIVEKIT_SIP_OUTBOUND_TRUNK_ID if you scale out.
+_outbound_trunk_id_cache: dict[str, str] = {}
+_outbound_trunk_lock = asyncio.Lock()
+
+
+def outbound_configured(settings: Settings) -> bool:
+    """True when an outbound call can be placed: a caller ID plus either an
+    explicit trunk-ID override or the Telnyx SIP credentials needed to
+    auto-provision the trunk."""
+    if not settings.telnyx_caller_id:
+        return False
+    if settings.livekit_sip_outbound_trunk_id:
+        return True
+    return bool(settings.telnyx_sip_username and settings.telnyx_sip_password)
+
+
+def invalidate_outbound_trunk_cache(settings: Settings) -> None:
+    """Drop the cached trunk ID so the next resolve re-lists/re-provisions."""
+    _outbound_trunk_id_cache.pop(settings.livekit_outbound_trunk_name, None)
+
+
+async def resolve_outbound_trunk_id(settings: Settings) -> str:
+    """Return the LiveKit SIP outbound trunk ID, provisioning it if needed.
+
+    Uses the explicit override when set; otherwise finds a trunk named
+    ``settings.livekit_outbound_trunk_name`` (creating it from the Telnyx SIP
+    credentials when absent) and caches the result for the process lifetime.
+    Raises ``OutboundDispatchError`` for a permanent misconfig (missing creds)
+    and ``OutboundProvisioningError`` (sanitized) if the LiveKit call fails.
+    """
+    if settings.livekit_sip_outbound_trunk_id:
+        return settings.livekit_sip_outbound_trunk_id
+
+    name = settings.livekit_outbound_trunk_name
+    cached = _outbound_trunk_id_cache.get(name)
+    if cached:
+        return cached
+
+    caller_id = settings.telnyx_caller_id
+    sip_user = settings.telnyx_sip_username
+    sip_pass = settings.telnyx_sip_password
+    if not (caller_id and sip_user and sip_pass):
+        raise OutboundDispatchError(
+            "outbound auto-provisioning requires TELNYX_CALLER_ID, "
+            "TELNYX_SIP_USERNAME and TELNYX_SIP_PASSWORD"
+        )
+
+    async with _outbound_trunk_lock:
+        cached = _outbound_trunk_id_cache.get(name)
+        if cached:
+            return cached
+        try:
+            async with build_livekit_api(settings) as lkapi:
+                existing = await lkapi.sip.list_outbound_trunk(api.ListSIPOutboundTrunkRequest())
+                for trunk in existing.items:
+                    if trunk.name == name:
+                        trunk_id = str(trunk.sip_trunk_id)
+                        _outbound_trunk_id_cache[name] = trunk_id
+                        logger.bind(trunk_id=trunk_id, name=name).info(
+                            "Reusing existing outbound SIP trunk"
+                        )
+                        return trunk_id
+                created = await lkapi.sip.create_outbound_trunk(
+                    api.CreateSIPOutboundTrunkRequest(
+                        trunk=api.SIPOutboundTrunkInfo(
+                            name=name,
+                            address=settings.telnyx_sip_host,
+                            numbers=[caller_id],
+                            auth_username=sip_user,
+                            auth_password=sip_pass,
+                        )
+                    )
+                )
+                created_id = str(created.sip_trunk_id)
+        except Exception:
+            # The request object carries the SIP auth password; drop the cause so
+            # it can never reach a logged traceback. Raise a sanitized error.
+            logger.bind(name=name).warning("Outbound SIP trunk provisioning failed")
+            raise OutboundProvisioningError("failed to provision outbound SIP trunk") from None
+
+        _outbound_trunk_id_cache[name] = created_id
+        logger.bind(trunk_id=created_id, name=name).info("Provisioned outbound SIP trunk")
+        return created_id
 
 
 def _outbound_metadata(call: Call) -> str:
@@ -39,10 +144,11 @@ def _outbound_metadata(call: Call) -> str:
 
 async def dispatch_agent(call: Call, *, settings: Settings) -> None:
     """Dispatch the named agent worker into the call's room (fast, synchronous)."""
-    if not settings.livekit_sip_outbound_trunk_id or not settings.telnyx_caller_id:
+    if not outbound_configured(settings):
         raise OutboundDispatchError(
-            "outbound calling not configured: set "
-            "LIVEKIT_SIP_OUTBOUND_TRUNK_ID and TELNYX_CALLER_ID"
+            "outbound calling not configured: set TELNYX_CALLER_ID plus Telnyx "
+            "SIP credentials (TELNYX_SIP_USERNAME/TELNYX_SIP_PASSWORD), or pin "
+            "LIVEKIT_SIP_OUTBOUND_TRUNK_ID"
         )
     if not call.livekit_room:
         raise OutboundDispatchError("call has no livekit_room assigned")
@@ -59,10 +165,11 @@ async def dispatch_agent(call: Call, *, settings: Settings) -> None:
 
 
 async def _create_sip_participant(call: Call, elder: Elder, settings: Settings) -> object:
+    trunk_id = await resolve_outbound_trunk_id(settings)
     async with build_livekit_api(settings) as lkapi:
         return await lkapi.sip.create_sip_participant(
             api.CreateSIPParticipantRequest(
-                sip_trunk_id=settings.livekit_sip_outbound_trunk_id,
+                sip_trunk_id=trunk_id,
                 sip_call_to=elder.phone_e164,
                 sip_number=settings.telnyx_caller_id,
                 room_name=call.livekit_room,
@@ -118,9 +225,9 @@ async def _dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
         room = call.livekit_room
 
     # Belt-and-suspenders: dispatch_agent already gates on this before the dial
-    # is scheduled, but the SIP request fields are typed str|None — never pass
-    # None into the gRPC request; mark FAILED with a clear reason instead.
-    if not settings.livekit_sip_outbound_trunk_id or not settings.telnyx_caller_id:
+    # is scheduled. Re-check here so a misconfigured call is marked FAILED with a
+    # clear reason instead of failing deep in the dial path.
+    if not outbound_configured(settings):
         async with factory() as db:
             await calls_repo.mark_dial_failure(
                 db, call_id, CallStatus.FAILED, end_reason="not_configured"
@@ -132,8 +239,23 @@ async def _dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
     log = logger.bind(call_id=str(call_id), room=room)
     try:
         info = await _create_sip_participant(call, elder, settings)
-    except Exception as exc:  # busy / no-answer / reject / transport
+    except OutboundDispatchError:
+        # Permanent misconfiguration surfaced at dial time — fail without a retry.
+        async with factory() as db:
+            await calls_repo.mark_dial_failure(
+                db, call_id, CallStatus.FAILED, end_reason="not_configured"
+            )
+            await db.commit()
+        await _delete_room(room, settings)
+        log.info("Outbound dial failed: not_configured")
+        return
+    except Exception as exc:  # busy / no-answer / reject / transport / provisioning
         status, end_reason, error = classify_dial_exception(exc)
+        # A failure with no SIP status code (dial_error) can mean a stale/invalid
+        # cached trunk or a provisioning hiccup — drop the cache so the scheduled
+        # retry re-resolves/re-provisions the trunk instead of reusing a bad ID.
+        if end_reason == "dial_error":
+            invalidate_outbound_trunk_cache(settings)
         async with factory() as db:
             await calls_repo.mark_dial_failure(
                 db, call_id, status, end_reason=end_reason, error=error
