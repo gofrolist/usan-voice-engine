@@ -1,12 +1,11 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.auth import require_operator_token
 from usan_api.db.session import get_db
-from usan_api.ratelimit import limiter, operator_limit
 from usan_api.repositories import elders as elders_repo
 from usan_api.schemas.elder import ElderCreate, ElderResponse, ElderUpdate
 
@@ -19,10 +18,7 @@ router = APIRouter(prefix="/v1/elders", tags=["elders"])
     response_model=ElderResponse,
     dependencies=[Depends(require_operator_token)],
 )
-@limiter.limit(operator_limit)
-async def create_elder(
-    request: Request, body: ElderCreate, db: AsyncSession = Depends(get_db)
-) -> ElderResponse:
+async def create_elder(body: ElderCreate, db: AsyncSession = Depends(get_db)) -> ElderResponse:
     try:
         elder = await elders_repo.create_elder(
             db,
@@ -48,9 +44,8 @@ async def create_elder(
     response_model=ElderResponse,
     dependencies=[Depends(require_operator_token)],
 )
-@limiter.limit(operator_limit)
 async def update_elder(
-    request: Request, elder_id: uuid.UUID, body: ElderUpdate, db: AsyncSession = Depends(get_db)
+    elder_id: uuid.UUID, body: ElderUpdate, db: AsyncSession = Depends(get_db)
 ) -> ElderResponse:
     try:
         elder = await elders_repo.update_elder(db, elder_id, body.model_dump(exclude_unset=True))

@@ -1,18 +1,14 @@
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from typing import cast
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
 from pydantic import BaseModel
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
 
 from usan_api import background, retention, retry_orchestrator
 from usan_api.db.session import dispose_engine
 from usan_api.logging_config import configure_logging
-from usan_api.ratelimit import limiter
+from usan_api.ratelimit import OperatorRateLimitMiddleware
 from usan_api.routers import calls, dnc, elders, tools, webhooks
 from usan_api.settings import Settings, get_settings
 
@@ -48,20 +44,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def _install_rate_limiting(app: FastAPI, settings: Settings) -> None:
-    """Wire the shared limiter onto the app.
+    """Throttle the operator/management plane per client, before authentication.
 
-    Only the operator routes are decorated with ``limiter.limit`` (see
-    usan_api.ratelimit) — internal service/webhook/health routes are never
-    throttled. When RATE_LIMIT_ENABLED is false the limiter passes through
-    without counting, so the decorators become no-ops.
+    Internal service/webhook/health routes are never matched (see
+    usan_api.ratelimit). A no-op when RATE_LIMIT_ENABLED is false.
     """
-    limiter.enabled = settings.rate_limit_enabled
-    app.state.limiter = limiter
-    app.add_middleware(SlowAPIMiddleware)
-    # slowapi's handler signature is narrower than Starlette's generic Exception
-    # handler type; the cast keeps the registration type-clean.
-    handler = cast("Callable[[Request, Exception], Response]", _rate_limit_exceeded_handler)
-    app.add_exception_handler(RateLimitExceeded, handler)
+    app.add_middleware(
+        OperatorRateLimitMiddleware,
+        limit=settings.rate_limit_default,
+        enabled=settings.rate_limit_enabled,
+    )
 
 
 def create_app() -> FastAPI:

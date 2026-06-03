@@ -42,53 +42,42 @@ def test_docs_enabled_when_flag_set(monkeypatch):
         get_settings.cache_clear()
 
 
-def _reset_limiter(app):
-    limiter = app.state.limiter
-    if hasattr(limiter, "reset"):
-        limiter.reset()
-
-
-def test_health_not_rate_limited_when_enabled(monkeypatch):
-    # Internal/service routes (here /health) are never decorated, so they are not
-    # throttled even when limiting is on — a busy call pipeline must not self-throttle.
+def test_operator_route_throttled_before_auth(monkeypatch):
+    # The limiter runs in middleware, before the operator-token dependency, so even
+    # an unauthenticated flood is bounded. No auth header is sent: the first requests
+    # get 401 (auth), later ones 429 (rate limit) — proving the throttle is pre-auth.
     app = _app_with_env(monkeypatch, RATE_LIMIT_ENABLED="true", RATE_LIMIT_DEFAULT="2/minute")
     try:
-        _reset_limiter(app)
-        client = TestClient(app)
-        codes = [client.get("/health").status_code for _ in range(6)]
-        assert all(c == 200 for c in codes)
+        client = TestClient(app, raise_server_exceptions=False)
+        url = "/v1/calls/00000000-0000-0000-0000-000000000000"
+        codes = [client.get(url).status_code for _ in range(5)]
+        assert 429 in codes
+        assert codes.index(429) >= 2  # the first two (the budget) were not throttled
     finally:
         get_settings.cache_clear()
 
 
-def test_operator_route_throttled_when_enabled(monkeypatch):
-    from usan_api.db.session import get_db
-
+def test_internal_routes_not_rate_limited(monkeypatch):
+    # Agent/service and health routes must never be throttled (high volume from a few
+    # container IPs). Unauthenticated, tool routes return 401 from their JWT guard.
     app = _app_with_env(monkeypatch, RATE_LIMIT_ENABLED="true", RATE_LIMIT_DEFAULT="2/minute")
-
-    async def _no_db():
-        yield None
-
-    app.dependency_overrides[get_db] = _no_db
     try:
-        _reset_limiter(app)
         client = TestClient(app, raise_server_exceptions=False)
-        headers = {"Authorization": "Bearer " + "o" * 32}
-        url = "/v1/calls/00000000-0000-0000-0000-000000000000"
-        codes = [client.get(url, headers=headers).status_code for _ in range(5)]
-        assert 429 in codes  # operator routes are throttled past the per-client budget
+        tool_codes = [client.post("/v1/tools/end_call", json={}).status_code for _ in range(6)]
+        assert 429 not in tool_codes
+        health_codes = [client.get("/health").status_code for _ in range(6)]
+        assert all(c == 200 for c in health_codes)
     finally:
-        app.dependency_overrides.clear()
         get_settings.cache_clear()
 
 
 def test_rate_limiting_disabled_passes_through(monkeypatch):
     app = _app_with_env(monkeypatch, RATE_LIMIT_ENABLED="false")
     try:
-        client = TestClient(app)
-        assert app.state.limiter.enabled is False
-        codes = [client.get("/health").status_code for _ in range(10)]
-        assert all(c == 200 for c in codes)
+        client = TestClient(app, raise_server_exceptions=False)
+        url = "/v1/calls/00000000-0000-0000-0000-000000000000"
+        codes = [client.get(url).status_code for _ in range(8)]
+        assert 429 not in codes  # disabled: these are 401 from auth, never throttled
     finally:
         get_settings.cache_clear()
 

@@ -12,7 +12,6 @@ from usan_api.auth import require_operator_token, require_service_token, require
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Elder, WellnessLog
 from usan_api.db.session import get_db
-from usan_api.ratelimit import limiter, operator_limit
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
@@ -110,9 +109,7 @@ async def _create_and_dispatch(
     response_model=CallResponse,
     dependencies=[Depends(require_operator_token)],
 )
-@limiter.limit(operator_limit)
 async def enqueue_call(
-    request: Request,
     body: CreateCallRequest,
     response: Response,
     db: AsyncSession = Depends(get_db),
@@ -209,7 +206,6 @@ async def _presigned_recording_url(
     response_model=CallResponse,
     dependencies=[Depends(require_operator_token)],
 )
-@limiter.limit(operator_limit)
 async def get_call(
     call_id: uuid.UUID,
     request: Request,

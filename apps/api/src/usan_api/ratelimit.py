@@ -1,40 +1,68 @@
-"""Per-client rate limiting for the operator/management plane (slowapi).
+"""Pre-auth, per-client rate limiting for the operator/management plane.
 
-Only the externally reachable operator routes (elders, DNC, outbound call
-enqueue/lookup) are decorated with ``limiter.limit``. Internal service routes —
-agent tool calls (``/v1/tools/*``), the inbound/outcome call hooks, LiveKit
-webhooks, and ``/health`` — are deliberately left undecorated, so a busy call
-pipeline (which drives those at high frequency from a small set of container IPs)
-is never throttled.
+A small ASGI middleware throttles only the externally reachable operator routes
+(elders, DNC, outbound call enqueue/lookup) — BEFORE authentication, so an
+unauthenticated flood is bounded too. Internal service routes (agent /v1/tools/*,
+the inbound/outcome call hooks, LiveKit webhooks, and /health) are never matched,
+so a busy call pipeline driving them from a few container IPs is never throttled.
 
-Behind the Caddy reverse proxy every external request arrives from Caddy's own
-container IP, so keying on the socket peer would collapse all callers into one
-bucket. Caddy is configured to overwrite ``X-Forwarded-For`` with the real client
-(see infra/Caddyfile), so we key on its first hop instead.
+State is a single in-memory fixed-window counter, so the configured limit is
+per-process. That is correct for the current single-uvicorn-worker, single-API-
+container deployment; move to a shared backend (e.g. Redis via limits' storage)
+if the API is ever scaled horizontally.
+
+Behind Caddy the real client arrives in X-Forwarded-For (Caddy overwrites it with
+the direct peer — see infra/Caddyfile), so we key on its first hop, not the proxy.
 """
 
-from fastapi import Request
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-from usan_api.settings import get_settings
+from limits import parse
+from limits.storage import MemoryStorage
+from limits.strategies import FixedWindowRateLimiter
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 def _client_key(request: Request) -> str:
-    """Rate-limit key: the real client IP (X-Forwarded-For first hop behind Caddy)."""
+    """The real client IP: the X-Forwarded-For first hop behind Caddy, else the peer."""
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        # Caddy overwrites XFF with the direct peer, so the first hop is the real,
-        # non-spoofable client address.
         return forwarded.split(",")[0].strip()
-    return get_remote_address(request)
+    return request.client.host if request.client else "unknown"
 
 
-def operator_limit() -> str:
-    """The active per-client limit for operator routes (re-read per request)."""
-    return get_settings().rate_limit_default
+def _is_operator_route(method: str, path: str) -> bool:
+    """True only for the six externally reachable operator/management endpoints.
+
+    The internal /v1/calls routes (POST /inbound, POST /{id}/outcome) and every
+    /v1/tools/*, /webhooks/*, and /health path fall through unthrottled.
+    """
+    if path.startswith("/v1/elders") or path.startswith("/v1/dnc"):
+        return True
+    if path == "/v1/calls" and method == "POST":  # enqueue_call
+        return True
+    # get_call: GET on a specific call; excludes POST /inbound and /{id}/outcome.
+    return path.startswith("/v1/calls/") and method == "GET"
 
 
-# Module-level singleton so route decorators can reference it at import time. The
-# enabled flag and storage are (re)configured per app build in main.create_app.
-limiter = Limiter(key_func=_client_key, default_limits=[])
+class OperatorRateLimitMiddleware:
+    """Fixed-window per-client throttle on the operator plane; no-op when disabled."""
+
+    def __init__(self, app: ASGIApp, *, limit: str, enabled: bool) -> None:
+        self.app = app
+        self.enabled = enabled
+        self._limiter = FixedWindowRateLimiter(MemoryStorage())
+        self._limit = parse(limit)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not self.enabled:
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope)
+        if _is_operator_route(request.method, request.url.path) and not self._limiter.hit(
+            self._limit, "operator", _client_key(request)
+        ):
+            response = JSONResponse({"detail": "rate limit exceeded"}, status_code=429)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
