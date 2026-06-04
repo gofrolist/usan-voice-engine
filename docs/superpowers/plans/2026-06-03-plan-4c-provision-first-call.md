@@ -52,7 +52,7 @@ Only two committed files change (plus the gitignored, local-only `terraform.tfva
 - *(Optional, Task 2)* Modify `infra/terraform/versions.tf` — add a GCS remote-state backend.
 
 **Docs:**
-- Modify `infra/README.md` — add a "Production deploy (Plan 4c)" runbook section + a "Live smoke results (Plan 4c)" results section.
+- Modify `infra/README.md` — add a "Live smoke results (Plan 4c)" results section (written in Task 9 Step 6).
 
 No application code changes.
 
@@ -200,7 +200,7 @@ Expected: project is `usan-retirement`; instance list is empty (first-time provi
 
 - [ ] **Step 2: Plan (this is the real "blocker cleared" assertion)**
 
-Run: `cd infra/terraform && terraform init && terraform plan -out=tfplan`
+Run: `cd infra/terraform && terraform init && terraform plan -out=tfplan` (`tfplan` is gitignored)
 Expected: a plan that will **create** ~15 resources, and **no** `No value for required variable` error for `telnyx_sip_signaling_source_ranges` or `image_tag`. If you see that error, return to Task 1.
 
 - [ ] **Step 3: Apply**
@@ -308,7 +308,7 @@ The `deploy` job (`.github/workflows/build.yml:78-133`) reads `DEPLOY_HOST`, `DE
 ```bash
 gh secret set DEPLOY_HOST   --body "<vm_external_ip>"
 gh secret set DEPLOY_USER   --body "usan"
-gh secret set DEPLOY_SSH_KEY --body "$(cat /path/to/usan-deploy-private-key)"
+gh secret set DEPLOY_SSH_KEY < /path/to/usan-deploy-private-key   # via stdin — keeps the key out of shell history
 gh secret set API_DOMAIN    --body "api.usanretirement.com"
 gh secret set GHCR_PAT      --body "<a PAT with read:packages>"
 ```
@@ -363,7 +363,7 @@ git push origin v0.1.0
 
 - [ ] **Step 2: Watch the run to green**
 
-Run: `gh run watch "$(gh run list --workflow=build.yml --event=push --limit 1 --json databaseId -q '.[0].databaseId')"`
+Run: `gh run watch "$(gh run list --workflow=build.yml --branch v0.1.0 --limit 1 --json databaseId -q '.[0].databaseId')"`
 Expected: both `build` and `deploy` jobs succeed; the "Post-deploy health check" step prints `healthy`.
 
 - [ ] **Step 3: Independently verify the live stack**
@@ -388,17 +388,17 @@ This is the payoff and the validation deferred across Plans 1/2a/2b/4a (4a's Tas
 ```bash
 curl -s -X POST https://api.usanretirement.com/v1/elders \
   -H "content-type: application/json" \
-  -H "x-api-key: $OPERATOR_API_KEY" \
+  -H "Authorization: Bearer $OPERATOR_API_KEY" \
   -d '{"name":"Smoke Test","phone_e164":"+1YOURPHONE","timezone":"America/New_York"}'
 ```
-Expected: `201` with an elder `id`. Record it. *(`OPERATOR_API_KEY` is the value you set in `.env.prod`; the management plane requires it per PR #14. Confirm the header name against `apps/api/.../auth.py` if `x-api-key` is rejected.)*
+Expected: `201` with an elder `id`. Record it. *(`OPERATOR_API_KEY` is the value you set in `.env.prod`; the management plane uses HTTP Bearer auth — verified in `apps/api/src/usan_api/auth.py` (`require_operator_token` → `HTTPBearer`), so the token goes in `Authorization: Bearer`, not `x-api-key`.)*
 
 - [ ] **Step 2: Outbound — human-answer path (this confirms Gemini billing end-to-end)**
 
 ```bash
 python3 scripts/place_test_call.py --elder-id <ELDER_ID> \
   --base-url https://api.usanretirement.com --key live-outbound-1 --var greeting=hello
-curl -s -H "x-api-key: $OPERATOR_API_KEY" https://api.usanretirement.com/v1/calls/<CALL_ID>
+curl -s -H "Authorization: Bearer $OPERATOR_API_KEY" https://api.usanretirement.com/v1/calls/<CALL_ID>
 ```
 Expected: your phone rings; on answer you hear the recording disclosure + greeting and a check-in with a **real LLM turn** (if the agent is silent/apologetic, Gemini billing is the suspect); on hangup the call reaches `completed` with `answered_at`/`ended_at`/`duration_seconds` set and an egress recording in GCS. Record: rang? what you heard, rough first-audio latency, and:
 ```bash
@@ -420,7 +420,7 @@ Expected: `no_answer` (and `busy` where applicable); the retry orchestrator inse
 Dial the Telnyx DID from the registered phone, then from an unregistered number.
 Expected (known): greeted **by name** within ~2s; a `direction=inbound` row reaches `completed` with a transcript. Expected (unknown): generic greeting; row with `elder_id: null`. Verify:
 ```bash
-curl -s -H "x-api-key: $OPERATOR_API_KEY" https://api.usanretirement.com/v1/calls/<CALL_ID>
+curl -s -H "Authorization: Bearer $OPERATOR_API_KEY" https://api.usanretirement.com/v1/calls/<CALL_ID>
 ```
 Record both results.
 
