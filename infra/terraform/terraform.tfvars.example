@@ -19,3 +19,9 @@ telnyx_sip_signaling_source_ranges = [
 
 # recording_nearline_days  = 30
 # recording_retention_days = 365
+
+# Cloudflare DNS automation (optional). Set BOTH to have Terraform create the
+# api.<domain> and lk.<domain> A records (proxied=false) pointing at the VM IP.
+# Leave empty to manage DNS by hand.
+# cloudflare_api_token = "cfut_..."   # dash.cloudflare.com -> My Profile -> API Tokens -> "Edit zone DNS"
+# cloudflare_zone_id   = "..."        # CF dashboard -> domain overview -> right sidebar

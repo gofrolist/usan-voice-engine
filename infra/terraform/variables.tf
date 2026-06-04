@@ -103,3 +103,16 @@ variable "db_disk_gb" {
   description = "Cloud SQL data disk size in GB (autoresizes upward from here)."
   default     = 20
 }
+
+variable "cloudflare_api_token" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Cloudflare API token (Edit zone DNS, scoped to the zone). Empty = manage DNS by hand."
+}
+
+variable "cloudflare_zone_id" {
+  type        = string
+  default     = ""
+  description = "Cloudflare zone ID for the domain. Empty (or empty token) = manage DNS by hand."
+}
