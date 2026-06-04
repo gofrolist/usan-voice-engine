@@ -1,11 +1,21 @@
-# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored (Step 4).
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
 project_id        = "your-gcp-project-id"
 region            = "us-east1"
 zone              = "us-east1-b"
 ssh_user          = "usan"
 ssh_public_key    = "ssh-ed25519 AAAA... you@host"
 operator_ssh_cidr = "203.0.113.4/32" # your workstation IP /32
-# image_tag       = "latest"
-recordings_bucket = "usan-call-recordings" # must be globally unique
+recordings_bucket = "your-globally-unique-bucket" # e.g. usan-retirement-call-recordings
+
+# REQUIRED: Telnyx's CURRENT published SIP signaling CIDRs (verify at https://sip.telnyx.com).
+# Wrong/stale values silently break inbound calls. As of 2026-06:
+telnyx_sip_signaling_source_ranges = [
+  "36.255.198.128/25", "50.114.136.128/25", "50.114.144.0/21",
+  "64.16.226.0/24", "64.16.227.0/24", "64.16.228.0/24", "64.16.229.0/24",
+  "64.16.230.0/24", "64.16.248.0/24", "64.16.249.0/24",
+  "103.115.244.128/25", "103.115.247.128/27",
+  "185.246.41.128/25", "185.246.42.128/28",
+]
+
 # recording_nearline_days  = 30
 # recording_retention_days = 365

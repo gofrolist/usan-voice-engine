@@ -63,11 +63,6 @@ variable "secret_name" {
   default     = "usan-prod-env"
 }
 
-variable "image_tag" {
-  type        = string
-  description = "Container image tag the VM should pull on first boot (passed into the startup script). Must be an explicit immutable tag; no 'latest' fallback."
-}
-
 variable "recordings_bucket" {
   type        = string
   description = "Globally-unique GCS bucket name for call recordings."
