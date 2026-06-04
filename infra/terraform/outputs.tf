@@ -17,3 +17,19 @@ output "recordings_bucket" {
   description = "GCS bucket holding call recordings. Set GCS_BUCKET in the prod .env to this."
   value       = google_storage_bucket.recordings.name
 }
+
+output "db_private_ip" {
+  description = "Cloud SQL private IP. Prod DATABASE_URL = postgresql://usan:<db_password>@<db_private_ip>:5432/usan?sslmode=require"
+  value       = google_sql_database_instance.usan.private_ip_address
+}
+
+output "db_connection_name" {
+  description = "Cloud SQL connection name (project:region:instance), for the optional Auth Proxy / IAM-auth path."
+  value       = google_sql_database_instance.usan.connection_name
+}
+
+output "db_password" {
+  description = "Generated password for the usan DB user. Read with: terraform output -raw db_password"
+  value       = random_password.db.result
+  sensitive   = true
+}
