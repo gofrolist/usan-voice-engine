@@ -85,3 +85,21 @@ variable "recording_noncurrent_retention_days" {
   description = "Days a noncurrent (superseded/deleted) object version is retained before permanent deletion, bounding versioning storage growth."
   default     = 30
 }
+
+variable "db_tier" {
+  type        = string
+  description = "Cloud SQL machine tier (Enterprise edition). db-custom-1-3840 (1 vCPU / 3.75GB) is the cheap baseline for 5k-50k calls/mo; bump to db-custom-2-7680 if needed."
+  default     = "db-custom-1-3840"
+}
+
+variable "db_availability_type" {
+  type        = string
+  description = "REGIONAL = synchronous HA standby in a 2nd zone (recommended for prod PHI); ZONAL = single zone, ~half the cost, no automatic failover."
+  default     = "REGIONAL"
+}
+
+variable "db_disk_gb" {
+  type        = number
+  description = "Cloud SQL data disk size in GB (autoresizes upward from here)."
+  default     = 20
+}
