@@ -12,6 +12,9 @@ services:
     image: ghcr.io/${GHCR_OWNER}/usan-api:${IMAGE_TAG:?IMAGE_TAG must be set to an explicit tag}
     pull_policy: always
     build: !reset null
+    # Prod talks to Cloud SQL via DATABASE_URL (private IP), not the local
+    # container, so drop the base file's `depends_on: postgres` (Plan 4d).
+    depends_on: !reset null
     # API is reached by Caddy over the compose network as api:8000.
     # Keep a loopback publish so on-VM `curl localhost:8000/health` works.
     ports: !override
@@ -68,3 +71,9 @@ services:
         logging:
           level: info
           json: true
+
+  # Production uses Cloud SQL (Plan 4d), not the in-VM container. The `localdb`
+  # profile is never enabled in prod, so this service does not start here. Dev
+  # (base file, no overlay) has no profile on postgres and still runs it.
+  postgres:
+    profiles: ["localdb"]
