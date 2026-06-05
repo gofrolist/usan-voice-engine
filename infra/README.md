@@ -52,6 +52,14 @@ Then:
 ## LiveKit side
 With the stack running and `infra/.env` loaded:
 
+> **`livekit-cli` URL:** these commands run from your shell, not inside the
+> compose network, so the `.env` value `LIVEKIT_URL=ws://livekit:7880` (a
+> compose-internal DNS name) is **not** reachable here. Target the host-published
+> signaling port instead — `--url ws://127.0.0.1:7880`. This holds in both dev
+> (livekit publishes `127.0.0.1:7880`) and prod (livekit runs on the host network,
+> Plan 4e C, and binds `7880` on the VM directly). Override with
+> `LIVEKIT_URL=ws://127.0.0.1:7880 livekit-cli ...` or edit the flag.
+
 ```bash
 # Substitute env vars into the JSON files
 envsubst < infra/livekit-sip-trunk.json > /tmp/trunk.json

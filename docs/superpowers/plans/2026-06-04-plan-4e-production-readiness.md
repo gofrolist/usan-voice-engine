@@ -117,10 +117,14 @@ The PHI-access audit events (`calls.py:205` "Recording URL accessed", `calls.py:
 
 **Files:** `infra/docker-compose.prod.yml`, env/config for `LIVEKIT_URL`, egress `ws_url`, livekit webhook URL
 
-- [ ] **C1:** add `network_mode: host` to **livekit** and **livekit-sip** in the prod overlay; remove their published `ports:` blocks (removes the docker-proxy fan-out that wedged the VM and blocks downsizing). Dev base compose stays on bridge + narrow ranges (Docker-Desktop-on-Mac safety).
-- [ ] **C2:** widen media ranges back to LiveKit defaults to match the already-open GCP firewall (rtc 50000-60000, rtp 10000-20000); keep `use_external_ip: true`.
-- [ ] **C3 (migration gotcha — host mode breaks compose DNS):** repoint clients of `livekit` to loopback: `LIVEKIT_URL ws://livekit:7880 → ws://127.0.0.1:7880` (agent/api/livekit-sip); egress `ws_url → ws://127.0.0.1:7880`; livekit webhook `http://api:8000/… → http://127.0.0.1:8000/…` (api already publishes `127.0.0.1:8000:8000`).
-- [ ] **C4 (verify on stage):** full outbound call audio both ways (STUN/ICE + Telnyx media), egress upload to GCS, livekit webhook reaches api, `ss -lun` shows no docker-proxy procs for media ports.
+- [x] **C1 (done, PR pending):** added `network_mode: host` to **livekit** and **livekit-sip** in the prod overlay; cleared their published `ports:` (`!reset null`) — removes the docker-proxy fan-out that wedged the VM and blocks downsizing. Dev base compose stays on bridge + narrow ranges (Docker-Desktop-on-Mac safety).
+- [x] **C2 (done):** widened media ranges to LiveKit defaults to match the already-open GCP firewall (rtc `50000-60000`, rtp `10000-20000`); kept `use_external_ip: true`.
+- [x] **C3 (done — corrected addressing):** host mode breaks compose DNS, so repointed each hop by *which network the client is on*, NOT a blanket loopback:
+  - **bridge → host** (`api`, `agent`, `egress`, `caddy` reaching livekit): `ws://host.docker.internal:7880` + `extra_hosts: ["host.docker.internal:host-gateway"]`. The plan's original "`ws://127.0.0.1:7880` for api/agent" was wrong — from a *bridge* container `127.0.0.1` is the container's own loopback, not the host, so it would silently fail.
+  - **host → host** (`livekit-sip` → livekit): `ws://127.0.0.1:7880` (both on host).
+  - **host → bridge-published** (`livekit`/`livekit-sip` → redis, livekit webhook → api): `127.0.0.1:6379` / `http://127.0.0.1:8000/webhooks/livekit` (redis + api publish on the host loopback).
+  - `egress` → redis stays `redis:6379` (both on bridge). Verified with `docker compose config` (renders clean).
+- [ ] **C4 (verify on the VM — gates the tag):** full outbound call audio both ways (STUN/ICE + Telnyx media), egress upload to GCS, livekit webhook reaches api, `ss -lunp` shows no docker-proxy procs for media ports. No separate staging env — validate on the prod VM (safe: no real PHI/traffic flows yet, only internal test number).
 - [ ] **C5 (separate, measured follow-up):** only after C1–C4, measure agent model pre-warm (silero VAD + turn-detector) + egress GStreamer CPU/RAM, then consider `e2-standard-2 → e2-medium`. **Host mode is a prerequisite for downsizing, not a justification.** **Decision (D7):** attempt downsize vs defer.
 
 > Alternative (D8): SFU-only `rtc.udp_port:7882` single-port mux (keep SFU on bridge, one docker-proxy proc, firewall to udp/7882) — but livekit-sip rtp has no mux, so SIP still needs host mode or a narrow range. Recommendation: host networking for both.

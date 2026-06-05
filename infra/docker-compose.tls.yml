@@ -15,6 +15,10 @@ services:
     environment:
       API_DOMAIN: ${API_DOMAIN}
       LIVEKIT_DOMAIN: ${LIVEKIT_DOMAIN}
+    # livekit is host-networked in prod (Plan 4e C1); reach it from this bridge
+    # container via the host gateway (the Caddyfile proxies host.docker.internal:7880).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "80:80"
       - "443:443"
