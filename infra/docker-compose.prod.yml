@@ -4,9 +4,13 @@
 #     -f infra/docker-compose.prod.yml \
 #     -f infra/docker-compose.tls.yml up -d
 #
-# Requires in .env: IMAGE_TAG, GHCR_OWNER, API_DOMAIN, LIVEKIT_DOMAIN,
-# and LIVEKIT_URL=ws://livekit:7880 (internal hop stays plaintext on the
-# compose network; external TLS is terminated by Caddy).
+# Requires in .env: IMAGE_TAG, GHCR_OWNER, API_DOMAIN, LIVEKIT_DOMAIN.
+#
+# NOTE on LIVEKIT_URL: in prod, livekit + livekit-sip run on the host network
+# (Plan 4e C1), so the compose-DNS name `livekit` no longer resolves. This
+# overlay overrides LIVEKIT_URL per service (api/agent -> host.docker.internal,
+# livekit-sip -> 127.0.0.1), so the .env LIVEKIT_URL value is effectively dev-only.
+# Internal hops stay plaintext; external TLS is terminated by Caddy.
 services:
   api:
     image: ghcr.io/${GHCR_OWNER}/usan-api:${IMAGE_TAG:?IMAGE_TAG must be set to an explicit tag}
@@ -23,6 +27,15 @@ services:
     # Merges with the base file's environment map.
     environment:
       LOG_FORMAT: json
+      # livekit runs on the host network in prod (Plan 4e C1), so the compose-DNS
+      # name `livekit` no longer resolves. Bridge services reach it via the host
+      # gateway, NOT 127.0.0.1 (which is the container's own loopback). Overrides
+      # the base file's ${LIVEKIT_URL} (still used by dev, which stays on bridge).
+      LIVEKIT_URL: ws://host.docker.internal:7880
+    # Map host.docker.internal -> the docker bridge gateway so this bridge container
+    # can reach the host-networked livekit (Linux Docker >= 20.10). Plan 4e C3.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Ship stdout to journald so the Ops Agent ingests it into Cloud Logging (Plan 4e
     # B2/B3). `docker logs` still works under the journald driver.
     logging:
@@ -34,27 +47,34 @@ services:
     build: !reset null
     environment:
       LOG_FORMAT: json
+      # See the api note above: reach host-networked livekit via the host gateway.
+      LIVEKIT_URL: ws://host.docker.internal:7880
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     logging:
       driver: journald
 
   livekit:
-    ports: !override
-      - "127.0.0.1:7880:7880"
-      - "127.0.0.1:7881:7881/tcp"
-      # Keep this range SMALL: Docker spawns one docker-proxy process per published
-      # port, so a 10k range (~10k procs) wedges the VM. ~100 ports handles our
-      # volume; for higher concurrency switch to host networking / UDP mux (no
-      # per-port proxy) — see Plan 4e. Must match rtc.port_range_end below.
-      - "50000-50100:50000-50100/udp"
+    # Host networking (Plan 4e C1): livekit binds the VM's interfaces directly, so
+    # there is NO docker-proxy process per media port — that per-port fan-out (one
+    # proc each) is what wedged the VM and forced the tiny published range. The GCP
+    # firewall already allows the full media ranges. `ports:` is incompatible with
+    # host mode, so clear the base file's mappings.
+    network_mode: host
+    ports: !reset null
     environment:
+      # On the host network, peer services that live on the bridge are reached via
+      # the host's loopback through their published ports: redis publishes
+      # 127.0.0.1:6379 and api publishes 127.0.0.1:8000 (see base + this overlay).
+      # rtc range widened to the LiveKit default 50000-60000 (Plan 4e C2).
       LIVEKIT_CONFIG: |
         port: 7880
         redis:
-          address: redis:6379
+          address: 127.0.0.1:6379
         rtc:
           tcp_port: 7881
           port_range_start: 50000
-          port_range_end: 50100
+          port_range_end: 60000
           use_external_ip: true
         keys:
           ${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}
@@ -69,26 +89,51 @@ services:
         webhook:
           api_key: ${LIVEKIT_API_KEY}
           urls:
-            - http://api:8000/webhooks/livekit
+            - http://127.0.0.1:8000/webhooks/livekit
 
   livekit-sip:
-    ports: !override
-      - "5060:5060/udp"
-      # Small range — see the livekit note above (one docker-proxy per port).
-      - "10000-10100:10000-10100/udp"
+    # Host networking (Plan 4e C1): removes the docker-proxy fan-out and lets SIP
+    # advertise the VM's real interface for RTP — host mode IS the proper fix the
+    # base file referred to. `ports:` is incompatible with host mode; clear them.
+    network_mode: host
+    ports: !reset null
     environment:
       SIP_CONFIG_BODY: |
         api_key: ${LIVEKIT_API_KEY}
         api_secret: ${LIVEKIT_API_SECRET}
-        ws_url: ${LIVEKIT_URL}
+        # Both livekit-sip and livekit are on the host network, so reach the SFU
+        # over the host loopback (compose DNS name `livekit` no longer resolves).
+        ws_url: ws://127.0.0.1:7880
         redis:
-          address: redis:6379
+          address: 127.0.0.1:6379
         sip_port: 5060
-        rtp_port: 10000-10100
+        # rtp range widened to the LiveKit default 10000-20000 (Plan 4e C2); the
+        # GCP firewall already allows it.
+        rtp_port: 10000-20000
         # Advertise the VM's PUBLIC IP (detected via STUN) in SIP Contact/SDP, not
         # the docker-internal 172.x address — otherwise Telnyx media / in-dialog
-        # routing breaks. (Proper fix is host networking — Plan 4e.)
+        # routing breaks.
         use_external_ip: true
+        logging:
+          level: info
+          json: true
+
+  egress:
+    # Egress stays on the bridge (it needs no inbound ports), but livekit is now on
+    # the host network, so its ws_url must use the host gateway instead of the
+    # compose DNS name `livekit`. Redis is still reached over the bridge (`redis`).
+    # The full EGRESS_CONFIG_BODY is re-specified because overriding an env var
+    # replaces the whole value. Plan 4e C3.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      EGRESS_CONFIG_BODY: |
+        api_key: ${LIVEKIT_API_KEY}
+        api_secret: ${LIVEKIT_API_SECRET}
+        ws_url: ws://host.docker.internal:7880
+        insecure: true
+        redis:
+          address: redis:6379
         logging:
           level: info
           json: true

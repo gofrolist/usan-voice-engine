@@ -13,5 +13,9 @@
 }
 
 {$LIVEKIT_DOMAIN} {
-	reverse_proxy livekit:7880
+	# livekit runs on the host network in prod (Plan 4e C1), so the compose-DNS
+	# name `livekit` no longer resolves from this bridge container. Reach it via
+	# the host gateway (caddy maps host.docker.internal:host-gateway in the TLS
+	# overlay). This Caddyfile is prod-only (mounted solely by the caddy service).
+	reverse_proxy host.docker.internal:7880
 }
