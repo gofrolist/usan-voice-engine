@@ -24,17 +24,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-
-def _client_key(request: Request) -> str:
-    """The real client IP: the X-Forwarded-For first hop behind Caddy, else the peer."""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        # A header like ", 1.2.3.4" yields an empty first hop; don't collapse every
-        # such request into one shared "" bucket — fall back to the real peer instead.
-        candidate = forwarded.split(",")[0].strip()
-        if candidate:
-            return candidate
-    return request.client.host if request.client else "unknown"
+from usan_api.client_ip import client_ip
 
 
 def _is_operator_route(method: str, path: str) -> bool:
@@ -71,7 +61,7 @@ class OperatorRateLimitMiddleware:
             return
         request = Request(scope)
         if _is_operator_route(request.method, request.url.path):
-            key = _client_key(request)
+            key = client_ip(request)
             if not self._limiter.hit(self._limit, "operator", key):
                 # RFC 9110 §15.5.30: a 429 SHOULD tell the client when to retry, so a
                 # well-behaved caller backs off instead of hammering the window.

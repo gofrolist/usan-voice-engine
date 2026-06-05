@@ -121,9 +121,11 @@ class Settings(BaseSettings):
         Local/dev and the test container use plaintext loopback connections, so a
         missing TLS param there is expected. For a remote host it means PHI could
         cross the wire unencrypted — surface it loudly so operators notice. Both the
-        libpq ``sslmode=`` and the asyncpg-native ``ssl=`` query params count as TLS
-        configured; parsing the query (not a substring scan) also avoids a false
-        positive when ``ssl`` appears in the password.
+        libpq ``sslmode=`` and the asyncpg-native ``ssl=`` query params suppress the
+        warning (parsing the query, not a substring scan, also avoids a false positive
+        when ``ssl`` appears in the password). Note the app connects via asyncpg, which
+        accepts ``ssl=`` but rejects ``sslmode=`` at connect time — so the remediation
+        message recommends ``ssl=require``, the param that actually works here.
         """
         url = self.database_url.get_secret_value()
         parts = urlsplit(url)
@@ -134,8 +136,8 @@ class Settings(BaseSettings):
         if host in _LOCAL_HOSTS:
             return
         logger.bind(db_host=host).warning(
-            "DATABASE_URL has no sslmode= and host {db_host} is not local; "
-            "PHI may transit unencrypted — set sslmode=require",
+            "DATABASE_URL has no TLS query param and host {db_host} is not local; "
+            "PHI may transit unencrypted — append ?ssl=require (asyncpg rejects sslmode=)",
             db_host=host,
         )
 
