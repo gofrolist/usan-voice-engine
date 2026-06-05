@@ -1,4 +1,6 @@
+import inspect
 import json
+import logging
 import os
 import sys
 import traceback
@@ -55,6 +57,36 @@ def _json_sink(message: Any) -> None:
     sys.stdout.write(_gcp_serialize(message.record) + "\n")
 
 
+class _InterceptHandler(logging.Handler):
+    """Route stdlib logging (uvicorn) into loguru so every line shares one JSON format.
+
+    Drops uvicorn.access records for /health — the uptime check + Caddy probes would
+    otherwise spam the logs with no operational value.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.name == "uvicorn.access" and "/health" in record.getMessage():
+            return
+        try:
+            level: str | int = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+        # Walk back past the logging machinery so loguru reports the real caller.
+        frame, depth = inspect.currentframe(), 0
+        while frame is not None and (depth == 0 or frame.f_code.co_filename == logging.__file__):
+            frame = frame.f_back
+            depth += 1
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+
+
+def _intercept_uvicorn() -> None:
+    """Redirect uvicorn's loggers through loguru (uvicorn installs its own handlers)."""
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        lg = logging.getLogger(name)
+        lg.handlers = [_InterceptHandler()]
+        lg.propagate = False
+
+
 def configure_logging(level: LogLevel = "INFO") -> None:
     """Configure loguru to log to stdout.
 
@@ -79,3 +111,5 @@ def configure_logging(level: LogLevel = "INFO") -> None:
             diagnose=False,
             enqueue=True,
         )
+    # Funnel uvicorn's access/error logs through loguru (consistent JSON; /health dropped).
+    _intercept_uvicorn()
