@@ -18,7 +18,7 @@
 
 **Blocker / hardening split:**
 - **Go-live blockers:** A1–A2 (Vertex migration, code+IAM), A3–A5 (BAA executions: Google scope, Cartesia, Telnyx), B (audit-log durability — HIPAA §164.312(b)).
-- **Hardening (not a PHI gate):** C (media networking), D (Cloudflare token rotation).
+- **Hardening (not a PHI gate):** C (media networking), D (Cloudflare token rotation), E (registry → GAR + keyless supply chain).
 
 ---
 
@@ -133,6 +133,24 @@ The PHI-access audit events (`calls.py:205` "Recording URL accessed", `calls.py:
 
 ---
 
+## Workstream E — Container registry → Artifact Registry + keyless supply chain (security hygiene)
+
+Images live in GHCR today (`ghcr.io/${GHCR_OWNER}/usan-{api,agent}`). Push uses the free `GITHUB_TOKEN` (fine), but the **VM pull needs a long-lived `GHCR_PAT`** (`docker login` on the box + a GitHub secret). Images are app code, **not PHI** — so this is operational hardening, not a compliance gate. The wins: kill `GHCR_PAT` (VM pulls keyless via its own service account, like the Vertex ADC pattern), keep the runtime supply chain in-region inside the GCP boundary, and get free vulnerability scanning.
+
+**Files:** `infra/terraform/*.tf` (+ `variables.tf`), `.github/workflows/build.yml`, `infra/docker-compose.prod.yml`, `infra/terraform/startup.sh`, `infra/README.md`
+
+- [ ] **E1 (infra):** Terraform `google_artifact_registry_repository` (Docker, `us-east1`, e.g. `us-east1-docker.pkg.dev/usan-retirement/usan`) + enable `artifactregistry.googleapis.com`. Grant the **VM service account** `roles/artifactregistry.reader`.
+- [ ] **E2 (infra):** Terraform a **Workload Identity Federation** pool/provider for GitHub Actions + a deploy SA with `roles/artifactregistry.writer`, scoped to this repo (`attribute.repository`). Keyless — **no SA key in GitHub secrets**. Add vars for the GitHub repo/owner.
+- [ ] **E3 (CI):** `build.yml` — replace the GHCR `docker/login-action` with `google-github-actions/auth` (WIF) + `gcloud auth configure-docker us-east1-docker.pkg.dev`; push images to the GAR path. (`GITHUB_TOKEN` GHCR login can stay or be removed.)
+- [ ] **E4 (VM/compose):** configure the GAR cred helper for the VM SA in `startup.sh` (`gcloud auth configure-docker us-east1-docker.pkg.dev -q`); flip `docker-compose.prod.yml` image refs `ghcr.io/...` → `us-east1-docker.pkg.dev/usan-retirement/usan/usan-{api,agent}`; **remove** the `GHCR_PAT` `docker login` step from the deploy job.
+- [ ] **E5 (cleanup):** delete the `GHCR_PAT` GitHub secret and **revoke the PAT**; update `infra/README.md`. Optionally enable Artifact Analysis (vuln scanning) on the repo.
+
+> **Cutover ordering:** apply E1 (repo + VM-SA reader) and push at least one image tag to GAR **before** flipping the compose refs — otherwise the VM can't pull and the deploy fails. Do this as its own PR/tag, not stacked with another infra change in flight.
+
+> **Decisions (D9, D10):** D9 — move to GAR (recommended) vs stay on GHCR. D10 — CI→GCP auth via Workload Identity Federation (recommended, keyless) vs a service-account key in GitHub secrets.
+
+---
+
 ## Decisions for the user (blocking the relevant tasks)
 
 - **D1** LLM auth: attached-SA ADC (recommended) vs key file.
@@ -143,6 +161,8 @@ The PHI-access audit events (`calls.py:205` "Recording URL accessed", `calls.py:
 - **D6** Operator alert target (email/PagerDuty).
 - **D7** VM downsize: measured follow-up vs defer.
 - **D8** Media: host networking for both (recommended) vs SFU-only udp mux.
+- **D9** Registry: move images to GCP Artifact Registry (recommended — keyless VM pulls, kills `GHCR_PAT`, in-region, vuln scanning) vs stay on GHCR.
+- **D10** CI→GCP auth: Workload Identity Federation (recommended — keyless) vs a service-account key in GitHub secrets.
 
 ## Top risks
 
@@ -152,6 +172,7 @@ The PHI-access audit events (`calls.py:205` "Recording URL accessed", `calls.py:
 - **Host-networking cutover** can silently break the control plane (egress ws_url + livekit→api webhook) — validate on stage (C4).
 - **VM-wedge regression:** widening media ranges is only safe AFTER docker-proxy is removed via host mode.
 - **SIP media may be plain RTP** unless SRTP is enforced on the Telnyx↔livekit-sip trunk.
+- **Registry cutover:** flipping compose to GAR before the VM SA has `artifactregistry.reader` (E1) or before the tag is pushed to GAR (E3) leaves the VM unable to pull — ship E as its own PR/tag, reader-grant first.
 
 ## Out of scope (tracked elsewhere)
 
@@ -163,5 +184,5 @@ The PHI-access audit events (`calls.py:205` "Recording URL accessed", `calls.py:
 1. **A1 + A2** (Vertex migration — the active CRITICAL, ours to fix) → its own PR + `v*` tag.
 2. **B** (audit durability) → PR + tag.
 3. **A3/A4/A5** (legal BAAs — run in parallel from day 1; they gate go-live, not code).
-4. **C** (media hardening) → PR + tag; **D** (token rotation) alongside.
+4. **C** (media hardening) → PR + tag; **D** (token rotation) + **E** (registry → GAR/WIF) alongside — each its own PR (D and E both kill a long-lived secret; don't stack E with another in-flight infra change).
 5. **C5** VM downsize as a measured follow-up.
