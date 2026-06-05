@@ -19,6 +19,14 @@ apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin do
 
 usermod -aG docker "${ssh_user}" || true
 
+echo "[startup] configuring Artifact Registry docker cred helper for ${ssh_user}..."
+# Lets `docker pull` from us-east1-docker.pkg.dev authenticate keyless via the VM's
+# attached SA (artifactregistry.reader) — no GHCR_PAT. Written to the ssh_user's
+# ~/.docker/config.json (the deploy job pulls as that user). Plan 4e E4. Non-fatal:
+# the deploy job re-runs this on every deploy, so a transient failure here is fine.
+sudo -u "${ssh_user}" gcloud auth configure-docker us-east1-docker.pkg.dev -q \
+  || echo "[startup] WARN: configure-docker failed (non-fatal); deploy job re-runs it."
+
 echo "[startup] materializing app dir + .env from Secret Manager..."
 mkdir -p "$APP_DIR/infra"
 # The VM's service account has secretmanager.secretAccessor (Task 3).
