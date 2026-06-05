@@ -128,3 +128,9 @@ variable "operator_alert_email" {
   default     = ""
   description = "Email for Cloud Monitoring alert notifications (API-down, CPU/mem/disk). Empty = skip the notification channel + alert policies (no-op)."
 }
+
+variable "github_repository" {
+  type        = string
+  default     = "gofrolist/usan-voice-engine"
+  description = "owner/repo permitted to push images via Workload Identity Federation (Plan 4e E). Scopes both the WIF provider attribute_condition and the deploy-SA impersonation principalSet."
+}
