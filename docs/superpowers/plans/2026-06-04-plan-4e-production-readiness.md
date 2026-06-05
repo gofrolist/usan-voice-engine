@@ -139,9 +139,20 @@ The PHI-access audit events (`calls.py:205` "Recording URL accessed", `calls.py:
 
 ---
 
-## Workstream D — Committed-secret remediation (security hygiene)
+## Workstream D — Cloudflare token (CLOSED 2026-06-05)
 
-- [ ] Rotate the Cloudflare API token + zone_id committed in `infra/terraform/terraform.tfvars`; move to a gitignored secret or Secret Manager. Treat the committed value as compromised. (Surfaced repeatedly; independent of HIPAA.)
+- [x] **Premise corrected:** the token was **never committed**. Verified across all
+  history — no tracked `terraform.tfvars` (it's gitignored), no commit ever held a real
+  value, gitleaks passed on every PR. `dd7a5b9` (#23) only added the variable declaration,
+  `var.`-references in `dns.tf`, and a commented placeholder in `.example`. The real value
+  always lived only in the gitignored on-disk `infra/terraform/terraform.tfvars` — correct
+  handling. The original "committed secret" framing here was inaccurate.
+- [x] **Rotated anyway:** the live token was accidentally printed to the assistant session
+  transcript during this investigation (a masking command failed), so it was rotated at
+  dash.cloudflare.com out of caution. Done per user 2026-06-05.
+- Optional future hardening (NOT required): source `cloudflare_api_token` from a
+  `TF_VAR_cloudflare_api_token` env var backed by Secret Manager at apply time, to drop the
+  on-disk plaintext footprint. Deferred.
 
 ---
 
