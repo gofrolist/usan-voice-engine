@@ -15,6 +15,7 @@ from usan_api.db.session import get_db
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.repositories import wellness as wellness_repo
 from usan_api.schemas.call import (
     CallOutcomeRequest,
@@ -222,7 +223,8 @@ async def get_call(
         raise HTTPException(status_code=404, detail="call not found")
     client_host = request.client.host if request.client else "unknown"
     presigned = await _presigned_recording_url(call, settings, client_host=client_host)
-    return CallResponse.from_model(call, presigned_recording_url=presigned)
+    transcript = await transcripts_repo.list_for_call(db, call_id)
+    return CallResponse.from_model(call, presigned_recording_url=presigned, transcript=transcript)
 
 
 @router.post("/{call_id}/outcome", response_model=CallResponse)
