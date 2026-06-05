@@ -19,11 +19,17 @@ services:
     # Keep a loopback publish so on-VM `curl localhost:8000/health` works.
     ports: !override
       - "127.0.0.1:8000:8000"
+    # Prod emits Cloud Logging JSON to stdout (ingested by the Ops Agent). Plan 4e B1.
+    # Merges with the base file's environment map.
+    environment:
+      LOG_FORMAT: json
 
   agent:
     image: ghcr.io/${GHCR_OWNER}/usan-agent:${IMAGE_TAG:?IMAGE_TAG must be set to an explicit tag}
     pull_policy: always
     build: !reset null
+    environment:
+      LOG_FORMAT: json
 
   livekit:
     ports: !override
