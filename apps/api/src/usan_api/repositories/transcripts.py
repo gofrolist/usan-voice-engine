@@ -7,6 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.models import Transcript
 
+# Defensive upper bound on segments returned for a single call. A wellness call
+# yields tens of segments; this caps a pathological or runaway transcript so the
+# GET /v1/calls/{id} response (and the memory to build it) can't grow unbounded.
+MAX_TRANSCRIPT_SEGMENTS = 1000
+
 
 async def create_transcript_segments(
     db: AsyncSession,
@@ -43,6 +48,7 @@ async def list_for_call(db: AsyncSession, call_id: uuid.UUID) -> list[Transcript
         select(Transcript)
         .where(Transcript.call_id == call_id)
         .order_by(Transcript.started_at, Transcript.id)
+        .limit(MAX_TRANSCRIPT_SEGMENTS)
     )
     return list(result.scalars().all())
 

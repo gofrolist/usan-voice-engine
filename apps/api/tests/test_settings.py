@@ -364,6 +364,23 @@ def test_security_settings_from_env(monkeypatch):
     assert s.phi_retention_days == 30
 
 
+def test_phi_retention_days_blank_coerces_to_none(monkeypatch):
+    # Compose passes ${PHI_RETENTION_DAYS:-} as "" when the var is unset. Without
+    # _blank_to_none the empty string fails int|None coercion and crash-loops the
+    # API ("Invalid configuration for: PHI_RETENTION_DAYS"). Guards the #24 fix.
+    _base_env(monkeypatch)
+    monkeypatch.setenv("PHI_RETENTION_DAYS", "")
+    s = get_settings()
+    assert s.phi_retention_days is None
+
+
+def test_phi_retention_days_whitespace_coerces_to_none(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("PHI_RETENTION_DAYS", "   ")
+    s = get_settings()
+    assert s.phi_retention_days is None
+
+
 def test_db_tls_warning_for_remote_host_without_sslmode(monkeypatch):
     _base_env(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/d")
@@ -374,7 +391,10 @@ def test_db_tls_warning_for_remote_host_without_sslmode(monkeypatch):
         s.warn_if_db_tls_disabled()
     finally:
         logger.remove(handler_id)
-    assert any("sslmode" in m for m in messages)
+    # Warns about unencrypted PHI and recommends the asyncpg-correct param
+    # (ssl=require) — never libpq's sslmode=, which asyncpg rejects at connect.
+    assert any("PHI may transit unencrypted" in m for m in messages)
+    assert any("ssl=require" in m for m in messages)
 
 
 def test_db_tls_no_warning_for_local_or_sslmode(monkeypatch):
@@ -390,7 +410,7 @@ def test_db_tls_no_warning_for_local_or_sslmode(monkeypatch):
         remote_tls.warn_if_db_tls_disabled()
     finally:
         logger.remove(handler_id)
-    assert not any("sslmode" in m for m in messages)
+    assert not messages
 
 
 def test_db_tls_no_warning_for_asyncpg_ssl_param(monkeypatch):
@@ -405,4 +425,4 @@ def test_db_tls_no_warning_for_asyncpg_ssl_param(monkeypatch):
         s.warn_if_db_tls_disabled()
     finally:
         logger.remove(handler_id)
-    assert not any("sslmode" in m for m in messages)
+    assert not messages

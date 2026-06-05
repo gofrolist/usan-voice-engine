@@ -346,7 +346,7 @@ Using the Task 3 values:
 ```bash
 DATABASE_URL=postgresql://usan:<db_password>@<db_private_ip>:5432/usan?ssl=require
 ```
-Keep `?ssl=require` — `settings.py:127-136` warns (PHI may transit unencrypted) without it, and the instance is `ENCRYPTED_ONLY`. The app derives the `postgresql+asyncpg://` driver itself (`settings.py:93-101`). **Use `?ssl=require`, NOT `?ssl=require`** — asyncpg uses the `ssl` param and rejects libpq's `sslmode` (`TypeError: connect() got an unexpected keyword argument 'sslmode'`).
+Keep `?ssl=require` — `settings.py:127-136` warns (PHI may transit unencrypted) without it, and the instance is `ENCRYPTED_ONLY`. The app derives the `postgresql+asyncpg://` driver itself (`settings.py:93-101`). **Use `?ssl=require`, NOT `?sslmode=require`** — asyncpg uses the `ssl` param and rejects libpq's `sslmode` (`TypeError: connect() got an unexpected keyword argument 'sslmode'`).
 
 - [ ] **Step 2: Push the updated `.env.prod` as a new secret version**
 

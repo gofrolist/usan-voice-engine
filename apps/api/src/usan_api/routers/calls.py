@@ -224,6 +224,13 @@ async def get_call(
     client_host = request.client.host if request.client else "unknown"
     presigned = await _presigned_recording_url(call, settings, client_host=client_host)
     transcript = await transcripts_repo.list_for_call(db, call_id)
+    if transcript:
+        # PHI access audit (spec §10): a returned transcript exposes PHI, so the
+        # access is logged like the recording path. Only the segment count and the
+        # caller's host are recorded — never the transcript content itself.
+        logger.bind(call_id=str(call_id), client=client_host, segments=len(transcript)).info(
+            "Transcript accessed"
+        )
     return CallResponse.from_model(call, presigned_recording_url=presigned, transcript=transcript)
 
 

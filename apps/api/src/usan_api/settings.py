@@ -134,8 +134,8 @@ class Settings(BaseSettings):
         if host in _LOCAL_HOSTS:
             return
         logger.bind(db_host=host).warning(
-            "DATABASE_URL has no sslmode= and host {db_host} is not local; "
-            "PHI may transit unencrypted — set sslmode=require",
+            "DATABASE_URL has no TLS query param and host {db_host} is not local; "
+            "PHI may transit unencrypted — append ?ssl=require (asyncpg rejects sslmode=)",
             db_host=host,
         )
 
