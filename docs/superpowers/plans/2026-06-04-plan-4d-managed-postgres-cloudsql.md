@@ -4,7 +4,7 @@
 
 **Goal:** Move the production database off the in-VM `pgvector/pgvector:pg18` container onto **GCP Cloud SQL for PostgreSQL** (private IP, regional HA, automated backups + PITR) — closing the current zero-backup/zero-HA gap for elder PHI — while keeping the local container unchanged for dev.
 
-**Architecture:** Cloud SQL is provisioned via Terraform into the **same project (`usan-retirement`) and VPC** as the Plan 4c VM, reachable over **private IP** via Private Services Access (no public exposure, LAN-class latency, free intra-VPC egress, covered by the existing Google Cloud BAA). The app is 100% `DATABASE_URL`-driven, so production becomes a config swap: point `DATABASE_URL` at the Cloud SQL private IP with `?sslmode=require`, stop starting the local `postgres` container in prod (a never-enabled compose profile), and let the API's existing entrypoint (`alembic upgrade head`) materialize the schema on Cloud SQL at deploy time. **No application code changes** — asyncpg connects directly to the session-mode private-IP endpoint, so the existing engine config (`db/session.py:19`) and the `FOR UPDATE SKIP LOCKED` retry poller work unmodified.
+**Architecture:** Cloud SQL is provisioned via Terraform into the **same project (`usan-retirement`) and VPC** as the Plan 4c VM, reachable over **private IP** via Private Services Access (no public exposure, LAN-class latency, free intra-VPC egress, covered by the existing Google Cloud BAA). The app is 100% `DATABASE_URL`-driven, so production becomes a config swap: point `DATABASE_URL` at the Cloud SQL private IP with `?ssl=require`, stop starting the local `postgres` container in prod (a never-enabled compose profile), and let the API's existing entrypoint (`alembic upgrade head`) materialize the schema on Cloud SQL at deploy time. **No application code changes** — asyncpg connects directly to the session-mode private-IP endpoint, so the existing engine config (`db/session.py:19`) and the `FOR UPDATE SKIP LOCKED` retry poller work unmodified.
 
 **Tech Stack:** Terraform (`google` + `random` providers), GCP Cloud SQL for PostgreSQL (Enterprise edition, Postgres 18), Private Services Access / VPC peering, Docker Compose overlays + profiles, SQLAlchemy 2.0 async + asyncpg, Alembic.
 
@@ -188,7 +188,7 @@ resource "google_sql_user" "usan" {
 
 ```hcl
 output "db_private_ip" {
-  description = "Cloud SQL private IP. Prod DATABASE_URL = postgresql://usan:<db_password>@<db_private_ip>:5432/usan?sslmode=require"
+  description = "Cloud SQL private IP. Prod DATABASE_URL = postgresql://usan:<db_password>@<db_private_ip>:5432/usan?ssl=require"
   value       = google_sql_database_instance.usan.private_ip_address
 }
 
@@ -262,13 +262,13 @@ Replace the Postgres block in `infra/.env.prod.example` with:
 # === Postgres ===
 # Prod (Plan 4d): point DATABASE_URL at the Cloud SQL PRIVATE IP. Get the values from
 #   terraform output db_private_ip   and   terraform output -raw db_password
-#   DATABASE_URL=postgresql://usan:<db_password>@<db_private_ip>:5432/usan?sslmode=require
+#   DATABASE_URL=postgresql://usan:<db_password>@<db_private_ip>:5432/usan?ssl=require
 # The POSTGRES_* vars below are only consumed by the LOCAL dev container, which is
 # NOT started in prod (it sits behind the `localdb` compose profile).
 POSTGRES_USER=usan
 POSTGRES_PASSWORD=__STRONG_RANDOM__
 POSTGRES_DB=usan
-DATABASE_URL=postgresql://usan:__CLOUD_SQL_PASSWORD__@__CLOUD_SQL_PRIVATE_IP__:5432/usan?sslmode=require
+DATABASE_URL=postgresql://usan:__CLOUD_SQL_PASSWORD__@__CLOUD_SQL_PRIVATE_IP__:5432/usan?ssl=require
 ```
 
 - [ ] **Step 3: Validate the prod render excludes postgres and the API has no DB dependency**
@@ -344,9 +344,9 @@ Expected: `state=RUNNABLE`, `availabilityType=REGIONAL`, backups `True`, PITR `T
 Using the Task 3 values:
 
 ```bash
-DATABASE_URL=postgresql://usan:<db_password>@<db_private_ip>:5432/usan?sslmode=require
+DATABASE_URL=postgresql://usan:<db_password>@<db_private_ip>:5432/usan?ssl=require
 ```
-Keep `?sslmode=require` — `settings.py:127-136` warns (PHI may transit unencrypted) without it, and the instance is `ENCRYPTED_ONLY`. The app derives the `postgresql+asyncpg://` driver itself (`settings.py:93-101`); SQLAlchemy's asyncpg dialect honors `sslmode`.
+Keep `?ssl=require` — `settings.py:127-136` warns (PHI may transit unencrypted) without it, and the instance is `ENCRYPTED_ONLY`. The app derives the `postgresql+asyncpg://` driver itself (`settings.py:93-101`). **Use `?ssl=require`, NOT `?ssl=require`** — asyncpg uses the `ssl` param and rejects libpq's `sslmode` (`TypeError: connect() got an unexpected keyword argument 'sslmode'`).
 
 - [ ] **Step 2: Push the updated `.env.prod` as a new secret version**
 
@@ -363,7 +363,7 @@ gcloud compute instances reset usan-vm --zone=us-east1-b --project=usan-retireme
 Wait ~60–90s; confirm the new DATABASE_URL landed:
 ```bash
 gcloud compute ssh usan@usan-vm --zone=us-east1-b --project=usan-retirement \
-  --command="sudo grep -c 'sslmode=require' /opt/usan/infra/.env"
+  --command="sudo grep -c 'ssl=require' /opt/usan/infra/.env"
 ```
 Expected: `1`.
 
@@ -444,7 +444,7 @@ git commit -m "docs(infra): record Cloud SQL production database cutover (Plan 4
 
 **2. Placeholder scan:** No "TBD"/"handle errors"/"similar to Task N". `<db_password>`, `<db_private_ip>`, `<vm_external_ip>`, `$OPERATOR_API_KEY`, `v0.2.0` are operator-supplied/Terraform-output values, documented as such. Every step has an exact command + expected output.
 
-**3. Consistency:** Instance `usan-pg`, DB/user `usan`, region `us-east1`, zone `us-east1-b`, secret `usan-prod-env`, VM `usan-vm`, connection name `usan-retirement:us-east1:usan-pg` match across tasks. `DATABASE_URL` uses `?sslmode=require` everywhere, matching `settings.py:127`'s TLS check. The `random` provider added in versions.tf (Task 1 Step 1) backs `random_password.db` used in database.tf (Step 3) and the `db_password` output (Step 4). `Authorization: Bearer` auth matches the corrected Plan 4c.
+**3. Consistency:** Instance `usan-pg`, DB/user `usan`, region `us-east1`, zone `us-east1-b`, secret `usan-prod-env`, VM `usan-vm`, connection name `usan-retirement:us-east1:usan-pg` match across tasks. `DATABASE_URL` uses `?ssl=require` everywhere, matching `settings.py:127`'s TLS check. The `random` provider added in versions.tf (Task 1 Step 1) backs `random_password.db` used in database.tf (Step 3) and the `db_password` output (Step 4). `Authorization: Bearer` auth matches the corrected Plan 4c.
 
 **Notes / caveats baked in:**
 - `deletion_protection = true` blocks `terraform destroy` of the instance; to tear down (non-prod only) set it `false` + apply first. The `google_service_networking_connection` also resists deletion while the instance uses the range — destroy the instance first.
