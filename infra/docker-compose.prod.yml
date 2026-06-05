@@ -4,7 +4,9 @@
 #     -f infra/docker-compose.prod.yml \
 #     -f infra/docker-compose.tls.yml up -d
 #
-# Requires in .env: IMAGE_TAG, GHCR_OWNER, API_DOMAIN, LIVEKIT_DOMAIN.
+# Requires in .env: IMAGE_TAG, API_DOMAIN, LIVEKIT_DOMAIN. Images come from
+# Artifact Registry by default (Plan 4e E); set IMAGE_REGISTRY only to override
+# (e.g. a GHCR-mirror rollback). GHCR_OWNER is no longer used.
 #
 # NOTE on LIVEKIT_URL: in prod, livekit + livekit-sip run on the host network
 # (Plan 4e C1), so the compose-DNS name `livekit` no longer resolves. This
@@ -13,7 +15,10 @@
 # Internal hops stay plaintext; external TLS is terminated by Caddy.
 services:
   api:
-    image: ghcr.io/${GHCR_OWNER}/usan-api:${IMAGE_TAG:?IMAGE_TAG must be set to an explicit tag}
+    # Images pulled from Artifact Registry (Plan 4e E); VM auths keyless via its
+    # attached SA. IMAGE_REGISTRY defaults to GAR; override it (e.g.
+    # ghcr.io/gofrolist) for a break-glass rollback to the GHCR mirror.
+    image: ${IMAGE_REGISTRY:-us-east1-docker.pkg.dev/usan-retirement/usan}/usan-api:${IMAGE_TAG:?IMAGE_TAG must be set to an explicit tag}
     pull_policy: always
     build: !reset null
     # Prod talks to Cloud SQL via DATABASE_URL (private IP), not the local
@@ -42,7 +47,7 @@ services:
       driver: journald
 
   agent:
-    image: ghcr.io/${GHCR_OWNER}/usan-agent:${IMAGE_TAG:?IMAGE_TAG must be set to an explicit tag}
+    image: ${IMAGE_REGISTRY:-us-east1-docker.pkg.dev/usan-retirement/usan}/usan-agent:${IMAGE_TAG:?IMAGE_TAG must be set to an explicit tag}
     pull_policy: always
     build: !reset null
     environment:

@@ -7,6 +7,12 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  # Artifact Registry (Plan 4e E). The VM pulls from here keyless via its attached
+  # SA; CI pushes here keyless via Workload Identity Federation. These are not
+  # secrets (project number, SA email, repo path are all non-sensitive).
+  GAR: us-east1-docker.pkg.dev/usan-retirement/usan
+  WIF_PROVIDER: projects/505865962917/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+  DEPLOY_SA: github-deployer@usan-retirement.iam.gserviceaccount.com
 
 jobs:
   build:
@@ -15,17 +21,37 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # required for WIF OIDC (google-github-actions/auth)
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
+      # GHCR stays as a mirror (keyless via GITHUB_TOKEN) so old/new tags remain
+      # pullable for break-glass rollback; the VM no longer uses it.
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Keyless auth to GCP via WIF, then log Docker into Artifact Registry with the
+      # short-lived access token (no SA JSON key in GitHub secrets).
+      - name: Authenticate to Google Cloud (WIF)
+        id: gcp-auth
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SA }}
+          token_format: access_token
+
+      - name: Log in to Artifact Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: us-east1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.gcp-auth.outputs.access_token }}
 
       - name: Compute image tag
         id: tag
@@ -46,6 +72,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-api:${{ steps.tag.outputs.value }}
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-api:${{ github.sha }}
+            ${{ env.GAR }}/usan-api:${{ steps.tag.outputs.value }}
+            ${{ env.GAR }}/usan-api:${{ github.sha }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
 
@@ -72,6 +100,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-agent:${{ steps.tag.outputs.value }}
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-agent:${{ github.sha }}
+            ${{ env.GAR }}/usan-agent:${{ steps.tag.outputs.value }}
+            ${{ env.GAR }}/usan-agent:${{ github.sha }}
           cache-from: type=gha,scope=agent
           cache-to: type=gha,mode=max,scope=agent
 
@@ -97,19 +127,19 @@ jobs:
 
       - name: Pull images and bring stack up
         uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17  # v1.2.0
-        env:
-          GHCR_USER: ${{ github.repository_owner }}
-          GHCR_PAT: ${{ secrets.GHCR_PAT }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: GITHUB_REF_NAME,GHCR_USER,GHCR_PAT
+          envs: GITHUB_REF_NAME
           script: |
             set -euo pipefail
             cd /opt/usan
-            # Authenticate to GHCR so private usan-* images can be pulled.
-            echo "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            # Pull images from Artifact Registry keyless: configure the gcloud docker
+            # cred helper, which mints a token from the VM's attached SA (artifactregistry
+            # .reader) at pull time. No GHCR_PAT. Idempotent; ensured here because the
+            # running VM does not re-run startup.sh. Plan 4e E4.
+            gcloud auth configure-docker us-east1-docker.pkg.dev -q
             export IMAGE_TAG="${GITHUB_REF_NAME}"
             COMPOSE="docker compose --env-file infra/.env \
               -f infra/docker-compose.yml \
