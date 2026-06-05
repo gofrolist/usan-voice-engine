@@ -23,6 +23,10 @@ services:
     # Merges with the base file's environment map.
     environment:
       LOG_FORMAT: json
+    # Ship stdout to journald so the Ops Agent ingests it into Cloud Logging (Plan 4e
+    # B2/B3). `docker logs` still works under the journald driver.
+    logging:
+      driver: journald
 
   agent:
     image: ghcr.io/${GHCR_OWNER}/usan-agent:${IMAGE_TAG:?IMAGE_TAG must be set to an explicit tag}
@@ -30,6 +34,8 @@ services:
     build: !reset null
     environment:
       LOG_FORMAT: json
+    logging:
+      driver: journald
 
   livekit:
     ports: !override

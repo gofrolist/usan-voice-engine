@@ -116,3 +116,15 @@ variable "cloudflare_zone_id" {
   default     = ""
   description = "Cloudflare zone ID for the domain. Empty (or empty token) = manage DNS by hand."
 }
+
+variable "audit_log_retention_days" {
+  type        = number
+  default     = 2190
+  description = "Retention (days) for the locked PHI-access audit log bucket. 2190 = 6 years, aligning with HIPAA §164.316(b)(2) documentation-retention guidance. Cloud Logging max is 3650."
+}
+
+variable "operator_alert_email" {
+  type        = string
+  default     = ""
+  description = "Email for Cloud Monitoring alert notifications (API-down, CPU/mem/disk). Empty = skip the notification channel + alert policies (no-op)."
+}

@@ -20,6 +20,12 @@ telnyx_sip_signaling_source_ranges = [
 # recording_nearline_days  = 30
 # recording_retention_days = 365
 
+# Observability (Plan 4e B). Set operator_alert_email to enable Cloud Monitoring
+# alerts (API-down uptime check + CPU/mem/disk); empty = no alerting. The PHI-access
+# audit log bucket retention defaults to 2190 days (6yr, locked) — override here.
+operator_alert_email = "you@example.com"
+# audit_log_retention_days = 2190
+
 # Cloudflare DNS automation (optional). Set BOTH to have Terraform create the
 # api.<domain> and lk.<domain> A records (proxied=false) pointing at the VM IP.
 # Leave empty to manage DNS by hand.

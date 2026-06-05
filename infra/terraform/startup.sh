@@ -26,4 +26,28 @@ gcloud secrets versions access latest --secret="$SECRET_NAME" > "$APP_DIR/infra/
 chmod 600 "$APP_DIR/infra/.env"
 chown -R "${ssh_user}:${ssh_user}" "$APP_DIR"
 
+echo "[startup] installing Google Cloud Ops Agent (logs + metrics -> Cloud Logging/Monitoring)..."
+# Idempotent: apt re-install is a no-op on reboot; the config is rewritten each boot.
+curl -fsSL -o /tmp/add-ops-agent-repo.sh https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+bash /tmp/add-ops-agent-repo.sh --also-install
+# Ingest journald (system logs + container stdout under the journald log driver) into
+# Cloud Logging, parsing our app's JSON so the PHI-access audit fields (call_id, client,
+# segments) are queryable. No metrics section => the built-in hostmetrics stay enabled.
+install -d /etc/google-cloud-ops-agent
+cat > /etc/google-cloud-ops-agent/config.yaml <<'OPSCFG'
+logging:
+  receivers:
+    journald:
+      type: systemd_journald
+  processors:
+    parse_app_json:
+      type: parse_json
+  service:
+    pipelines:
+      journald:
+        receivers: [journald]
+        processors: [parse_app_json]
+OPSCFG
+systemctl restart google-cloud-ops-agent || true
+
 echo "[startup] done. Compose files are delivered by the deploy workflow (scp), which then runs compose up."
