@@ -73,6 +73,10 @@ services:
           address: redis:6379
         sip_port: 5060
         rtp_port: 10000-10100
+        # Advertise the VM's PUBLIC IP (detected via STUN) in SIP Contact/SDP, not
+        # the docker-internal 172.x address — otherwise Telnyx media / in-dialog
+        # routing breaks. (Proper fix is host networking — Plan 4e.)
+        use_external_ip: true
         logging:
           level: info
           json: true
