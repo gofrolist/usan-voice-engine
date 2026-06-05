@@ -124,7 +124,15 @@ The PHI-access audit events (`calls.py:205` "Recording URL accessed", `calls.py:
   - **host → host** (`livekit-sip` → livekit): `ws://127.0.0.1:7880` (both on host).
   - **host → bridge-published** (`livekit`/`livekit-sip` → redis, livekit webhook → api): `127.0.0.1:6379` / `http://127.0.0.1:8000/webhooks/livekit` (redis + api publish on the host loopback).
   - `egress` → redis stays `redis:6379` (both on bridge). Verified with `docker compose config` (renders clean).
-- [ ] **C4 (verify on the VM — gates the tag):** full outbound call audio both ways (STUN/ICE + Telnyx media), egress upload to GCS, livekit webhook reaches api, `ss -lunp` shows no docker-proxy procs for media ports. No separate staging env — validate on the prod VM (safe: no real PHI/traffic flows yet, only internal test number).
+- [x] **C4 (deterministic checks done on VM @ v0.1.5; live-call test pending):** verified on `usan-vm` 2026-06-05:
+  - All containers on `v0.1.5`; livekit + livekit-sip `NetworkMode=host`; api/agent/egress/caddy on the bridge.
+  - **No docker-proxy for media ports** — only caddy(80/443), redis(127.0.0.1:6379), api(127.0.0.1:8000) remain. The fan-out is gone.
+  - livekit binds `*:7880`/`*:7881`; livekit-sip binds `*:5060`; ICE range live `[50000,60000]`; nodeIP `34.26.133.111`.
+  - livekit→redis + livekit-sip→redis on `127.0.0.1:6379`; livekit-sip `local:10.142.0.2 external:34.26.133.111` (real NIC, host-mode win).
+  - **agent registered at `ws://host.docker.internal:7880`** — bridge→host hop proven live (validates the C3 correction).
+  - host→api webhook `127.0.0.1:8000/health → 200`; api log clean.
+  - livekit STUN-resolved the external IP and advertises `["34.26.133.111/10.142.0.2", bridge-gw...]`; the boot-time `could not validate external IP / context canceled` warn is benign.
+  - **STILL PENDING (needs a human to place/answer a real call):** end-to-end two-way call audio + egress upload to GCS + a live livekit→api webhook on a real room. Everything those depend on is independently confirmed reachable, but the audio path itself is unverified.
 - [ ] **C5 (separate, measured follow-up):** only after C1–C4, measure agent model pre-warm (silero VAD + turn-detector) + egress GStreamer CPU/RAM, then consider `e2-standard-2 → e2-medium`. **Host mode is a prerequisite for downsizing, not a justification.** **Decision (D7):** attempt downsize vs defer.
 
 > Alternative (D8): SFU-only `rtc.udp_port:7882` single-port mux (keep SFU on bridge, one docker-proxy proc, firewall to udp/7882) — but livekit-sip rtp has no mux, so SIP still needs host mode or a narrow range. Recommendation: host networking for both.
