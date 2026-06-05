@@ -1,9 +1,32 @@
 import json
+import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
-from usan_api.logging_config import _gcp_serialize
+from loguru import logger
+
+from usan_api.logging_config import _gcp_serialize, _InterceptHandler
+
+
+def _logrecord(name: str, msg: str, level: int = logging.INFO) -> logging.LogRecord:
+    return logging.LogRecord(
+        name=name, level=level, pathname=__file__, lineno=1, msg=msg, args=(), exc_info=None
+    )
+
+
+def test_intercept_drops_health_access_and_routes_others():
+    captured: list[str] = []
+    handler_id = logger.add(lambda m: captured.append(m.record["message"]), level="DEBUG")
+    try:
+        h = _InterceptHandler()
+        h.emit(_logrecord("uvicorn.access", '1.2.3.4 - "GET /health HTTP/1.1" 200'))
+        h.emit(_logrecord("uvicorn.access", '1.2.3.4 - "GET /v1/calls/abc HTTP/1.1" 200'))
+    finally:
+        logger.remove(handler_id)
+    # /health is dropped (uptime/health-check noise); a real request is routed to loguru.
+    assert not any("/health" in m for m in captured)
+    assert any("/v1/calls/abc" in m for m in captured)
 
 
 def _record(

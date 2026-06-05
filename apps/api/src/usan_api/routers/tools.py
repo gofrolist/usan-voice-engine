@@ -119,7 +119,9 @@ async def end_call(
     call = await _authorize_call(body.call_id, claims, db)
     updated = await calls_repo.complete_call_if_in_progress(db, call.id, end_reason=body.reason)
     await db.commit()
-    logger.bind(call_id=str(call.id), reason=body.reason).info("end_call requested")
+    # Don't log body.reason: it's free-text the LLM fills, so it could carry clinical
+    # content. It's already persisted to the DB (end_reason); the log keeps only call_id.
+    logger.bind(call_id=str(call.id)).info("end_call requested")
     return CallEndedResponse(status=(updated or call).status.value)
 
 
