@@ -32,7 +32,7 @@ def _settings_env(monkeypatch):
     monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
     monkeypatch.setenv("CARTESIA_API_KEY", "c")
-    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    monkeypatch.setenv("GCP_PROJECT", "g")
     monkeypatch.setenv("DEFAULT_CARTESIA_VOICE_ID", "v")
     monkeypatch.setenv("API_BASE_URL", "http://api:8000")
     monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)

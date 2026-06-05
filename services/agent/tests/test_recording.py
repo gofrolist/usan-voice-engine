@@ -12,7 +12,7 @@ _BASE_ENV = {
     "LIVEKIT_API_SECRET": "a" * 32,
     "LIVEKIT_URL": "ws://livekit:7880",
     "CARTESIA_API_KEY": "c",
-    "GEMINI_API_KEY": "g",
+    "GCP_PROJECT": "g",
     "DEFAULT_CARTESIA_VOICE_ID": "v",
     "API_BASE_URL": "http://api:8000",
     "JWT_SIGNING_KEY": "s" * 32,

@@ -18,7 +18,12 @@ class Settings(BaseSettings):
     livekit_api_secret: str = Field(..., min_length=32, alias="LIVEKIT_API_SECRET")
     livekit_url: str = Field(..., min_length=1, alias="LIVEKIT_URL")
     cartesia_api_key: str = Field(..., min_length=1, alias="CARTESIA_API_KEY")
-    gemini_api_key: str = Field(..., min_length=1, alias="GEMINI_API_KEY")
+    # LLM runs on Vertex AI (HIPAA-BAA-covered), not the Gemini Developer API. The
+    # plugin authenticates via ADC (the attached VM service account), so there is no
+    # LLM API key — only the GCP project + location. Default "global": gemini-3.1-flash-lite
+    # is served on the global endpoint, not regional us-east1. See Plan 4e Task A1.
+    gcp_project: str = Field(..., min_length=1, alias="GCP_PROJECT")
+    vertex_location: str = Field(default="global", alias="VERTEX_LOCATION")
     default_cartesia_voice_id: str = Field(..., min_length=1, alias="DEFAULT_CARTESIA_VOICE_ID")
     agent_name: str = Field(default="usan-agent", alias="AGENT_NAME")
     api_base_url: str = Field(..., min_length=1, alias="API_BASE_URL")

@@ -240,7 +240,10 @@ services:
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       LIVEKIT_URL: ${LIVEKIT_URL}
       CARTESIA_API_KEY: ${CARTESIA_API_KEY}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      # LLM on Vertex AI (BAA-covered). No API key: the plugin uses ADC via the VM's
+      # attached service account (reachable through the GCE metadata server). Plan 4e A1.
+      GCP_PROJECT: ${GCP_PROJECT}
+      VERTEX_LOCATION: ${VERTEX_LOCATION:-global}
       DEFAULT_CARTESIA_VOICE_ID: ${DEFAULT_CARTESIA_VOICE_ID}
       AGENT_NAME: ${AGENT_NAME}
       LOG_LEVEL: ${LOG_LEVEL}
