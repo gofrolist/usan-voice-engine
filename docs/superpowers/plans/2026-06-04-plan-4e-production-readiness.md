@@ -167,12 +167,12 @@ Images live in GHCR today (`ghcr.io/${GHCR_OWNER}/usan-{api,agent}`). Push uses 
 - [x] **E3 (CI — PR-2):** `build.yml` build job gets `id-token: write`, a `google-github-actions/auth` (WIF) step + Docker login to `us-east1-docker.pkg.dev` via the short-lived access token; api + agent push to **both** GHCR (mirror, via `GITHUB_TOKEN`) and GAR (dual-tag). agent-base stays GHCR-only (the VM never pulls it).
 - [x] **E4 (VM/compose — PR-2):** deploy job drops the `GHCR_PAT` `docker login` and instead runs `gcloud auth configure-docker us-east1-docker.pkg.dev -q` (keyless via the VM SA) before `compose pull`; same line added to `startup.sh` for fresh VMs. Compose `image:` refs → `${IMAGE_REGISTRY:-us-east1-docker.pkg.dev/usan-retirement/usan}/usan-{api,agent}` (default GAR; override = break-glass GHCR rollback). `GHCR_OWNER` no longer used.
 - [x] **Cutover VERIFIED GREEN @ v0.1.6** (10-agent adversarial workflow, 2026-06-05): VM runs the GAR `v0.1.6` images with RepoDigests matching GAR char-for-char (`usan-api …893e7`, `usan-agent …9bca3`, host `us-east1-docker.pkg.dev`); no `ghcr.io:v0.1.6` image on the VM. CI pushed keyless via WIF (no static key); GHCR mirror byte-identical (rollback-safe); no B/C regression (host networking, 0 media docker-proxy, `/health` 200, JSON logs, agent on `ws://host.docker.internal:7880`). VM docker config has the `us-east1-docker.pkg.dev → gcloud` credHelper.
-- [ ] **E5 (cleanup — safe to proceed; nothing functional consumes `GHCR_PAT`):**
-  - **(user-only)** revoke the PAT at GitHub → Settings → Developer settings → Personal access tokens. Claude cannot revoke a personal token.
-  - delete the repo secret: `gh secret delete GHCR_PAT` (reversible by re-adding).
-  - scrub the dead `ghcr.io` auth left in `/home/usan/.docker/config.json` on the VM (`docker logout ghcr.io` as `usan`) — **after** revocation.
-  - **Rollback tradeoff:** revoking the PAT does not delete the GHCR mirror images, but a break-glass `IMAGE_REGISTRY=ghcr.io/gofrolist` rollback to **private** GHCR images would then need re-auth at pull time. Confirm the GHCR packages are public or document the re-auth step before relying on that path.
-  - optionally enable Artifact Analysis (vuln scanning) on the GAR repo.
+- [x] **E5 (cleanup — done 2026-06-05, except the user-only PAT revocation):**
+  - [x] deleted the repo secret `gh secret delete GHCR_PAT` (remaining secrets: API_DOMAIN, DEPLOY_HOST, DEPLOY_SSH_KEY, DEPLOY_USER).
+  - [x] scrubbed the dead `ghcr.io` auth from `/home/usan/.docker/config.json` on the VM (`docker logout ghcr.io` as `usan`); `auths` now empty, the `us-east1-docker.pkg.dev → gcloud` credHelper survives (pulls stay keyless).
+  - [ ] **(USER-ONLY, pending)** revoke the actual PAT at GitHub → Settings → Developer settings → Personal access tokens. Claude cannot revoke a personal token.
+  - **Rollback tradeoff (noted):** the GHCR mirror images remain, but a break-glass `IMAGE_REGISTRY=ghcr.io/gofrolist` rollback to **private** GHCR images now needs re-auth at pull time (the VM no longer holds a ghcr credential). Confirm GHCR packages are public or document the re-auth step before relying on that path.
+  - optional: enable Artifact Analysis (vuln scanning) on the GAR repo.
 
 > **Cutover ordering:** apply E1 (repo + VM-SA reader) and push at least one image tag to GAR **before** flipping the compose refs — otherwise the VM can't pull and the deploy fails. Do this as its own PR/tag, not stacked with another infra change in flight.
 
