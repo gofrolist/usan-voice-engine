@@ -45,6 +45,16 @@ def _gcp_serialize(record: Any) -> str:
     return json.dumps(payload, default=str)
 
 
+def _json_sink(message: Any) -> None:
+    """loguru sink writing one Cloud Logging JSON line.
+
+    Defined (vs an inline lambda) so it returns ``None`` rather than
+    ``sys.stdout.write``'s ``int`` — satisfying loguru's ``Callable[[Message], None]``
+    sink type (mypy).
+    """
+    sys.stdout.write(_gcp_serialize(message.record) + "\n")
+
+
 def configure_logging(level: LogLevel = "INFO") -> None:
     """Configure loguru to log to stdout.
 
@@ -54,7 +64,7 @@ def configure_logging(level: LogLevel = "INFO") -> None:
     logger.remove()
     if os.environ.get("LOG_FORMAT", "").lower() == "json":
         logger.add(
-            lambda m: sys.stdout.write(_gcp_serialize(m.record) + "\n"),
+            _json_sink,
             level=level,
             backtrace=True,
             diagnose=False,  # don't leak local vars (PHI) into prod logs
