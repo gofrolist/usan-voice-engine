@@ -27,14 +27,18 @@ chmod 600 "$APP_DIR/infra/.env"
 chown -R "${ssh_user}:${ssh_user}" "$APP_DIR"
 
 echo "[startup] installing Google Cloud Ops Agent (logs + metrics -> Cloud Logging/Monitoring)..."
-# Idempotent: apt re-install is a no-op on reboot; the config is rewritten each boot.
-curl -fsSL -o /tmp/add-ops-agent-repo.sh https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
-bash /tmp/add-ops-agent-repo.sh --also-install
-# Ingest journald (system logs + container stdout under the journald log driver) into
-# Cloud Logging, parsing our app's JSON so the PHI-access audit fields (call_id, client,
-# segments) are queryable. No metrics section => the built-in hostmetrics stay enabled.
-install -d /etc/google-cloud-ops-agent
-cat > /etc/google-cloud-ops-agent/config.yaml <<'OPSCFG'
+# Wrapped in a function called with `|| echo WARN` so a transient download/install
+# failure is NON-FATAL: observability must never abort the VM boot after the critical
+# docker + .env steps already ran. Idempotent: apt re-install is a no-op on reboot and
+# the config is rewritten each boot.
+install_ops_agent() {
+  curl -fsSL -o /tmp/add-ops-agent-repo.sh https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+  bash /tmp/add-ops-agent-repo.sh --also-install
+  # Ingest journald (system logs + container stdout under the journald log driver) into
+  # Cloud Logging, parsing our app's JSON so the PHI-access audit fields (call_id,
+  # client, segments) are queryable. No metrics section => built-in hostmetrics stay on.
+  install -d /etc/google-cloud-ops-agent
+  cat > /etc/google-cloud-ops-agent/config.yaml <<'OPSCFG'
 logging:
   receivers:
     journald:
@@ -48,6 +52,8 @@ logging:
         receivers: [journald]
         processors: [parse_app_json]
 OPSCFG
-systemctl restart google-cloud-ops-agent || true
+  systemctl restart google-cloud-ops-agent
+}
+install_ops_agent || echo "[startup] WARN: Ops Agent setup failed (non-fatal); app is unaffected."
 
 echo "[startup] done. Compose files are delivered by the deploy workflow (scp), which then runs compose up."
