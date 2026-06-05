@@ -1,11 +1,12 @@
 import json
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from usan_api.db.models import Call
+from usan_api.db.models import Call, Transcript
 
 # Cap the serialized dynamic_vars payload: it is persisted to JSONB and relayed
 # verbatim as LiveKit agent-dispatch metadata, so it must stay small.
@@ -29,6 +30,26 @@ class CallOutcomeRequest(BaseModel):
     outcome: Literal["voicemail_left"]
 
 
+class TranscriptSegment(BaseModel):
+    role: str
+    content: str
+    tool_name: str | None = None
+    tool_args: dict[str, Any] | None = None
+    started_at: datetime
+    ended_at: datetime | None = None
+
+    @classmethod
+    def from_model(cls, t: Transcript) -> TranscriptSegment:
+        return cls(
+            role=t.role,
+            content=t.content,
+            tool_name=t.tool_name,
+            tool_args=t.tool_args,
+            started_at=t.started_at,
+            ended_at=t.ended_at,
+        )
+
+
 class CallResponse(BaseModel):
     id: uuid.UUID
     elder_id: uuid.UUID | None
@@ -41,10 +62,17 @@ class CallResponse(BaseModel):
     egress_id: str | None
     recording_status: str | None
     presigned_recording_url: str | None
+    transcript: list[TranscriptSegment] = Field(default_factory=list)
     created_at: datetime
 
     @classmethod
-    def from_model(cls, call: Call, *, presigned_recording_url: str | None = None) -> CallResponse:
+    def from_model(
+        cls,
+        call: Call,
+        *,
+        presigned_recording_url: str | None = None,
+        transcript: Sequence[Transcript] = (),
+    ) -> CallResponse:
         return cls(
             id=call.id,
             elder_id=call.elder_id,
@@ -57,6 +85,7 @@ class CallResponse(BaseModel):
             egress_id=call.egress_id,
             recording_status=call.recording_status,
             presigned_recording_url=presigned_recording_url,
+            transcript=[TranscriptSegment.from_model(t) for t in transcript],
             created_at=call.created_at,
         )
 

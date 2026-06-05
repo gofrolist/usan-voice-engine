@@ -2,6 +2,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.models import Transcript
@@ -34,6 +35,16 @@ async def create_transcript_segments(
     db.add_all(rows)
     await db.flush()
     return len(rows)
+
+
+async def list_for_call(db: AsyncSession, call_id: uuid.UUID) -> list[Transcript]:
+    """All transcript segments for a call, in conversation order (started_at, id)."""
+    result = await db.execute(
+        select(Transcript)
+        .where(Transcript.call_id == call_id)
+        .order_by(Transcript.started_at, Transcript.id)
+    )
+    return list(result.scalars().all())
 
 
 def _field(seg: Any, name: str) -> Any:
