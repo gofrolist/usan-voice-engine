@@ -33,16 +33,18 @@ resource "google_logging_project_bucket_config" "audit" {
   depends_on     = [google_project_service.logging]
 }
 
-# Route the content-free PHI-access audit events into the locked bucket. The filter
-# matches whether or not parse_json populated jsonPayload (defensive: covers both the
-# structured and raw-text ingestion paths). Same-project bucket sinks need no extra IAM.
+# Route the content-free PHI-access audit events into the locked bucket. Use the `:`
+# (contains) operator, not `=`: the Ops Agent ships our app's JSON line as the STRING
+# `jsonPayload.message` (journald MESSAGE; parse_json doesn't lift it to nested fields),
+# so we match the substring. `:` also matches the exact value if the line is ever parsed
+# properly — robust to both. Same-project bucket sinks need no extra IAM.
 resource "google_logging_project_sink" "audit" {
   project     = var.project_id
   name        = "usan-phi-audit-sink"
   destination = "logging.googleapis.com/${google_logging_project_bucket_config.audit.id}"
 
   filter = <<-EOT
-    jsonPayload.message="Transcript accessed" OR jsonPayload.message="Recording URL accessed" OR textPayload:"Transcript accessed" OR textPayload:"Recording URL accessed"
+    jsonPayload.message:"Transcript accessed" OR jsonPayload.message:"Recording URL accessed" OR textPayload:"Transcript accessed" OR textPayload:"Recording URL accessed"
   EOT
 }
 
