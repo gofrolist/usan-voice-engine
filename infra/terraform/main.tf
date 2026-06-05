@@ -81,6 +81,20 @@ resource "google_project_iam_member" "vm_monitoring" {
   member  = "serviceAccount:${google_service_account.vm.email}"
 }
 
+# Vertex AI: the agent's LLM runs on Vertex (HIPAA-BAA-covered) via ADC — no API
+# key. Enable the API and let the VM service account invoke models. Plan 4e A1/A2.
+resource "google_project_service" "aiplatform" {
+  project            = var.project_id
+  service            = "aiplatform.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_iam_member" "vm_vertex" {
+  project = var.project_id
+  role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.vm.email}"
+}
+
 # --- Firewall ---
 # SSH — operator CIDR only.
 resource "google_compute_firewall" "ssh" {

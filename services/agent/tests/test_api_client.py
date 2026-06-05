@@ -13,7 +13,7 @@ def _settings() -> Settings:
         LIVEKIT_API_SECRET="a" * 32,
         LIVEKIT_URL="ws://livekit:7880",
         CARTESIA_API_KEY="cart",
-        GEMINI_API_KEY="gem",
+        GCP_PROJECT="gem",
         DEFAULT_CARTESIA_VOICE_ID="voice",
         API_BASE_URL="http://api:8000",
         JWT_SIGNING_KEY=SECRET,

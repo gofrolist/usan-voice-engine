@@ -32,6 +32,9 @@ VOICEMAIL_MESSAGE = (
 )
 
 STT_MODEL = "ink-whisper"
+# Served on Vertex AI (HIPAA-BAA-covered) via the GLOBAL endpoint — verified: 200 on
+# location=global, 404 on regional us-east1/us-central1. So VERTEX_LOCATION must be
+# "global" for this model (set in settings). See Plan 4e Task A1.
 LLM_MODEL = "gemini-3.1-flash-lite"
 
 
@@ -51,8 +54,10 @@ def build_session(settings: Settings, userdata: Any = None) -> AgentSession[Any]
         ),
         llm=google.LLM(
             model=LLM_MODEL,
-            api_key=settings.gemini_api_key,
-        ),
+            vertexai=True,
+            project=settings.gcp_project,
+            location=settings.vertex_location,
+        ),  # no api_key → ADC via the attached VM service account (Vertex AI, BAA-covered)
         tts=cartesia.TTS(
             voice=settings.default_cartesia_voice_id,
             api_key=settings.cartesia_api_key,
