@@ -23,14 +23,14 @@ jobs:
       packages: write
       id-token: write # required for WIF OIDC (google-github-actions/auth)
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
 
       # GHCR stays as a mirror (keyless via GITHUB_TOKEN) so old/new tags remain
       # pullable for break-glass rollback; the VM no longer uses it.
       - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -40,14 +40,14 @@ jobs:
       # short-lived access token (no SA JSON key in GitHub secrets).
       - name: Authenticate to Google Cloud (WIF)
         id: gcp-auth
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOY_SA }}
           token_format: access_token
 
       - name: Log in to Artifact Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
         with:
           registry: us-east1-docker.pkg.dev
           username: oauth2accesstoken
@@ -63,7 +63,7 @@ jobs:
           fi
 
       - name: Build & push api
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
         with:
           context: apps/api
           file: apps/api/Dockerfile
@@ -78,7 +78,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=api
 
       - name: Build & push agent base (model pre-warm)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
         with:
           context: services/agent
           file: services/agent/Dockerfile.base
@@ -89,7 +89,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=agent-base
 
       - name: Build & push agent app
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
         with:
           context: services/agent
           file: services/agent/Dockerfile
@@ -113,10 +113,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
       - name: Copy compose files to VM
-        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634  # v0.1.7
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345  # v1.0.0
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -126,7 +126,7 @@ jobs:
           overwrite: true
 
       - name: Pull images and bring stack up
-        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17  # v1.2.0
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
