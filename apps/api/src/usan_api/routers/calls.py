@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import dialer, livekit_dispatch, object_storage
 from usan_api.auth import require_operator_token, require_service_token, require_worker_token
+from usan_api.client_ip import client_ip
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Elder, WellnessLog
 from usan_api.db.session import get_db
@@ -221,7 +222,9 @@ async def get_call(
     call = await calls_repo.get_call(db, call_id)
     if call is None:
         raise HTTPException(status_code=404, detail="call not found")
-    client_host = request.client.host if request.client else "unknown"
+    # Real client IP (X-Forwarded-For first hop behind Caddy), so the PHI access
+    # audit trail names the operator's host rather than the proxy container.
+    client_host = client_ip(request)
     presigned = await _presigned_recording_url(call, settings, client_host=client_host)
     transcript = await transcripts_repo.list_for_call(db, call_id)
     if transcript:

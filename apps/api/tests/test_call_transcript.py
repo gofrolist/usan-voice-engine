@@ -86,13 +86,13 @@ def test_get_call_without_transcript_returns_empty_list(client, async_database_u
 
 def test_get_call_with_transcript_emits_phi_access_audit_log(client, async_database_url):
     # Returning a transcript exposes PHI, so the access is audit-logged like the
-    # recording path (spec §10): metadata only — segment count + caller host —
+    # recording path (spec §10): metadata only — segment count + real caller host —
     # and NEVER the transcript content itself.
     call_id = asyncio.run(_seed(async_database_url, "usan-outbound-txlog", with_tx=True))
     records: list[dict] = []
     handler_id = logger.add(lambda m: records.append(m.record), level="INFO")
     try:
-        client.get(f"/v1/calls/{call_id}", headers=_OP)
+        client.get(f"/v1/calls/{call_id}", headers={**_OP, "X-Forwarded-For": "198.51.100.4"})
     finally:
         logger.remove(handler_id)
 
@@ -100,9 +100,13 @@ def test_get_call_with_transcript_emits_phi_access_audit_log(client, async_datab
     assert len(audit) == 1
     assert audit[0]["extra"]["segments"] == 3
     assert audit[0]["extra"]["call_id"] == str(call_id)
-    assert "client" in audit[0]["extra"]
-    # PHI guard: transcript content must never appear in any log line.
-    assert not any("Hello, daily check-in." in r["message"] for r in records)
+    # The real client IP (X-Forwarded-For first hop behind Caddy), not the proxy.
+    assert audit[0]["extra"]["client"] == "198.51.100.4"
+    # PHI guard: transcript content must never appear in ANY log record — neither the
+    # rendered message nor the bound `extra` fields (where a stray .bind() of PHI lands).
+    rendered = [r["message"] + str(r["extra"]) for r in records]
+    for phi in ("Hello, daily check-in.", "I'm good, thank you."):
+        assert not any(phi in line for line in rendered)
 
 
 def test_get_call_without_transcript_emits_no_phi_access_audit_log(client, async_database_url):

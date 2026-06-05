@@ -392,9 +392,10 @@ def test_db_tls_warning_for_remote_host_without_sslmode(monkeypatch):
     finally:
         logger.remove(handler_id)
     # Warns about unencrypted PHI and recommends the asyncpg-correct param
-    # (ssl=require) — never libpq's sslmode=, which asyncpg rejects at connect.
+    # (ssl=require) — never libpq's sslmode=require, which asyncpg rejects at connect.
     assert any("PHI may transit unencrypted" in m for m in messages)
     assert any("ssl=require" in m for m in messages)
+    assert not any("sslmode=require" in m for m in messages)
 
 
 def test_db_tls_no_warning_for_local_or_sslmode(monkeypatch):
