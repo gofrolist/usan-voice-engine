@@ -72,6 +72,10 @@ class Settings(BaseSettings):
         "telnyx_sip_username",
         "telnyx_sip_password",
         "livekit_sip_outbound_trunk_id",
+        # Compose passes PHI_RETENTION_DAYS as "" when unset (${VAR:-}); without
+        # this, the empty string fails int|None coercion and crashes startup.
+        # Blank => None => retention disabled, matching the documented default.
+        "phi_retention_days",
         mode="before",
     )
     @classmethod
