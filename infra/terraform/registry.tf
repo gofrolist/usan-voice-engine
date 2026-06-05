@@ -54,10 +54,13 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.repository" = "assertion.repository"
     "attribute.ref"        = "assertion.ref"
   }
-  # Only mint tokens for assertions from our repo. The provider 6.x requires an
-  # attribute_condition when google.subject maps from a non-unique attribute set,
-  # and this is defense-in-depth on top of the SA binding's principalSet scope.
-  attribute_condition = "assertion.repository == \"${var.github_repository}\""
+  # Only mint tokens for our repo AND only from the refs that legitimately push:
+  # `main` (builds the `latest` tag) and `v*` release tags. build.yml triggers on
+  # exactly these (push to main + tags). This blocks a malicious pull_request (whose
+  # ref is `refs/pull/N/merge`) from adding a workflow that assumes the deploy SA and
+  # poisons the registry — the principalSet alone (repository-scoped) would allow any
+  # ref, so the ref gate lives here on the provider.
+  attribute_condition = "assertion.repository == \"${var.github_repository}\" && (assertion.ref == \"refs/heads/main\" || assertion.ref.startsWith(\"refs/tags/v\"))"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
