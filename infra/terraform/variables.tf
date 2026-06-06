@@ -45,16 +45,19 @@ variable "operator_ssh_cidr" {
 
 variable "telnyx_sip_signaling_source_ranges" {
   type = list(string)
-  # REQUIRED (no default): the operator must explicitly choose who may reach SIP
-  # signaling (udp/5060) rather than silently leaving it open to the world.
-  # Set to Telnyx's CURRENT published SIP signaling CIDRs — verify at
-  # https://sip.telnyx.com, which Telnyx rotates/expands and also publishes as a
-  # machine-readable JSON feed. As of 2026-06 the published signaling ranges were:
-  # 36.255.198.128/25, 50.114.136.128/25, 50.114.144.0/21, 64.16.226.0/24,
-  # 64.16.227.0/24, 64.16.228.0/24, 64.16.229.0/24, 64.16.230.0/24, 64.16.248.0/24,
-  # 64.16.249.0/24, 103.115.244.128/25, 103.115.247.128/27, 185.246.41.128/25,
-  # 185.246.42.128/28. Pass ["0.0.0.0/0"] only to deliberately accept a world-open port.
-  description = "Source CIDRs allowed to reach SIP signaling (udp/5060). REQUIRED; set to Telnyx's current published signaling CIDRs (see https://sip.telnyx.com). Wrong/stale values silently break inbound calls."
+  # REQUIRED (no default): who may reach SIP SIGNALING (udp/5060) — i.e. where inbound
+  # INVITEs originate. CRITICAL: these are Telnyx's *signaling* IPs, NOT the media/RTP
+  # CIDRs. Verified 2026-06-05 against live call traces: inbound INVITEs arrived from
+  # 192.76.120.10 and 64.16.250.10 (US signaling, see https://sip.telnyx.com → "SIP
+  # signaling addresses"). An earlier mistake put the ~14 media/RTP CIDRs here, so the
+  # firewall silently DROPPED every INVITE (caller heard "your call cannot be
+  # completed"; Telnyx Debugging showed Status=Init, no response). Use the enclosing
+  # /24s for headroom: ["192.76.120.0/24", "64.16.250.0/24"] (also covers the Canada
+  # signaling IPs). The media/RTP CIDRs (36.255.198.128/25, 50.114.144.0/21,
+  # 64.16.226-230.0/24, 64.16.248/249.0/24, 103.115.244.128/25, 185.246.41/42.x, …)
+  # belong on the RTP ports (usan-allow-media), not here. Telnyx rotates/expands these
+  # (also published as a machine-readable JSON feed). ["0.0.0.0/0"] = deliberately open.
+  description = "Source CIDRs allowed to reach SIP SIGNALING (udp/5060) — Telnyx's signaling IPs (US: 192.76.120.0/24, 64.16.250.0/24), NOT the media/RTP CIDRs. Wrong/stale values silently break inbound calls."
 }
 
 variable "secret_name" {

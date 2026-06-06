@@ -50,40 +50,43 @@ Then:
 5. Put the number, SIP username, and SIP password into `infra/.env`.
 
 ## LiveKit side
-With the stack running and `infra/.env` loaded:
 
-> **`livekit-cli` URL:** these commands run from your shell, not inside the
-> compose network, so the `.env` value `LIVEKIT_URL=ws://livekit:7880` (a
-> compose-internal DNS name) is **not** reachable here. Target the host-published
-> signaling port instead — `--url ws://127.0.0.1:7880`. This holds in both dev
-> (livekit publishes `127.0.0.1:7880`) and prod (livekit runs on the host network,
-> Plan 4e C, and binds `7880` on the VM directly). Override with
-> `LIVEKIT_URL=ws://127.0.0.1:7880 livekit-cli ...` or edit the flag.
+### Inbound trunk + dispatch (auto-applied by the deploy)
+
+The inbound `SIPInboundTrunk` (`usan-telnyx-inbound`) and `SIPDispatchRule`
+(`usan-inbound-default` → agent `usan-agent`) live only in LiveKit/redis runtime
+state, so a redis/stack wipe drops them. The deploy job runs
+**`infra/provision-sip-inbound.sh`** after `compose up` on every release to (re)apply
+them idempotently from `infra/.env` (`TELNYX_INBOUND_DID` + LiveKit creds). To apply
+by hand on the VM:
 
 ```bash
-# Substitute env vars into the JSON files
-envsubst < infra/livekit-sip-trunk.json > /tmp/trunk.json
-envsubst < infra/livekit-sip-dispatch-rule.json > /tmp/rule.json
-
-# Apply
-livekit-cli sip create-trunk \
-  --url ${LIVEKIT_URL} \
-  --api-key ${LIVEKIT_API_KEY} \
-  --api-secret ${LIVEKIT_API_SECRET} \
-  --file /tmp/trunk.json
-
-livekit-cli sip create-dispatch \
-  --url ${LIVEKIT_URL} \
-  --api-key ${LIVEKIT_API_KEY} \
-  --api-secret ${LIVEKIT_API_SECRET} \
-  --file /tmp/rule.json
+sudo bash /opt/usan/infra/provision-sip-inbound.sh
 ```
 
-Verify:
+The script matches the DID in both `+E.164` and bare `E.164` forms (Telnyx's "E.164"
+inbound format omits the `+`) and allowlists Telnyx's **signaling** ranges
+(`192.76.120.0/24`, `64.16.250.0/24`) — see the note in `provision-sip-inbound.sh`.
+
+The **outbound** trunk (`usan-telnyx-outbound`) is auto-provisioned by the API on the
+first dial — no manual step.
+
+### Manual `livekit-cli` (only if not using the script)
+
+> **CLI verbs + URL:** the current `livekit/livekit-cli` (the `lk` CLI) uses
+> `sip inbound create` / `sip dispatch create` (NOT the older `sip create-trunk` /
+> `create-dispatch`). Run from your shell, not inside the compose network, so target
+> the host-published port `--url ws://127.0.0.1:7880` (the `.env`
+> `LIVEKIT_URL=ws://livekit:7880` is a compose-internal name, unreachable here). No
+> `lk` on the VM? Use `docker run --rm -i --network host -e LIVEKIT_URL=ws://127.0.0.1:7880
+> -e LIVEKIT_API_KEY -e LIVEKIT_API_SECRET livekit/livekit-cli:latest sip inbound create -`.
 
 ```bash
-livekit-cli sip list-trunk
-livekit-cli sip list-dispatch
+envsubst < infra/livekit-sip-trunk.json | livekit-cli sip inbound create -
+livekit-cli sip dispatch create infra/livekit-sip-dispatch-rule.json
+# verify
+livekit-cli sip inbound list
+livekit-cli sip dispatch list
 ```
 
 ## Inbound flow (Plan 3d)

@@ -121,7 +121,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: "infra/docker-compose.yml,infra/docker-compose.prod.yml,infra/docker-compose.tls.yml,infra/Caddyfile"
+          source: "infra/docker-compose.yml,infra/docker-compose.prod.yml,infra/docker-compose.tls.yml,infra/Caddyfile,infra/provision-sip-inbound.sh"
           target: "/opt/usan"
           overwrite: true
 
@@ -148,6 +148,11 @@ jobs:
             $COMPOSE pull
             $COMPOSE up -d
             $COMPOSE ps
+            # (Re)apply the inbound SIP trunk + dispatch rule. These live only in
+            # LiveKit/redis runtime state (not in compose), so a redis/stack restart
+            # drops them; reapplying every deploy keeps inbound calling durable.
+            # Idempotent; reads TELNYX_INBOUND_DID + LiveKit creds from infra/.env.
+            bash infra/provision-sip-inbound.sh
 
       - name: Post-deploy health check
         env:

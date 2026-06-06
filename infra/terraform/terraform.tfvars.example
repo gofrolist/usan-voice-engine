@@ -7,14 +7,12 @@ ssh_public_key    = "ssh-ed25519 AAAA... you@host"
 operator_ssh_cidr = "203.0.113.4/32" # your workstation IP /32
 recordings_bucket = "your-globally-unique-bucket" # e.g. usan-retirement-call-recordings
 
-# REQUIRED: Telnyx's CURRENT published SIP signaling CIDRs (verify at https://sip.telnyx.com).
-# Wrong/stale values silently break inbound calls. As of 2026-06:
+# REQUIRED: Telnyx SIP SIGNALING source ranges (where inbound INVITEs come from) — NOT
+# the media/RTP CIDRs. US: 192.76.120.10 + 64.16.250.10 (https://sip.telnyx.com → "SIP
+# signaling addresses"); the /24s give headroom. Putting the media CIDRs here silently
+# drops every inbound call ("your call cannot be completed"). Wrong/stale = broken inbound.
 telnyx_sip_signaling_source_ranges = [
-  "36.255.198.128/25", "50.114.136.128/25", "50.114.144.0/21",
-  "64.16.226.0/24", "64.16.227.0/24", "64.16.228.0/24", "64.16.229.0/24",
-  "64.16.230.0/24", "64.16.248.0/24", "64.16.249.0/24",
-  "103.115.244.128/25", "103.115.247.128/27",
-  "185.246.41.128/25", "185.246.42.128/28",
+  "192.76.120.0/24", "64.16.250.0/24",
 ]
 
 # recording_nearline_days  = 30
