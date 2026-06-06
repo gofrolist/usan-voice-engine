@@ -160,7 +160,7 @@ async def log_metrics(
     pricing = cost.Pricing.from_settings(settings)
     duration = call.duration_seconds
     if duration is None and body.usage.session_duration_seconds is not None:
-        duration = int(body.usage.session_duration_seconds)
+        duration = round(body.usage.session_duration_seconds)
     costs = cost.compute_costs(
         duration_seconds=duration,
         llm_prompt_tokens=body.usage.llm_prompt_tokens,
