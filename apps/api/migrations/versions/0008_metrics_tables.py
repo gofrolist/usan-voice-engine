@@ -62,5 +62,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP TABLE IF EXISTS turn_metrics")
-    op.execute("DROP TABLE IF EXISTS call_metrics")
+    op.execute("DROP TABLE IF EXISTS turn_metrics CASCADE")
+    op.execute("DROP TABLE IF EXISTS call_metrics CASCADE")

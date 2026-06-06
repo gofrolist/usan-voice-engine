@@ -142,3 +142,36 @@ def test_log_metrics_is_idempotent(client, async_database_url):
     assert r2.status_code == 200
     assert _count(async_database_url, CallMetrics, cid) == 1
     assert _count(async_database_url, TurnMetrics, cid) == 1
+
+
+def test_log_metrics_rejects_negative_usage(client, async_database_url):
+    cid = _make_completed_call(async_database_url)
+    bad = {"turns": [], "usage": {"stt_audio_seconds": -1.0}}
+    r = client.post(
+        "/v1/tools/log_metrics",
+        json={"call_id": cid, **bad},
+        headers={"Authorization": f"Bearer {_service_token(cid)}"},
+    )
+    assert r.status_code == 422
+
+
+def test_log_metrics_falls_back_to_session_duration(client, async_database_url):
+    cid = _make_completed_call(async_database_url, duration_seconds=None)
+    body = {
+        "turns": [],
+        "usage": {
+            "llm_prompt_tokens": 0,
+            "llm_completion_tokens": 0,
+            "tts_characters": 0,
+            "stt_audio_seconds": 0.0,
+            "session_duration_seconds": 120.0,
+        },
+    }
+    r = client.post(
+        "/v1/tools/log_metrics",
+        json={"call_id": cid, **body},
+        headers={"Authorization": f"Bearer {_service_token(cid)}"},
+    )
+    assert r.status_code == 200
+    # fallback duration 120s = 2 min × default 0.008 = 0.016 telephony
+    assert float(r.json()["cost_total_usd"]) == 0.016

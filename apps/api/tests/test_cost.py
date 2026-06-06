@@ -50,6 +50,7 @@ def test_all_components_sum():
     assert costs["llm"] == Decimal("0.300000")
     assert costs["stt"] == Decimal("0.020000")
     assert costs["tts"] == Decimal("0.100000")
+    assert costs["storage"] == Decimal("0.000000")
     assert costs["total"] == Decimal("0.426000")
 
 

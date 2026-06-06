@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import cost
@@ -169,15 +170,22 @@ async def log_metrics(
         recording_bytes=0,
         pricing=pricing,
     )
-    await metrics_repo.create_metrics(
-        db,
-        call_id=call.id,
-        turns=body.turns,
-        usage=body.usage,
-        costs=costs,
-        duration_seconds=duration,
-        pricing_version=pricing.version,
-    )
-    await db.commit()
+    try:
+        await metrics_repo.create_metrics(
+            db,
+            call_id=call.id,
+            turns=body.turns,
+            usage=body.usage,
+            costs=costs,
+            duration_seconds=duration,
+            pricing_version=pricing.version,
+        )
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = await metrics_repo.get_call_metrics(db, call.id)
+        if existing is not None:
+            return MetricsAcceptedResponse(call_id=call.id, cost_total_usd=existing.cost_total_usd)
+        raise
     logger.bind(call_id=str(call.id)).info("Logged call metrics: {n} turns", n=len(body.turns))
     return MetricsAcceptedResponse(call_id=call.id, cost_total_usd=costs["total"])

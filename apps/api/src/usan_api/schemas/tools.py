@@ -72,22 +72,22 @@ class TranscriptLoggedResponse(BaseModel):
 
 
 class TurnMetricIn(BaseModel):
-    turn_index: int
-    eou_delay_ms: int | None = None
-    transcription_delay_ms: int | None = None
-    stt_duration_ms: int | None = None
-    llm_ttft_ms: int | None = None
-    tts_ttfb_ms: int | None = None
-    llm_completion_tokens: int | None = None
-    tts_characters: int | None = None
+    turn_index: int = Field(ge=0)
+    eou_delay_ms: int | None = Field(default=None, ge=0)
+    transcription_delay_ms: int | None = Field(default=None, ge=0)
+    stt_duration_ms: int | None = Field(default=None, ge=0)
+    llm_ttft_ms: int | None = Field(default=None, ge=0)
+    tts_ttfb_ms: int | None = Field(default=None, ge=0)
+    llm_completion_tokens: int | None = Field(default=None, ge=0)
+    tts_characters: int | None = Field(default=None, ge=0)
 
 
 class MetricsUsageIn(BaseModel):
-    llm_prompt_tokens: int = 0
-    llm_completion_tokens: int = 0
-    tts_characters: int = 0
-    stt_audio_seconds: float = 0.0
-    session_duration_seconds: float | None = None
+    llm_prompt_tokens: int = Field(default=0, ge=0)
+    llm_completion_tokens: int = Field(default=0, ge=0)
+    tts_characters: int = Field(default=0, ge=0)
+    stt_audio_seconds: float = Field(default=0.0, ge=0.0)
+    session_duration_seconds: float | None = Field(default=None, ge=0.0)
 
 
 class LogMetricsRequest(BaseModel):
