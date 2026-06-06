@@ -1,3 +1,4 @@
+from decimal import Decimal
 from functools import lru_cache
 from typing import Any, Literal
 from urllib.parse import parse_qs, urlsplit
@@ -66,6 +67,21 @@ class Settings(BaseSettings):
     # outbound_ringing_timeout_s, so a row still DIALING past this is stranded.
     retry_stuck_dialing_s: int = Field(default=300, ge=120, le=3600, alias="RETRY_STUCK_DIALING_S")
     retry_poller_enabled: bool = Field(default=True, alias="RETRY_POLLER_ENABLED")
+    telnyx_per_min_usd: Decimal = Field(default=Decimal("0.008"), ge=0, alias="TELNYX_PER_MIN_USD")
+    llm_input_per_1k_usd: Decimal = Field(default=Decimal("0"), ge=0, alias="LLM_INPUT_PER_1K_USD")
+    llm_output_per_1k_usd: Decimal = Field(
+        default=Decimal("0"), ge=0, alias="LLM_OUTPUT_PER_1K_USD"
+    )
+    cartesia_stt_per_min_usd: Decimal = Field(
+        default=Decimal("0"), ge=0, alias="CARTESIA_STT_PER_MIN_USD"
+    )
+    cartesia_tts_per_1k_chars_usd: Decimal = Field(
+        default=Decimal("0"), ge=0, alias="CARTESIA_TTS_PER_1K_CHARS_USD"
+    )
+    gcs_storage_per_gb_month_usd: Decimal = Field(
+        default=Decimal("0"), ge=0, alias="GCS_STORAGE_PER_GB_MONTH_USD"
+    )
+    pricing_version: str = Field(default="2026-06-05", alias="PRICING_VERSION")
 
     @field_validator(
         "telnyx_caller_id",
