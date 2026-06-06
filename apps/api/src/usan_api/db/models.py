@@ -1,9 +1,20 @@
 import enum
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, SmallInteger, Text, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    SmallInteger,
+    Text,
+    text,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -164,5 +175,68 @@ class MedicationLog(Base):
     taken: Mapped[bool] = mapped_column(Boolean, nullable=False)
     reported_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     logged_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class TurnMetrics(Base):
+    __tablename__ = "turn_metrics"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    call_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("calls.id", ondelete="CASCADE"), nullable=False
+    )
+    turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    eou_delay_ms: Mapped[int | None] = mapped_column(Integer)
+    transcription_delay_ms: Mapped[int | None] = mapped_column(Integer)
+    stt_duration_ms: Mapped[int | None] = mapped_column(Integer)
+    llm_ttft_ms: Mapped[int | None] = mapped_column(Integer)
+    tts_ttfb_ms: Mapped[int | None] = mapped_column(Integer)
+    llm_completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    tts_characters: Mapped[int | None] = mapped_column(Integer)
+    response_latency_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class CallMetrics(Base):
+    __tablename__ = "call_metrics"
+
+    call_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("calls.id", ondelete="CASCADE"), primary_key=True
+    )
+    llm_prompt_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    llm_completion_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    llm_total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    tts_characters: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    stt_audio_seconds: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, server_default=text("0")
+    )
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    cost_telephony_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), nullable=False, server_default=text("0")
+    )
+    cost_llm_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), nullable=False, server_default=text("0")
+    )
+    cost_stt_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), nullable=False, server_default=text("0")
+    )
+    cost_tts_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), nullable=False, server_default=text("0")
+    )
+    cost_storage_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), nullable=False, server_default=text("0")
+    )
+    cost_total_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), nullable=False, server_default=text("0")
+    )
+    pricing_version: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
