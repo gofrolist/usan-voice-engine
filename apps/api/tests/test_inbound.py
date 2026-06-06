@@ -60,6 +60,24 @@ def test_inbound_known_elder_creates_call_and_returns_vars(client):
     assert call["elder_id"] == elder_id
 
 
+def test_inbound_matches_elder_when_caller_id_lacks_country_code(client):
+    # Telnyx delivers the caller-ID as a bare US national number (no +1), but the
+    # elder is stored E.164. The lookup must normalize and still match by name.
+    national = "555" + str(uuid.uuid4().int)[:7]  # 10-digit national number
+    elder_id = _create_elder(client, "+1" + national)
+    r = client.post(
+        "/v1/calls/inbound",
+        json={"phone_e164": national, "livekit_room": "usan-inbound-natl"},
+        headers=_worker_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["elder_known"] is True
+    assert data["dynamic_vars"]["elder_name"] == "Ada"
+    call = client.get(f"/v1/calls/{data['call_id']}", headers=_OP).json()
+    assert call["elder_id"] == elder_id
+
+
 def test_inbound_unknown_caller_creates_call_without_elder(client):
     r = client.post(
         "/v1/calls/inbound",
