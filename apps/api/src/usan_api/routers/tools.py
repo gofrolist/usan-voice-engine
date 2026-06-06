@@ -6,12 +6,14 @@ from loguru import logger
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from usan_api import cost
 from usan_api.auth import require_service_token
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import medications as medications_repo
+from usan_api.repositories import metrics as metrics_repo
 from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.repositories import wellness as wellness_repo
 from usan_api.schemas.tools import (
@@ -20,12 +22,15 @@ from usan_api.schemas.tools import (
     GetTodayMedsRequest,
     LoggedResponse,
     LogMedicationRequest,
+    LogMetricsRequest,
     LogTranscriptRequest,
     LogWellnessRequest,
     MedicationScheduleItem,
+    MetricsAcceptedResponse,
     TodayMedsResponse,
     TranscriptLoggedResponse,
 )
+from usan_api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/v1/tools", tags=["tools"])
 
@@ -138,3 +143,41 @@ async def log_transcript(
     await db.commit()
     logger.bind(call_id=str(call.id)).info("Logged {n} transcript segments", n=count)
     return TranscriptLoggedResponse(count=count)
+
+
+@router.post("/log_metrics", response_model=MetricsAcceptedResponse)
+async def log_metrics(
+    body: LogMetricsRequest,
+    db: AsyncSession = Depends(get_db),
+    claims: dict[str, Any] = Depends(require_service_token),
+    settings: Settings = Depends(get_settings),
+) -> MetricsAcceptedResponse:
+    call = await _authorize_call(body.call_id, claims, db)
+    existing = await metrics_repo.get_call_metrics(db, call.id)
+    if existing is not None:
+        return MetricsAcceptedResponse(call_id=call.id, cost_total_usd=existing.cost_total_usd)
+    pricing = cost.Pricing.from_settings(settings)
+    duration = call.duration_seconds
+    if duration is None and body.usage.session_duration_seconds is not None:
+        duration = int(body.usage.session_duration_seconds)
+    costs = cost.compute_costs(
+        duration_seconds=duration,
+        llm_prompt_tokens=body.usage.llm_prompt_tokens,
+        llm_completion_tokens=body.usage.llm_completion_tokens,
+        tts_characters=body.usage.tts_characters,
+        stt_audio_seconds=body.usage.stt_audio_seconds,
+        recording_bytes=0,
+        pricing=pricing,
+    )
+    await metrics_repo.create_metrics(
+        db,
+        call_id=call.id,
+        turns=body.turns,
+        usage=body.usage,
+        costs=costs,
+        duration_seconds=duration,
+        pricing_version=pricing.version,
+    )
+    await db.commit()
+    logger.bind(call_id=str(call.id)).info("Logged call metrics: {n} turns", n=len(body.turns))
+    return MetricsAcceptedResponse(call_id=call.id, cost_total_usd=costs["total"])
