@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -68,3 +69,33 @@ class LogTranscriptRequest(ToolCallRequest):
 
 class TranscriptLoggedResponse(BaseModel):
     count: int
+
+
+class TurnMetricIn(BaseModel):
+    turn_index: int
+    eou_delay_ms: int | None = None
+    transcription_delay_ms: int | None = None
+    stt_duration_ms: int | None = None
+    llm_ttft_ms: int | None = None
+    tts_ttfb_ms: int | None = None
+    llm_completion_tokens: int | None = None
+    tts_characters: int | None = None
+
+
+class MetricsUsageIn(BaseModel):
+    llm_prompt_tokens: int = 0
+    llm_completion_tokens: int = 0
+    tts_characters: int = 0
+    stt_audio_seconds: float = 0.0
+    session_duration_seconds: float | None = None
+
+
+class LogMetricsRequest(BaseModel):
+    call_id: uuid.UUID
+    turns: list[TurnMetricIn] = Field(default_factory=list, max_length=500)
+    usage: MetricsUsageIn = Field(default_factory=MetricsUsageIn)
+
+
+class MetricsAcceptedResponse(BaseModel):
+    call_id: uuid.UUID
+    cost_total_usd: Decimal
