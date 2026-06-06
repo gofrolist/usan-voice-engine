@@ -63,5 +63,5 @@ def compute_costs(
         "tts": tts.quantize(_Q),
         "storage": storage.quantize(_Q),
     }
-    parts["total"] = sum(parts.values()).quantize(_Q)
+    parts["total"] = sum(parts.values(), Decimal(0)).quantize(_Q)
     return parts
