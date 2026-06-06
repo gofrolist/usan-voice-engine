@@ -59,6 +59,7 @@ def upgrade() -> None:
         )
         """
     )
+    op.execute("CREATE INDEX idx_call_metrics_created ON call_metrics(created_at)")
 
 
 def downgrade() -> None:

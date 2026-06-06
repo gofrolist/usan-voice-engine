@@ -9,6 +9,8 @@ the real class/field names against the pinned livekit-agents version (V1).
 import time
 from typing import Any
 
+from loguru import logger
+
 from usan_agent import api_client
 from usan_agent.settings import Settings
 
@@ -90,7 +92,15 @@ def register_metrics_flush(
     """Attach a metrics_collected accumulator and a shutdown-callback flush (mirrors
     register_transcript_flush). Returns the accumulator (for tests)."""
     acc = MetricsAccumulator()
-    session.on("metrics_collected", lambda ev: acc.handle(ev))
+
+    def _on_metrics(ev: Any) -> None:
+        # Best-effort: a malformed metric event must never disrupt a live call.
+        try:
+            acc.handle(ev)
+        except Exception:
+            logger.bind(call_id=call_id).warning("metrics_collected handler error; dropping event")
+
+    session.on("metrics_collected", _on_metrics)
     started = time.monotonic()
 
     async def _flush() -> None:

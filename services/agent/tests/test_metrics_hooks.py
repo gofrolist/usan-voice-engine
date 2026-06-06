@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from usan_agent.metrics_hooks import MetricsAccumulator
+from usan_agent.metrics_hooks import MetricsAccumulator, register_metrics_flush
 
 
 class EOUMetrics:
@@ -81,3 +81,20 @@ def test_trailing_incomplete_turn_is_flushed():
     assert len(payload["turns"]) == 1
     assert payload["turns"][0]["llm_ttft_ms"] == 200
     assert "tts_ttfb_ms" not in payload["turns"][0]
+
+
+def test_register_metrics_flush_swallows_handler_errors():
+    captured = {}
+
+    class _FakeSession:
+        def on(self, name, cb):
+            captured["cb"] = cb
+
+    class _FakeCtx:
+        def add_shutdown_callback(self, cb):
+            captured["flush"] = cb
+
+    acc = register_metrics_flush(_FakeCtx(), _FakeSession(), "call-1", None)
+    # STTMetrics with a non-numeric audio_duration makes acc.handle raise float("boom")
+    captured["cb"](SimpleNamespace(metrics=STTMetrics("boom", None)))  # must NOT raise
+    assert acc.turns == []
