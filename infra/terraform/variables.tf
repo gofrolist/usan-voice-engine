@@ -17,8 +17,8 @@ variable "zone" {
 
 variable "machine_type" {
   type        = string
-  description = "Compute Engine machine type. e2-standard-2 (2 vCPU / 8GB) is the v1 baseline; all AI models are external so no GPU is needed."
-  default     = "e2-standard-2"
+  description = "Compute Engine machine type. e2-standard-4 (4 vCPU / 16GB): bumped from e2-standard-2 because the agent (silero VAD + turn-detector) and egress saturate 2 vCPU under concurrent/burst calls — verified 2026-06-05, a 5-call burst caused turn-detector 5s timeouts, choppy audio, and ~22s answer latency bleeding into other callers. All AI models are external so no GPU is needed."
+  default     = "e2-standard-4"
 }
 
 variable "boot_disk_gb" {
