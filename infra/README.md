@@ -82,7 +82,12 @@ first dial — no manual step.
 > -e LIVEKIT_API_KEY -e LIVEKIT_API_SECRET livekit/livekit-cli:latest sip inbound create -`.
 
 ```bash
-envsubst < infra/livekit-sip-trunk.json | livekit-cli sip inbound create -
+# Inbound trunk — match the DID in BOTH +E.164 and bare-E.164 (Telnyx's "E.164" inbound
+# format omits the +), exactly as provision-sip-inbound.sh does. Do NOT just
+# `envsubst < livekit-sip-trunk.json`: that template carries only the +E.164 form and
+# would miss Telnyx's bare-E.164 To.
+printf '{"trunk":{"name":"usan-telnyx-inbound","numbers":["%s","%s"],"allowed_addresses":["192.76.120.0/24","64.16.250.0/24"]}}' \
+  "$TELNYX_INBOUND_DID" "${TELNYX_INBOUND_DID#+}" | livekit-cli sip inbound create -
 livekit-cli sip dispatch create infra/livekit-sip-dispatch-rule.json
 # verify
 livekit-cli sip inbound list

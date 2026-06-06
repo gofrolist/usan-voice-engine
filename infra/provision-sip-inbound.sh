@@ -24,7 +24,9 @@ set -a; . "$ENV_FILE"; set +a
 # livekit + livekit-sip are host-networked in prod, so reach the SFU over loopback.
 LK_URL="${LK_PROVISION_URL:-ws://127.0.0.1:7880}"
 AGENT="${AGENT_NAME:-usan-agent}"
-CLI_IMAGE="${LIVEKIT_CLI_IMAGE:-livekit/livekit-cli:latest}"
+# Pinned (not :latest) so a future CLI release can't change the `sip inbound create`
+# interface and break provisioning at deploy time. Override via LIVEKIT_CLI_IMAGE.
+CLI_IMAGE="${LIVEKIT_CLI_IMAGE:-livekit/livekit-cli:v2.16.4}"
 # Telnyx US SIP SIGNALING source ranges (where inbound INVITEs originate). MUST match
 # the firewall's telnyx_sip_signaling_source_ranges. These are NOT the media/RTP CIDRs
 # (a call's INVITE comes from 192.76.120.10 / 64.16.250.10, not the media subnets).
@@ -65,6 +67,9 @@ for id in $(lk sip dispatch list 2>/dev/null | grep usan-inbound-default | grep 
   lk sip dispatch delete "$id" >/dev/null 2>&1 || true
 done
 
+# The create calls have NO `|| true`: under `set -e` a failure here aborts non-zero
+# and FAILS THE DEPLOY ON PURPOSE — a broken inbound route should be loud, not silent
+# (the rest of the stack is already up from `compose up`).
 echo "[provision-sip-inbound] creating inbound trunk for $did_plus (allow: $SIGNALING_RANGES) ..."
 printf '{"trunk":{"name":"usan-telnyx-inbound","numbers":[%s],"allowed_addresses":[%s]}}' \
   "$numbers" "$addrs" | lk sip inbound create -
