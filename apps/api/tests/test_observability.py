@@ -1,10 +1,15 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import jwt
 import pytest
 from prometheus_client import REGISTRY
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
+from usan_api.db.base import CallDirection, CallStatus
+from usan_api.db.models import Call
 from usan_api.main import create_app
 
 
@@ -64,7 +69,6 @@ def _service_jwt(call_id: UUID, signing_key: str = "s" * 32) -> str:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="router increment wired in Task 3")
 def test_tool_call_error_path_increments_counter(client):
     cid = uuid4()
     labels = {"tool": "log_metrics", "outcome": "error"}
@@ -88,10 +92,41 @@ def test_tool_call_error_path_increments_counter(client):
     assert _counter("usan_tool_calls_total", labels) == before + 1
 
 
-@pytest.mark.xfail(strict=True, reason="router increment wired in Task 3")
 def test_invalid_webhook_increments_counter(client):
     labels = {"type": "unknown", "outcome": "invalid"}
     before = _counter("usan_webhooks_total", labels)
     r = client.post("/webhooks/livekit", content=b"{}", headers={"Authorization": "bad"})
     assert r.status_code == 401
     assert _counter("usan_webhooks_total", labels) == before + 1
+
+
+def _make_in_progress_call(async_database_url: str) -> str:
+    async def _run() -> str:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as s:
+            call = Call(
+                direction=CallDirection.OUTBOUND,
+                status=CallStatus.IN_PROGRESS,
+            )
+            s.add(call)
+            await s.flush()
+            cid = str(call.id)
+            await s.commit()
+        await engine.dispose()
+        return cid
+
+    return asyncio.run(_run())
+
+
+def test_end_call_increments_calls_total(client, async_database_url):
+    cid = _make_in_progress_call(async_database_url)
+    labels = {"direction": "outbound", "end_reason": "completed"}
+    before = _counter("usan_calls_total", labels)
+    r = client.post(
+        "/v1/tools/end_call",
+        json={"call_id": cid, "reason": "call_ended_normally"},
+        headers={"Authorization": f"Bearer {_service_jwt(UUID(cid))}"},
+    )
+    assert r.status_code == 200
+    assert _counter("usan_calls_total", labels) == before + 1

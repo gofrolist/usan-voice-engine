@@ -11,6 +11,7 @@ from usan_api import cost
 from usan_api.auth import require_service_token
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
+from usan_api.observability.custom_metrics import CALLS_TOTAL, track_tool
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import medications as medications_repo
@@ -53,6 +54,7 @@ def _require_elder(call: Call) -> uuid.UUID:
 
 
 @router.post("/log_wellness", response_model=LoggedResponse)
+@track_tool("log_wellness")
 async def log_wellness(
     body: LogWellnessRequest,
     db: AsyncSession = Depends(get_db),
@@ -74,6 +76,7 @@ async def log_wellness(
 
 
 @router.post("/log_medication", response_model=LoggedResponse)
+@track_tool("log_medication")
 async def log_medication(
     body: LogMedicationRequest,
     db: AsyncSession = Depends(get_db),
@@ -95,6 +98,7 @@ async def log_medication(
 
 
 @router.post("/get_today_meds", response_model=TodayMedsResponse)
+@track_tool("get_today_meds")
 async def get_today_meds(
     body: GetTodayMedsRequest,
     db: AsyncSession = Depends(get_db),
@@ -117,6 +121,7 @@ async def get_today_meds(
 
 
 @router.post("/end_call", response_model=CallEndedResponse)
+@track_tool("end_call")
 async def end_call(
     body: EndCallRequest,
     db: AsyncSession = Depends(get_db),
@@ -125,13 +130,19 @@ async def end_call(
     call = await _authorize_call(body.call_id, claims, db)
     updated = await calls_repo.complete_call_if_in_progress(db, call.id, end_reason=body.reason)
     await db.commit()
+    final = updated or call
+    if updated is not None:
+        # Count only the actual terminal transition, not idempotent end_call replays.
+        # Label value is the bounded call_status enum, NOT body.reason (free-text PHI).
+        CALLS_TOTAL.labels(direction=updated.direction.value, end_reason=updated.status.value).inc()
     # Don't log body.reason: it's free-text the LLM fills, so it could carry clinical
     # content. It's already persisted to the DB (end_reason); the log keeps only call_id.
     logger.bind(call_id=str(call.id)).info("end_call requested")
-    return CallEndedResponse(status=(updated or call).status.value)
+    return CallEndedResponse(status=final.status.value)
 
 
 @router.post("/log_transcript", response_model=TranscriptLoggedResponse)
+@track_tool("log_transcript")
 async def log_transcript(
     body: LogTranscriptRequest,
     db: AsyncSession = Depends(get_db),
@@ -147,6 +158,7 @@ async def log_transcript(
 
 
 @router.post("/log_metrics", response_model=MetricsAcceptedResponse)
+@track_tool("log_metrics")
 async def log_metrics(
     body: LogMetricsRequest,
     db: AsyncSession = Depends(get_db),
