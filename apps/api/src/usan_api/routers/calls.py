@@ -13,6 +13,7 @@ from usan_api.client_ip import client_ip
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Elder, WellnessLog
 from usan_api.db.session import get_db
+from usan_api.phone import to_e164
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
@@ -158,7 +159,11 @@ async def register_inbound_call(
     step 3). Looks the caller up by phone; an unknown/absent number still gets a
     call record (elder_id NULL). Never checks DNC — DNC governs outbound only.
     """
-    elder = await elders_repo.get_elder_by_phone(db, body.phone_e164) if body.phone_e164 else None
+    # Normalize the caller-ID to E.164 before lookup: Telnyx delivers it as a bare
+    # US national number (e.g. "6692388604"), but elders are stored E.164
+    # ("+16692388604"), so the raw value would never match. See usan_api.phone.
+    phone = to_e164(body.phone_e164)
+    elder = await elders_repo.get_elder_by_phone(db, phone) if phone else None
     dynamic_vars: dict[str, Any] = {}
     if elder is not None:
         dynamic_vars["elder_name"] = elder.name
