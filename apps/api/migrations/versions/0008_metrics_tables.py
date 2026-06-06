@@ -35,7 +35,7 @@ def upgrade() -> None:
         )
         """
     )
-    op.execute("CREATE INDEX idx_turn_metrics_call ON turn_metrics(call_id)")
+    op.execute("CREATE UNIQUE INDEX uq_turn_metrics_call_turn ON turn_metrics(call_id, turn_index)")
     op.execute("CREATE INDEX idx_turn_metrics_created ON turn_metrics(created_at)")
 
     op.execute(
