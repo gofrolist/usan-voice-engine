@@ -17,6 +17,7 @@ from usan_agent.api_client import start_inbound_call
 from usan_agent.check_in import CheckInData, build_check_in_agent, build_inbound_agent
 from usan_agent.ids import validate_call_id
 from usan_agent.logging_config import configure_logging
+from usan_agent.metrics_hooks import register_metrics_flush
 from usan_agent.pipeline import (
     RECORDING_DISCLOSURE,
     build_agent,
@@ -109,6 +110,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, log: Any) -> None:
         session = build_session(settings, userdata=data)
         agent = build_inbound_agent(dynamic_vars)
         register_transcript_flush(ctx, session, call_id, settings)
+        register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
         log.info("Inbound check-in started for known elder (call_id={cid})", cid=call_id)
         # Consent before capture: the disclosure must finish playing before egress
@@ -170,6 +172,7 @@ async def entrypoint(ctx: JobContext) -> None:
         session = build_session(settings, userdata=data)
         agent = build_check_in_agent()
         register_transcript_flush(ctx, session, call_id, settings)
+        register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
         log.info("Session started; waiting for participant")
         try:
