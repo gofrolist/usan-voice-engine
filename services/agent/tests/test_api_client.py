@@ -191,3 +191,41 @@ async def test_report_voicemail_left_swallows_bad_call_id(monkeypatch):
     monkeypatch.setattr(api_client.httpx, "AsyncClient", _Client)
     await api_client.report_voicemail_left("bad id", _settings())
     assert called["n"] == 0  # validation failed closed before any network call
+
+
+@pytest.mark.asyncio
+async def test_post_metrics_posts_signed_request(monkeypatch):
+    captured = {}
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json, headers):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            return _FakeResponse()
+
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _FakeClient)
+
+    payload = {"turns": [{"turn_index": 0}], "usage": {"llm_prompt_tokens": 5}}
+    await api_client.post_metrics("call-123", _settings(), payload)
+
+    assert captured["url"] == "http://api:8000/v1/tools/log_metrics"
+    assert captured["json"]["call_id"] == "call-123"
+    assert captured["json"]["turns"] == [{"turn_index": 0}]
+    assert captured["json"]["usage"] == {"llm_prompt_tokens": 5}
+    token = captured["headers"]["Authorization"].removeprefix("Bearer ")
+    claims = jwt.decode(token, SECRET, algorithms=["HS256"])
+    assert claims["call_id"] == "call-123"
