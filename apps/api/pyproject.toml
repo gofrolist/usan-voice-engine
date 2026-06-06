@@ -17,6 +17,8 @@ dependencies = [
     "pyjwt>=2.10.0",
     "google-cloud-storage>=2.18.0",
     "limits>=5.8.0",
+    "prometheus-fastapi-instrumentator>=8.0.0,<9",
+    "prometheus-client>=0.21.1,<0.22",
 ]
 
 [dependency-groups]
