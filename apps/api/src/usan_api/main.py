@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from usan_api import background, retention, retry_orchestrator
 from usan_api.db.session import dispose_engine
 from usan_api.logging_config import configure_logging
+from usan_api.observability.instrumentation import setup_metrics
 from usan_api.ratelimit import OperatorRateLimitMiddleware
 from usan_api.routers import calls, dnc, elders, tools, webhooks
 from usan_api.settings import Settings, get_settings
@@ -84,5 +85,7 @@ def create_app() -> FastAPI:
     app.include_router(calls.router)
     app.include_router(webhooks.router)
     app.include_router(tools.router)
+
+    setup_metrics(app)
 
     return app
