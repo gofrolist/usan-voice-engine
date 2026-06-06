@@ -2,6 +2,6 @@
   "trunk": {
     "name": "usan-telnyx-inbound",
     "numbers": ["${TELNYX_INBOUND_DID}"],
-    "allowed_addresses": ["sip.telnyx.com"]
+    "allowed_addresses": ["192.76.120.0/24", "64.16.250.0/24"]
   }
 }
