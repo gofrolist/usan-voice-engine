@@ -57,6 +57,49 @@ async def test_report_voicemail_left_posts_signed_request(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_post_metrics_swallows_network_errors(monkeypatch):
+    class _BoomClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            raise RuntimeError("network down")
+
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _BoomClient)
+    # must NOT raise — the call hangup proceeds regardless
+    await api_client.post_metrics("call-123", _settings(), {"turns": [], "usage": {}})
+
+
+async def test_post_metrics_swallows_bad_call_id(monkeypatch):
+    # The best-effort contract must hold even for a malformed call_id: never raise.
+    called = {"n": 0}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            called["n"] += 1
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            raise AssertionError("must not POST a malformed call_id")
+
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _Client)
+    await api_client.post_metrics("bad id", _settings(), {"turns": [], "usage": {}})
+    assert called["n"] == 0  # validation failed closed before any network call
+
+
+@pytest.mark.asyncio
 async def test_report_voicemail_left_swallows_errors(monkeypatch):
     class _BoomClient:
         def __init__(self, *a, **k):
