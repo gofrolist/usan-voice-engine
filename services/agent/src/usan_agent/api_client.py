@@ -128,6 +128,22 @@ def _mint_worker_token(settings: Settings) -> str:
     )
 
 
+async def post_metrics(call_id: str, settings: Settings, payload: dict[str, Any]) -> None:
+    """Best-effort: POST per-turn latency + per-call usage at call end. Never raises."""
+    try:
+        call_id = _validate_call_id(call_id)
+        url = f"{settings.api_base_url}/v1/tools/log_metrics"
+        headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, json={"call_id": call_id, **payload}, headers=headers)
+            response.raise_for_status()
+        logger.bind(call_id=call_id).info(
+            "Posted call metrics: {n} turns", n=len(payload.get("turns", []))
+        )
+    except Exception:
+        logger.bind(call_id=call_id).warning("Failed to post call metrics to API")
+
+
 async def start_inbound_call(
     phone_e164: str | None,
     livekit_room: str,
