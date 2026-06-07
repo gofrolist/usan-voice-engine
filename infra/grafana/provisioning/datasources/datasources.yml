@@ -1,0 +1,30 @@
+apiVersion: 1
+
+# ${...} values are interpolated by Grafana from the container environment
+# (see infra/docker-compose.monitoring.yml). The Postgres datasource uses the
+# read-only grafana_ro role (migration 0009 + terraform google_sql_user).
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      httpMethod: POST
+      timeInterval: 15s
+    editable: false
+
+  - name: Postgres
+    uid: postgres-ro
+    type: postgres
+    access: proxy
+    url: ${GRAFANA_DB_HOST}        # Cloud SQL private IP:5432 (prod) / postgres:5432 (dev)
+    user: grafana_ro
+    jsonData:
+      database: usan
+      sslmode: ${GRAFANA_DB_SSLMODE}   # require (prod) / disable (dev bridge)
+      postgresVersion: 1500            # query-builder feature gate only; safe for PG18
+    secureJsonData:
+      password: ${GF_POSTGRES_RO_PASSWORD}
+    editable: false

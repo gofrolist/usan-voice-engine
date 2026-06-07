@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import livekit_webhooks
 from usan_api.db.session import get_db
+from usan_api.observability.custom_metrics import WEBHOOKS_TOTAL
 from usan_api.repositories import calls as calls_repo
 from usan_api.settings import Settings, get_settings
 
@@ -42,8 +43,10 @@ async def livekit_webhook(
         # oracle distinguishing a genuine-but-stale payload from an invalid one. The
         # distinct exception type is kept only for this internal log line.
         logger.warning("Rejected replayed (stale) LiveKit webhook: {reason}", reason=str(exc))
+        WEBHOOKS_TOTAL.labels(type="unknown", outcome="invalid").inc()
         raise HTTPException(status_code=401, detail="invalid webhook signature") from exc
     except Exception as exc:  # invalid signature / hash mismatch / malformed
+        WEBHOOKS_TOTAL.labels(type="unknown", outcome="invalid").inc()
         raise HTTPException(status_code=401, detail="invalid webhook signature") from exc
 
     if event.event in _ROOM_END_EVENTS and event.room and event.room.name:
@@ -78,4 +81,5 @@ async def livekit_webhook(
                 logger.bind(call_id=str(call.id), has_recording=True).info(
                     "Stored recording_uri via egress_ended webhook"
                 )
+    WEBHOOKS_TOTAL.labels(type=event.event, outcome="ok").inc()
     return {"ok": True}

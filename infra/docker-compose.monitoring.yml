@@ -1,0 +1,59 @@
+# Monitoring overlay (prod) — Prometheus (scrapes the API) + Grafana (behind Caddy).
+# Layer AFTER the tls overlay:
+#   docker compose --env-file infra/.env \
+#     -f infra/docker-compose.yml \
+#     -f infra/docker-compose.prod.yml \
+#     -f infra/docker-compose.tls.yml \
+#     -f infra/docker-compose.monitoring.yml up -d
+#
+# Requires in .env: GF_SECURITY_ADMIN_PASSWORD, GF_POSTGRES_RO_PASSWORD,
+# GRAFANA_DB_HOST, GRAFANA_DB_SSLMODE, GRAFANA_DOMAIN (+ GRAFANA_ALLOWED_CIDR for Caddy).
+services:
+  prometheus:
+    image: prom/prometheus:v3.12.0
+    container_name: usan-prometheus
+    init: true
+    user: "65534:65534" # nobody; the image runs non-root
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--storage.tsdb.retention.size=5GB"
+      - "--web.listen-address=0.0.0.0:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    # No published port: scraped internally; reach the UI via SSH tunnel if needed.
+    restart: unless-stopped
+    logging:
+      driver: journald
+
+  grafana:
+    image: grafana/grafana:12.4.4
+    container_name: usan-grafana
+    init: true
+    depends_on:
+      - prometheus
+    environment:
+      GF_SERVER_HTTP_PORT: "3000"
+      GF_SERVER_ROOT_URL: "https://${GRAFANA_DOMAIN}"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      # Consumed by datasources.yml provisioning interpolation:
+      GF_POSTGRES_RO_PASSWORD: ${GF_POSTGRES_RO_PASSWORD}
+      GRAFANA_DB_HOST: ${GRAFANA_DB_HOST}
+      GRAFANA_DB_SSLMODE: ${GRAFANA_DB_SSLMODE:-require}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    # No published port: Caddy reverse-proxies grafana:3000 (operator-CIDR gated).
+    restart: unless-stopped
+    logging:
+      driver: journald
+
+volumes:
+  prometheus_data:
+  grafana_data:

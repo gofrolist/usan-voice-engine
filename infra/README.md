@@ -300,3 +300,42 @@ single replica if preferred.
 
 A stuck-`dialing` reaper re-queues retry rows left in `dialing` by an ungraceful
 process death after `RETRY_STUCK_DIALING_S` (must exceed the ring timeout).
+
+## Monitoring (Grafana + Prometheus) — MON-2
+
+Prometheus scrapes `api:8000/metrics` over the bridge (the endpoint is 403'd at the
+public edge by Caddy). Grafana is reverse-proxied by Caddy at `grafana.<domain>`,
+gated to `GRAFANA_ALLOWED_CIDR` at L7, and requires its own login.
+
+**Ordering matters — `terraform apply` BEFORE Alembic migration 0009.**
+`google_sql_user.grafana_ro` (Terraform) and the role's GRANTs (migration `0009`)
+both touch the `grafana_ro` role. Apply Terraform first so the role is created with
+its password, then run migrations (the migration's `IF NOT EXISTS` guard makes it a
+no-op on the already-created role and just applies the GRANTs). If migration `0009`
+ran FIRST (e.g. on a dev/staging DB), `terraform apply` will fail with a Cloud SQL
+409 (role already exists) — recover by either `DROP ROLE grafana_ro` on the instance
+and re-applying, or `ALTER ROLE grafana_ro WITH PASSWORD '<terraform output>'` then
+`terraform import google_sql_user.grafana_ro <instance>/grafana_ro`.
+
+One-time setup before the first deploy that includes the monitoring overlay:
+
+1. `terraform apply` — creates the `grafana_ro` Cloud SQL user, the generated
+   passwords, the `grafana.<domain>` DNS record, and the `roles/monitoring.viewer`
+   binding (read-only; pre-granted for the MON-3 Cloud Monitoring datasource).
+2. Fold the new values into the `usan-prod-env` Secret Manager secret (the `.env`):
+   - `GRAFANA_DOMAIN=grafana.<domain>`
+   - `GRAFANA_ALLOWED_CIDR=<your office/VPN CIDR>` (must be set, or compose aborts)
+   - `GF_SECURITY_ADMIN_PASSWORD=$(terraform output -raw grafana_admin_password)`
+   - `GF_POSTGRES_RO_PASSWORD=$(terraform output -raw grafana_ro_password)`
+   - `GRAFANA_DB_HOST=<cloud sql private ip>:5432` (same host as DATABASE_URL)
+   - `GRAFANA_DB_SSLMODE=require`
+3. Ensure migration `0009` has been applied to Cloud SQL (the GRANTs for `grafana_ro`)
+   via the same path that applies all migrations to prod.
+4. Cut a `v*` tag → the deploy workflow ships the overlay + config dirs and brings up
+   `prometheus` + `grafana`.
+
+Verify post-deploy:
+- `curl -fsS https://api.<domain>/metrics` → **403** (edge-blocked; good).
+- From an allowlisted IP, open `https://grafana.<domain>` → Grafana login.
+- From a non-allowlisted IP → **403**.
+- In Grafana → Connections → Data sources: Prometheus and Postgres both "working".

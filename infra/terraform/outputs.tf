@@ -50,3 +50,15 @@ output "github_deployer_sa" {
   description = "Deploy SA email for google-github-actions/auth `service_account` (CI impersonates this to push images)."
   value       = google_service_account.github_deployer.email
 }
+
+output "grafana_admin_password" {
+  description = "Generated Grafana admin password. Read: terraform output -raw grafana_admin_password — set GF_SECURITY_ADMIN_PASSWORD in the prod .env."
+  value       = random_password.grafana_admin.result
+  sensitive   = true
+}
+
+output "grafana_ro_password" {
+  description = "Generated grafana_ro DB password. Read: terraform output -raw grafana_ro_password — set GF_POSTGRES_RO_PASSWORD in the prod .env."
+  value       = random_password.grafana_ro.result
+  sensitive   = true
+}
