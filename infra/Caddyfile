@@ -5,6 +5,13 @@
 	# authenticated at the app layer via OPERATOR_API_KEY. An operator may add a
 	# defense-in-depth IP allowlist for those paths here (e.g. a matcher with
 	# `remote_ip` + `abort`) — not required for correctness.
+	#
+	# /metrics is the internal Prometheus scrape endpoint (the prometheus
+	# container hits api:8000/metrics over the bridge). It must never be served
+	# at the public edge — block it here (Caddy otherwise proxies the whole host).
+	@metrics path /metrics
+	respond @metrics 403
+
 	reverse_proxy api:8000 {
 		# Overwrite X-Forwarded-For with the direct client so the API rate
 		# limiter keys on the real (non-spoofable) caller IP, not this proxy's.
