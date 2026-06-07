@@ -31,3 +31,13 @@ resource "cloudflare_dns_record" "lk" {
   proxied = false
   ttl     = 300
 }
+
+resource "cloudflare_dns_record" "grafana" {
+  count   = local.manage_dns ? 1 : 0
+  zone_id = var.cloudflare_zone_id
+  name    = "grafana" # -> grafana.<zone domain>
+  type    = "A"
+  content = google_compute_address.usan.address
+  proxied = false
+  ttl     = 300
+}

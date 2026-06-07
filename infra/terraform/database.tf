@@ -93,3 +93,15 @@ resource "google_sql_user" "usan" {
   instance = google_sql_database_instance.usan.name
   password = random_password.db.result
 }
+
+# --- Read-only role login for Grafana (GRANTs live in Alembic migration 0009). ---
+resource "random_password" "grafana_ro" {
+  length  = 32
+  special = false # avoids escaping issues in the .env datasource password
+}
+
+resource "google_sql_user" "grafana_ro" {
+  name     = "grafana_ro"
+  instance = google_sql_database_instance.usan.name
+  password = random_password.grafana_ro.result
+}
