@@ -28,3 +28,18 @@ datasources:
     secureJsonData:
       password: ${GF_POSTGRES_RO_PASSWORD}
     editable: false
+
+  # Host CPU/mem/disk (native compute + GCE Ops Agent metrics). GCE/metadata auth:
+  # the Grafana container runs on the VM whose attached SA has roles/monitoring.viewer
+  # + cloud-platform scope (terraform google_project_iam_member.vm_monitoring_viewer).
+  # No service-account key file. Datasource provisioning loads at Grafana STARTUP, so a
+  # newly-added datasource needs a grafana restart (`docker restart usan-grafana`);
+  # dashboards hot-reload on the 30s file-provider rescan, datasources do not.
+  - name: Cloud Monitoring
+    uid: cloud-monitoring
+    type: stackdriver
+    access: proxy
+    jsonData:
+      authenticationType: gce
+      defaultProject: usan-retirement
+    editable: false

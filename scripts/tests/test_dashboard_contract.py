@@ -67,8 +67,8 @@ def test_good_doc_has_no_errors():
     assert validate_dashboard(_good_doc()) == []
 
 
-def test_allowed_ds_uids_are_exactly_the_two_provisioned():
-    assert ALLOWED_DS_UIDS == {"prometheus", "postgres-ro"}
+def test_allowed_ds_uids_are_exactly_the_provisioned_set():
+    assert ALLOWED_DS_UIDS == {"prometheus", "postgres-ro", "cloud-monitoring"}
 
 
 def test_rejects_non_null_top_level_id():

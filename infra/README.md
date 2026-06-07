@@ -352,13 +352,20 @@ the source of truth).
 tree to the VM, so a `v*` tag deploy copies the new JSON; Grafana picks it up
 within 30 s. No compose, datasource, or workflow change is needed.
 
-**Datasources they bind to** (provisioned by MON-2, referenced by uid):
+**Datasources they bind to** (referenced by uid):
 - `postgres-ro` — Latency, Cost, Business/Care (read-only `grafana_ro` role).
 - `prometheus` — System/RED.
+- `cloud-monitoring` — System/RED **host CPU/mem/disk** (Google Cloud Monitoring).
 
-**Host CPU/mem/disk are not here** — no Cloud Monitoring datasource is
-provisioned. View host metrics in the GCP Cloud Monitoring console, or wire the
-Google Cloud Monitoring datasource + `roles/monitoring.viewer` in a follow-up.
+**Host CPU/mem/disk** are on the System dashboard via the `cloud-monitoring`
+datasource (CPU = `compute.googleapis.com/instance/cpu/utilization`; mem/disk =
+`agent.googleapis.com/{memory,disk}/percent_used` from the VM Ops Agent). It
+authenticates with **GCE/metadata auth** — the VM's attached SA already has
+`roles/monitoring.viewer` (`terraform` `google_project_iam_member.vm_monitoring_viewer`)
+and `cloud-platform` scope, so **no key file**. **Datasource provisioning loads
+only at Grafana startup**, so after a deploy that adds/changes a datasource, run
+`docker restart usan-grafana` (dashboards hot-reload on the 30s rescan; datasources
+do not). Verify in Grafana → Connections → Data sources: "Cloud Monitoring" → Save & test → OK.
 
 **Verify after deploy** (from an operator IP inside `GRAFANA_ALLOWED_CIDR`):
 1. Browse `https://grafana.<domain>/dashboards` → folder **USAN** lists all four.

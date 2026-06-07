@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 # The two datasources MON-2 provisioned (infra/grafana/provisioning/datasources).
-ALLOWED_DS_UIDS = {"prometheus", "postgres-ro"}
+ALLOWED_DS_UIDS = {"prometheus", "postgres-ro", "cloud-monitoring"}
 
 # Repo-root-relative location of the dashboard JSON the file provider loads.
 DASHBOARDS_DIR = (

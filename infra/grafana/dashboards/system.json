@@ -201,13 +201,81 @@
     },
     {
       "id": 8,
-      "type": "text",
-      "title": "Host metrics",
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 16 },
-      "options": {
-        "mode": "markdown",
-        "content": "**Host CPU / memory / disk** are not in Prometheus.\n\nThey live in **GCP Cloud Monitoring** (the VM Ops Agent writes them). No Grafana Cloud Monitoring datasource is provisioned yet — view host metrics in the [Cloud Monitoring console](https://console.cloud.google.com/monitoring) for project `usan-retirement`, or wire the datasource + `roles/monitoring.viewer` in a follow-up (spec §9, deviation #1)."
-      }
+      "type": "timeseries",
+      "title": "Host CPU utilization",
+      "description": "VM CPU (compute.googleapis.com/instance/cpu/utilization), 0-1 fraction. Single VM, so cross-series reduce is a no-op.",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 22 },
+      "datasource": { "type": "stackdriver", "uid": "cloud-monitoring" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "stackdriver", "uid": "cloud-monitoring" },
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "usan-retirement",
+            "filters": ["metric.type", "=", "compute.googleapis.com/instance/cpu/utilization"],
+            "perSeriesAligner": "ALIGN_MEAN",
+            "crossSeriesReducer": "REDUCE_MEAN",
+            "alignmentPeriod": "60s",
+            "groupBys": [],
+            "view": "FULL"
+          }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single", "sort": "none" } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Host memory used %",
+      "description": "agent.googleapis.com/memory/percent_used filtered to state=used (Ops Agent hostmetrics).",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 22 },
+      "datasource": { "type": "stackdriver", "uid": "cloud-monitoring" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "stackdriver", "uid": "cloud-monitoring" },
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "usan-retirement",
+            "filters": ["metric.type", "=", "agent.googleapis.com/memory/percent_used", "AND", "metric.label.state", "=", "used"],
+            "perSeriesAligner": "ALIGN_MEAN",
+            "crossSeriesReducer": "REDUCE_MEAN",
+            "alignmentPeriod": "60s",
+            "groupBys": [],
+            "view": "FULL"
+          }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single", "sort": "none" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Host disk used % (/dev/sda1)",
+      "description": "agent.googleapis.com/disk/percent_used filtered to state=used, device=/dev/sda1 (root fs).",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 22 },
+      "datasource": { "type": "stackdriver", "uid": "cloud-monitoring" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "stackdriver", "uid": "cloud-monitoring" },
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "usan-retirement",
+            "filters": ["metric.type", "=", "agent.googleapis.com/disk/percent_used", "AND", "metric.label.state", "=", "used", "AND", "metric.label.device", "=", "/dev/sda1"],
+            "perSeriesAligner": "ALIGN_MEAN",
+            "crossSeriesReducer": "REDUCE_MEAN",
+            "alignmentPeriod": "60s",
+            "groupBys": [],
+            "view": "FULL"
+          }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single", "sort": "none" } }
     }
   ]
 }
