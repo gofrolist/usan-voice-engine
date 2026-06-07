@@ -339,3 +339,37 @@ Verify post-deploy:
 - From an allowlisted IP, open `https://grafana.<domain>` → Grafana login.
 - From a non-allowlisted IP → **403**.
 - In Grafana → Connections → Data sources: Prometheus and Postgres both "working".
+
+### Dashboards (MON-3)
+
+The four Grafana dashboards are checked-in JSON under `infra/grafana/dashboards/`
+(`latency.json`, `cost.json`, `business.json`, `system.json`), loaded by the
+file provider MON-2 installed (folder **USAN**, container path
+`/var/lib/grafana/dashboards`, 30 s rescan, `allowUiUpdates=false` so the repo is
+the source of truth).
+
+**They ship automatically.** `build.yml` already scp's the whole `infra/grafana`
+tree to the VM, so a `v*` tag deploy copies the new JSON; Grafana picks it up
+within 30 s. No compose, datasource, or workflow change is needed.
+
+**Datasources they bind to** (provisioned by MON-2, referenced by uid):
+- `postgres-ro` — Latency, Cost, Business/Care (read-only `grafana_ro` role).
+- `prometheus` — System/RED.
+
+**Host CPU/mem/disk are not here** — no Cloud Monitoring datasource is
+provisioned. View host metrics in the GCP Cloud Monitoring console, or wire the
+Google Cloud Monitoring datasource + `roles/monitoring.viewer` in a follow-up.
+
+**Verify after deploy** (from an operator IP inside `GRAFANA_ALLOWED_CIDR`):
+1. Browse `https://grafana.<domain>/dashboards` → folder **USAN** lists all four.
+2. Open **USAN · System (RED)** → "Service up (API)" shows UP and request-rate
+   panels populate (Prometheus path healthy).
+3. Open **USAN · Latency** → panels render without a datasource error (confirms
+   the `grafana_ro` Postgres path + `turn_metrics` access).
+4. If a panel shows "datasource not found", the dashboard JSON references a uid
+   other than `prometheus` / `postgres-ro` — fix the JSON, not Grafana.
+
+**Edit/add a dashboard:** change the JSON under `infra/grafana/dashboards/`,
+keep `id: null` and a unique `uid`/`title`, run `python -m pytest scripts/tests`,
+commit, and ship on the next tag. CI's `pytest (scripts)` job validates structure
+(datasource uids, gridPos, no PHI columns) on every PR.

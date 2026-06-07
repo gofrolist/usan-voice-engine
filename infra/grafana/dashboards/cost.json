@@ -1,0 +1,197 @@
+{
+  "id": null,
+  "uid": "usan-cost",
+  "title": "USAN · Cost",
+  "tags": ["usan", "cost"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "",
+  "refresh": "5m",
+  "time": { "from": "now-30d", "to": "now" },
+  "annotations": { "list": [] },
+  "templating": {
+    "list": [
+      {
+        "name": "retell_baseline",
+        "label": "RetellAI $/min baseline",
+        "type": "constant",
+        "query": "0.10",
+        "current": { "text": "0.10", "value": "0.10" },
+        "hide": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Cost per call (avg, p95)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres-ro" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres-ro" },
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT $__timeGroupAlias(created_at, $__interval),\n  AVG(cost_total_usd) AS \"avg\",\n  percentile_cont(0.95) WITHIN GROUP (ORDER BY cost_total_usd) AS \"p95\"\nFROM call_metrics\nWHERE $__timeFilter(created_at)\nGROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Blended $/min vs RetellAI baseline (1d buckets)",
+      "description": "Daily (1d) buckets regardless of the dashboard interval; on sub-day ranges this collapses to a single point.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres-ro" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres-ro" },
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT $__timeGroupAlias(created_at, '1d'),\n  (SUM(cost_total_usd) / NULLIF(SUM(duration_seconds), 0)) * 60 AS \"blended $/min\",\n  ${retell_baseline}::numeric AS \"RetellAI baseline\"\nFROM call_metrics\nWHERE $__timeFilter(created_at)\nGROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "showPoints": "auto" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "RetellAI baseline" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Daily spend by component",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "postgres", "uid": "postgres-ro" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres-ro" },
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT $__timeGroupAlias(created_at, '1d'),\n  SUM(cost_telephony_usd) AS \"Telephony\",\n  SUM(cost_llm_usd)       AS \"LLM\",\n  SUM(cost_stt_usd)       AS \"STT\",\n  SUM(cost_tts_usd)       AS \"TTS\",\n  SUM(cost_storage_usd)   AS \"Storage\"\nFROM call_metrics\nWHERE $__timeFilter(created_at)\nGROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Cost per elder (top 20)",
+      "description": "Attributable calls only — calls with no elder_id (inbound/anonymous or post-delete) are excluded. Keyed on external_id, not name (PHI). Behind operator-CIDR + auth.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 17 },
+      "datasource": { "type": "postgres", "uid": "postgres-ro" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres-ro" },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT COALESCE(e.external_id, left(e.id::text, 8)) AS elder,\n  COUNT(cm.call_id) AS calls,\n  SUM(cm.cost_total_usd) AS total_usd,\n  AVG(cm.cost_total_usd) AS avg_per_call_usd\nFROM call_metrics cm\nJOIN calls c  ON c.id = cm.call_id\nJOIN elders e ON e.id = c.elder_id\nWHERE $__timeFilter(cm.created_at)\nGROUP BY 1\nORDER BY total_usd DESC NULLS LAST\nLIMIT 20"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "total_usd" }, "properties": [ { "id": "unit", "value": "currencyUSD" } ] },
+          { "matcher": { "id": "byName", "options": "avg_per_call_usd" }, "properties": [ { "id": "unit", "value": "currencyUSD" } ] }
+        ]
+      },
+      "options": { "showHeader": true }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Month-to-date spend",
+      "description": "Current calendar month to date; ignores the dashboard time range by design.",
+      "gridPos": { "h": 9, "w": 6, "x": 12, "y": 17 },
+      "datasource": { "type": "postgres", "uid": "postgres-ro" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres-ro" },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT COALESCE(SUM(cost_total_usd), 0) AS mtd_usd\nFROM call_metrics\nWHERE created_at >= date_trunc('month', now())"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none"
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Projected monthly spend",
+      "description": "MTD spend linearly extrapolated to month end. Ignores the dashboard time range by design.",
+      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 17 },
+      "datasource": { "type": "postgres", "uid": "postgres-ro" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres-ro" },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT (COALESCE(SUM(cost_total_usd), 0) / GREATEST(EXTRACT(DAY FROM now()), 1))\n  * EXTRACT(DAY FROM (date_trunc('month', now()) + interval '1 month' - interval '1 day')) AS projected_usd\nFROM call_metrics\nWHERE created_at >= date_trunc('month', now())"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none"
+      }
+    }
+  ]
+}

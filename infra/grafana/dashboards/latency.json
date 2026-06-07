@@ -1,0 +1,132 @@
+{
+  "id": null,
+  "uid": "usan-latency",
+  "title": "USAN · Latency",
+  "tags": ["usan", "latency"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "",
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Response latency p50 / p95 / p99 (target 1200 ms)",
+      "description": "User-perceived end-of-speech to first-audio gap (spec §7). Target: p95 <= 1200 ms.",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres-ro" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres-ro" },
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT $__timeGroupAlias(created_at, $__interval),\n  percentile_cont(0.5)  WITHIN GROUP (ORDER BY response_latency_ms) AS \"p50\",\n  percentile_cont(0.95) WITHIN GROUP (ORDER BY response_latency_ms) AS \"p95\",\n  percentile_cont(0.99) WITHIN GROUP (ORDER BY response_latency_ms) AS \"p99\"\nFROM turn_metrics\nWHERE $__timeFilter(created_at) AND response_latency_ms IS NOT NULL\nGROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 1200, "color": "red" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Per-stage p95 (STT duration / LLM ttft / TTS ttfb)",
+      "description": "Per-stage p95; percentile_cont ignores NULL samples, so each line reflects only turns that recorded that stage.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "postgres", "uid": "postgres-ro" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres-ro" },
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT $__timeGroupAlias(created_at, $__interval),\n  percentile_cont(0.95) WITHIN GROUP (ORDER BY stt_duration_ms) AS \"STT p95\",\n  percentile_cont(0.95) WITHIN GROUP (ORDER BY llm_ttft_ms)    AS \"LLM ttft p95\",\n  percentile_cont(0.95) WITHIN GROUP (ORDER BY tts_ttfb_ms)    AS \"TTS ttfb p95\"\nFROM turn_metrics\nWHERE $__timeFilter(created_at)\nGROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 3,
+      "type": "histogram",
+      "title": "Per-turn response latency distribution",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "postgres", "uid": "postgres-ro" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres-ro" },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT response_latency_ms\nFROM turn_metrics\nWHERE $__timeFilter(created_at) AND response_latency_ms IS NOT NULL"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "noValue": "No data" }, "overrides": [] },
+      "options": { "bucketSize": 100, "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false } }
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Worst calls by response latency (top 20)",
+      "description": "Drill target: copy call_id into the call record. No PHI (id only).",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 17 },
+      "datasource": { "type": "postgres", "uid": "postgres-ro" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres-ro" },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT tm.call_id::text AS call_id,\n  MAX(tm.response_latency_ms) AS worst_turn_ms,\n  percentile_cont(0.95) WITHIN GROUP (ORDER BY tm.response_latency_ms) AS p95_ms,\n  COUNT(*) AS turns\nFROM turn_metrics tm\nWHERE $__timeFilter(tm.created_at) AND tm.response_latency_ms IS NOT NULL\nGROUP BY tm.call_id\nORDER BY worst_turn_ms DESC NULLS LAST\nLIMIT 20"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "worst_turn_ms" }, "properties": [ { "id": "unit", "value": "ms" } ] },
+          { "matcher": { "id": "byName", "options": "p95_ms" }, "properties": [ { "id": "unit", "value": "ms" } ] }
+        ]
+      },
+      "options": { "showHeader": true }
+    }
+  ]
+}
