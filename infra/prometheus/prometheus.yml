@@ -1,0 +1,22 @@
+# Prometheus scrape config for the USAN voice engine (MON-2).
+# Scrapes ONLY the API container over the compose bridge. /metrics is plaintext
+# over the bridge; external TLS is Caddy's job (and /metrics is blocked at the edge).
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    monitor: usan-voice-engine
+
+scrape_configs:
+  - job_name: usan-api
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets: ["api:8000"]
+        labels:
+          service: api
+
+  # Prometheus self-monitoring (cheap, useful for the System dashboard).
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
