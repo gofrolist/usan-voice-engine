@@ -13,6 +13,8 @@ from usan_api.observability.instrumentation import setup_metrics
 from usan_api.ratelimit import OperatorRateLimitMiddleware
 from usan_api.repositories import admin_users as admin_users_repo
 from usan_api.routers import (
+    admin_audit,
+    admin_elders,
     admin_profiles,
     admin_users,
     auth,
@@ -114,6 +116,8 @@ def create_app() -> FastAPI:
 
     app.include_router(admin_profiles.router)
     app.include_router(admin_users.router)
+    app.include_router(admin_audit.router)
+    app.include_router(admin_elders.router)
     app.include_router(auth.router)
     app.include_router(elders.router)
     app.include_router(dnc.router)
