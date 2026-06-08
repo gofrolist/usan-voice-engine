@@ -38,3 +38,28 @@
 	}
 	respond 403
 }
+
+{$ADMIN_DOMAIN} {
+	encode zstd gzip
+	# Operator-CIDR allowlist enforced at L7 (443 is SNI-shared across all sites,
+	# so this cannot be a VM firewall rule). Outside the CIDR -> 403. The admin SPA
+	# and the API share THIS origin, so the SameSite=Strict session cookie set by
+	# /v1/auth works (no cross-site cookie, no CORS).
+	@operator remote_ip {$ADMIN_ALLOWED_CIDR}
+	handle @operator {
+		# Same-origin API: admin/auth/runtime endpoints go to the api container.
+		@api path /v1/*
+		handle @api {
+			reverse_proxy api:8000 {
+				# Real (non-spoofable) client IP for the API rate limiter.
+				header_up X-Forwarded-For {remote_host}
+			}
+		}
+		# Everything else is the React SPA static container (client-side routing is
+		# handled inside that container via try_files -> /index.html).
+		handle {
+			reverse_proxy admin-ui:8080
+		}
+	}
+	respond 403
+}
