@@ -55,7 +55,12 @@ async def _truncate_and_dispose(engine: AsyncEngine) -> None:
     # tests that never request `client` don't pay for a Postgres container.
     try:
         async with engine.begin() as conn:
-            await conn.execute(text("TRUNCATE calls, dnc_list, elders RESTART IDENTITY CASCADE"))
+            await conn.execute(
+                text(
+                    "TRUNCATE agent_profile_versions, agent_profiles, admin_audit_log, "
+                    "admin_users, calls, dnc_list, elders RESTART IDENTITY CASCADE"
+                )
+            )
     finally:
         await engine.dispose()
 
