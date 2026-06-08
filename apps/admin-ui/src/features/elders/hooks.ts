@@ -6,10 +6,14 @@ import type { ElderSummary } from "../../types/api";
 
 const ELDERS_KEY = ["elders"] as const;
 
-export function useElders() {
+// Paged: the elders table is the full patient roster, so never fetch it all at once.
+// Per-page keys live under the ELDERS_KEY prefix, so the assign mutation's
+// invalidateQueries({ queryKey: ELDERS_KEY }) still refreshes every page.
+export function useElders(limit: number, offset: number) {
   return useQuery<ElderSummary[]>({
-    queryKey: ELDERS_KEY,
-    queryFn: () => api.get<ElderSummary[]>("/v1/admin/elders"),
+    queryKey: [...ELDERS_KEY, limit, offset],
+    queryFn: () =>
+      api.get<ElderSummary[]>(`/v1/admin/elders?limit=${limit}&offset=${offset}`),
   });
 }
 

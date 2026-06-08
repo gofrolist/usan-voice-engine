@@ -1,15 +1,20 @@
+import { useState } from "react";
 import { Table, Tbody, Td, Th, Thead, Tr } from "../../components/ui/table";
 import { Select } from "../../components/ui/select";
 import { Spinner } from "../../components/ui/spinner";
+import { Button } from "../../components/ui/button";
 import { useIsAdmin } from "../../auth/useSession";
 import { useProfiles } from "../profiles/hooks";
 import { useAssignProfile, useElders } from "./hooks";
+
+const PAGE_SIZE = 200;
 
 // Admin-only: assign each elder a specific agent profile, or "— none —" to fall
 // back to the per-direction default. Only active profiles are assignable.
 export function EldersPage() {
   const isAdmin = useIsAdmin();
-  const elders = useElders();
+  const [offset, setOffset] = useState(0);
+  const elders = useElders(PAGE_SIZE, offset);
   const profiles = useProfiles();
   const assign = useAssignProfile();
 
@@ -34,6 +39,11 @@ export function EldersPage() {
 
   const elderList = elders.data ?? [];
   const assignable = (profiles.data ?? []).filter((p) => p.status === "active");
+  // A full page means there may be more rows; a short page is the last one.
+  const hasNext = elderList.length === PAGE_SIZE;
+  const hasPrev = offset > 0;
+  const rangeStart = elderList.length === 0 ? 0 : offset + 1;
+  const rangeEnd = offset + elderList.length;
 
   return (
     <div className="space-y-4">
@@ -62,7 +72,8 @@ export function EldersPage() {
                 <Select
                   aria-label={`Assigned profile for ${e.name}`}
                   value={e.agent_profile_id ?? ""}
-                  disabled={assign.isPending}
+                  // Disable only the row being saved, not the whole table.
+                  disabled={assign.isPending && assign.variables?.elderId === e.id}
                   onChange={(ev) =>
                     assign.mutate({
                       elderId: e.id,
@@ -89,6 +100,22 @@ export function EldersPage() {
           ))}
         </Tbody>
       </Table>
+
+      <div className="flex items-center gap-3 text-sm text-gray-600">
+        <Button
+          variant="secondary"
+          disabled={!hasPrev}
+          onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+        >
+          Previous
+        </Button>
+        <span>
+          {rangeStart}–{rangeEnd}
+        </span>
+        <Button variant="secondary" disabled={!hasNext} onClick={() => setOffset(offset + PAGE_SIZE)}>
+          Next
+        </Button>
+      </div>
     </div>
   );
 }

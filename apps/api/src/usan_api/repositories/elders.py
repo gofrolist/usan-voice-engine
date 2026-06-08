@@ -54,12 +54,20 @@ async def get_elder_by_phone(db: AsyncSession, phone_e164: str) -> Elder | None:
     return result.scalar_one_or_none()
 
 
-async def list_with_profile(db: AsyncSession) -> list[tuple[Elder, str | None]]:
-    """Elders with their assigned profile name (None if unassigned). Ordered by name."""
+async def list_with_profile(
+    db: AsyncSession, *, limit: int = 200, offset: int = 0
+) -> list[tuple[Elder, str | None]]:
+    """Elders with their assigned profile name (None if unassigned), ordered by name.
+
+    Bounded by limit/offset: the elders table is the full patient roster (potentially
+    thousands), so the admin list pages through it rather than selecting every row.
+    """
     result = await db.execute(
         select(Elder, AgentProfile.name)
         .outerjoin(AgentProfile, Elder.agent_profile_id == AgentProfile.id)
         .order_by(Elder.name)
+        .limit(limit)
+        .offset(offset)
     )
     return [(row[0], row[1]) for row in result.all()]
 

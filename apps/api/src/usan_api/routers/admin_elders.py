@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,8 +36,14 @@ def _summary(elder: Elder, profile_name: str | None) -> ElderSummary:
 
 
 @router.get("", response_model=list[ElderSummary])
-async def list_elders(db: AsyncSession = Depends(get_db)) -> list[ElderSummary]:
-    return [_summary(e, name) for e, name in await elders_repo.list_with_profile(db)]
+async def list_elders(
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+) -> list[ElderSummary]:
+    # Paged: the roster can be large, so never select the whole table at once.
+    rows = await elders_repo.list_with_profile(db, limit=limit, offset=offset)
+    return [_summary(e, name) for e, name in rows]
 
 
 @router.put("/{elder_id}/profile", response_model=ElderSummary)

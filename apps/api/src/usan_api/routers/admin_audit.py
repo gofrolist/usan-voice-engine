@@ -16,9 +16,13 @@ router = APIRouter(
 @router.get("", response_model=list[AuditEntryOut])
 async def list_audit(
     limit: int = Query(default=100, ge=1, le=500),
+    # Server-side filters so a match spans the whole table, not just the latest
+    # `limit` rows (a compliance screen must not show a false "no matching entries").
+    actor: str | None = Query(default=None, max_length=320),
+    action: str | None = Query(default=None, max_length=100),
     db: AsyncSession = Depends(get_db),
 ) -> list[AuditEntryOut]:
-    rows = await repo.list_recent(db, limit=limit)
+    rows = await repo.list_recent(db, limit=limit, actor=actor, action=action)
     return [
         AuditEntryOut(
             id=r.id,

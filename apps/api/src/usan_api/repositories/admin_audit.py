@@ -31,9 +31,25 @@ async def record(
     return entry
 
 
-async def list_recent(db: AsyncSession, *, limit: int = 100) -> list[AdminAuditLog]:
+async def list_recent(
+    db: AsyncSession,
+    *,
+    limit: int = 100,
+    actor: str | None = None,
+    action: str | None = None,
+) -> list[AdminAuditLog]:
+    """Most-recent audit rows, optionally filtered by actor/action ACROSS THE TABLE.
+
+    Filtering is applied in SQL (not client-side over a fetched window), so a match
+    older than the limit window is still found; `actor` is a case-insensitive
+    substring match, `action` an exact match. Results stay bounded by `limit`.
+    """
     limit = max(1, min(limit, _MAX_LIST_LIMIT))
-    result = await db.execute(
-        select(AdminAuditLog).order_by(AdminAuditLog.created_at.desc()).limit(limit)
-    )
+    stmt = select(AdminAuditLog)
+    if actor:
+        stmt = stmt.where(AdminAuditLog.actor_email.ilike(f"%{actor.strip()}%"))
+    if action:
+        stmt = stmt.where(AdminAuditLog.action == action)
+    stmt = stmt.order_by(AdminAuditLog.created_at.desc()).limit(limit)
+    result = await db.execute(stmt)
     return list(result.scalars().all())
