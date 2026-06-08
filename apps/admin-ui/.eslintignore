@@ -1,0 +1,5 @@
+dist
+node_modules
+# Playwright E2E specs depend on @playwright/test (installed in CI/P5 only) and
+# live outside the tsconfig + vitest scope, so eslint must not try to lint them.
+e2e
