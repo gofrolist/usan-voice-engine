@@ -230,7 +230,7 @@ async def test_inbound_known_elder_runs_check_in(monkeypatch):
 
     built = {}
 
-    def _fake_build_inbound_agent(dynamic_vars):
+    def _fake_build_inbound_agent(cfg, dynamic_vars):
         built["dynamic_vars"] = dynamic_vars
         agent = MagicMock(name="inbound_agent")
         built["agent"] = agent
@@ -421,7 +421,7 @@ async def test_inbound_known_starts_call_recording(monkeypatch):
         return {"call_id": "inb-1", "elder_known": True, "dynamic_vars": {"elder_name": "Ada"}}
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
-    monkeypatch.setattr(worker, "build_inbound_agent", lambda dv: MagicMock())
+    monkeypatch.setattr(worker, "build_inbound_agent", lambda cfg, dv: MagicMock())
 
     captured = {}
 

@@ -84,7 +84,7 @@ async def test_inbound_disclosure_precedes_recording(monkeypatch):
         return {"call_id": "inb-1", "elder_known": True, "dynamic_vars": {"elder_name": "Ada"}}
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
-    monkeypatch.setattr(worker, "build_inbound_agent", lambda dv: MagicMock())
+    monkeypatch.setattr(worker, "build_inbound_agent", lambda cfg, dv: MagicMock())
 
     def _fake_build_session(settings, userdata=None):
         session = MagicMock()
