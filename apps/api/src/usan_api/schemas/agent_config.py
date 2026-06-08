@@ -12,7 +12,7 @@ import re
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Tool names the agent can register; mirrors check_in.build_check_in_agent().
 TOOL_NAMES = frozenset({"log_wellness", "log_medication", "get_today_meds", "end_call"})
@@ -159,6 +159,12 @@ class SpeechAdvancedConfig(BaseModel):
 # or previously-published rows will fail validation and 500 on read. See
 # test_agent_config_schema.test_legacy_config_still_deserializes.
 class AgentConfig(BaseModel):
+    # Mirrors the frozen agent-side copy (services/agent/.../agent_config.py): a
+    # resolved/default config is read-only after construction. apps/api only
+    # .model_dump()s and validates these, never field-assigns, so freezing is safe
+    # and keeps the two copies' intent in sync.
+    model_config = ConfigDict(frozen=True)
+
     prompts: PromptsConfig
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
