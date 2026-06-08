@@ -4,8 +4,9 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from usan_api.db.models import Elder
 from usan_api.repositories import agent_profiles as repo
-from usan_api.repositories.agent_profiles import ProfileInUseError
+from usan_api.repositories.agent_profiles import CloneSourceNotFoundError, ProfileInUseError
 from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG
 
 
@@ -97,3 +98,87 @@ async def test_archive_blocked_when_default(session_factory):
     async with session_factory() as db:
         with pytest.raises(ProfileInUseError):
             await repo.archive_profile(db, pid)
+
+
+async def test_clone_from_copies_source_draft(session_factory):
+    async with session_factory() as db:
+        src = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        changed = DEFAULT_AGENT_CONFIG.model_copy(
+            update={"llm": DEFAULT_AGENT_CONFIG.llm.model_copy(update={"model": "clone-me"})}
+        )
+        await repo.update_draft(
+            db, src.id, config=changed.model_dump(), description=None, actor_email="op"
+        )
+        await db.commit()
+        sid = src.id
+
+    async with session_factory() as db:
+        clone = await repo.create_profile(
+            db, name=_name(), description=None, actor_email="op", clone_from=sid
+        )
+        await db.commit()
+        assert clone.draft_config["llm"]["model"] == "clone-me"
+
+
+async def test_clone_from_missing_raises(session_factory):
+    async with session_factory() as db:
+        with pytest.raises(CloneSourceNotFoundError):
+            await repo.create_profile(
+                db, name=_name(), description=None, actor_email="op", clone_from=uuid.uuid4()
+            )
+
+
+async def test_has_unpublished_draft_transitions(session_factory):
+    async with session_factory() as db:
+        p = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        pid = p.id
+        assert await repo.has_unpublished_draft(db, p) is True  # never published
+        await repo.publish(db, pid, note=None, actor_email="op")
+        await db.commit()
+
+    async with session_factory() as db:
+        p2 = await repo.get_profile(db, pid)
+        assert p2 is not None
+        assert await repo.has_unpublished_draft(db, p2) is False  # draft == live
+        changed = DEFAULT_AGENT_CONFIG.model_copy(
+            update={"llm": DEFAULT_AGENT_CONFIG.llm.model_copy(update={"temperature": 0.5})}
+        )
+        await repo.update_draft(
+            db, pid, config=changed.model_dump(), description=None, actor_email="op"
+        )
+        await db.commit()
+        p3 = await repo.get_profile(db, pid)
+        assert p3 is not None
+        assert await repo.has_unpublished_draft(db, p3) is True  # draft diverged
+
+
+async def test_archive_blocked_when_assigned_to_elder(session_factory):
+    async with session_factory() as db:
+        p = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        pid = p.id
+        elder = Elder(
+            name="Test Elder",
+            phone_e164=f"+1555{uuid.uuid4().int % 10_000_000:07d}",
+            timezone="America/New_York",
+            agent_profile_id=pid,
+        )
+        db.add(elder)
+        await db.commit()
+
+    async with session_factory() as db:
+        with pytest.raises(ProfileInUseError):
+            await repo.archive_profile(db, pid)
+
+
+async def test_set_default_self_reassignment_is_idempotent(session_factory):
+    async with session_factory() as db:
+        p = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        pid = p.id
+        await repo.set_default(db, pid, direction="outbound")
+        await db.commit()
+
+    async with session_factory() as db:
+        result = await repo.set_default(db, pid, direction="outbound")
+        await db.commit()
+        assert result is not None
+        assert result.is_default_outbound is True

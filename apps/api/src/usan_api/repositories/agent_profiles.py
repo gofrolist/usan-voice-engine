@@ -13,6 +13,10 @@ class ProfileInUseError(Exception):
     """Raised when archiving a profile that is still a default or assigned to elders."""
 
 
+class CloneSourceNotFoundError(Exception):
+    """Raised when create_profile(clone_from=...) references a profile that doesn't exist."""
+
+
 async def create_profile(
     db: AsyncSession,
     *,
@@ -23,7 +27,9 @@ async def create_profile(
 ) -> AgentProfile:
     if clone_from is not None:
         source = await db.get(AgentProfile, clone_from)
-        draft = source.draft_config if source is not None else DEFAULT_AGENT_CONFIG.model_dump()
+        if source is None:
+            raise CloneSourceNotFoundError(str(clone_from))
+        draft = source.draft_config
     else:
         draft = DEFAULT_AGENT_CONFIG.model_dump()
     profile = AgentProfile(
@@ -69,6 +75,10 @@ async def update_draft(
 
 
 async def _next_version(db: AsyncSession, profile_id: uuid.UUID) -> int:
+    # NOTE: SELECT MAX + INSERT is not atomic. P1 is single-controller (admin UI
+    # writes serialized through one process), so concurrent publishes do not occur.
+    # If concurrent writers are ever added, take a row lock on the parent profile
+    # (SELECT ... FOR UPDATE) or handle the unique-index IntegrityError with a retry.
     result = await db.execute(
         select(func.max(AgentProfileVersion.version)).where(
             AgentProfileVersion.profile_id == profile_id
@@ -157,6 +167,8 @@ async def set_default(
     profile = await db.get(AgentProfile, profile_id)
     if profile is None:
         return None
+    if profile.status == ProfileStatus.ARCHIVED:
+        raise ProfileInUseError("cannot set an archived profile as default")
     column = (
         AgentProfile.is_default_inbound
         if direction == "inbound"
