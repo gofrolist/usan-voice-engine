@@ -57,6 +57,20 @@ def test_operator_route_throttled_before_auth(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_admin_routes_are_rate_limited(monkeypatch):
+    # The /v1/admin/* management plane is operator-token guarded but must also be
+    # throttled pre-auth, like the other operator routes. No auth header is sent:
+    # the first requests get 401 (auth), later ones 429 (rate limit).
+    app = _app_with_env(monkeypatch, RATE_LIMIT_ENABLED="true", RATE_LIMIT_DEFAULT="2/minute")
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        codes = [client.get("/v1/admin/profiles").status_code for _ in range(5)]
+        assert 429 in codes
+        assert codes.index(429) >= 2  # the first two (the budget) were not throttled
+    finally:
+        get_settings.cache_clear()
+
+
 def test_rate_limit_429_includes_retry_after(monkeypatch):
     # RFC 9110 §15.5.30: the 429 must tell a well-behaved client when to retry.
     app = _app_with_env(monkeypatch, RATE_LIMIT_ENABLED="true", RATE_LIMIT_DEFAULT="2/minute")

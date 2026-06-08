@@ -10,7 +10,7 @@ from usan_api.db.session import dispose_engine
 from usan_api.logging_config import configure_logging
 from usan_api.observability.instrumentation import setup_metrics
 from usan_api.ratelimit import OperatorRateLimitMiddleware
-from usan_api.routers import calls, dnc, elders, tools, webhooks
+from usan_api.routers import admin_profiles, calls, dnc, elders, tools, webhooks
 from usan_api.settings import Settings, get_settings
 
 
@@ -80,6 +80,7 @@ def create_app() -> FastAPI:
     async def health() -> HealthResponse:
         return HealthResponse(status="ok")
 
+    app.include_router(admin_profiles.router)
     app.include_router(elders.router)
     app.include_router(dnc.router)
     app.include_router(calls.router)
