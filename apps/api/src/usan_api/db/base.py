@@ -24,3 +24,13 @@ class CallStatus(enum.Enum):
     FAILED = "failed"
     DNC_BLOCKED = "dnc_blocked"
     CANCELLED = "cancelled"
+
+
+class ProfileStatus(enum.Enum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class AdminRole(enum.Enum):
+    ADMIN = "admin"
+    VIEWER = "viewer"
