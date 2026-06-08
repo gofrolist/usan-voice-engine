@@ -162,3 +162,33 @@ def test_publish_records_audit_entry(client, async_database_url):
     assert entry is not None
     assert entry.actor_email
     assert entry.detail == {"version": 1}
+
+
+def test_rollback_records_audit_entry(client, async_database_url):
+    pid = client.post("/v1/admin/profiles", json={"name": _name()}, headers=_OP).json()["id"]
+    client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"}, headers=_OP)
+    cfg = client.get(f"/v1/admin/profiles/{pid}", headers=_OP).json()["draft_config"]
+    cfg["llm"]["temperature"] = 0.4
+    client.put(f"/v1/admin/profiles/{pid}/draft", json={"config": cfg}, headers=_OP)
+    client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v2"}, headers=_OP)
+    r = client.post(f"/v1/admin/profiles/{pid}/rollback/1", json={}, headers=_OP)
+    assert r.status_code == 201
+    entry = asyncio.run(_fetch_audit(async_database_url, "profile.rollback"))
+    assert entry is not None
+    assert entry.actor_email
+    # Rolling v1 back re-publishes it as a new version (v3): detail records both ends.
+    assert entry.detail == {"from_version": 1, "new_version": 3}
+
+
+def test_set_default_unknown_profile_returns_404(client):
+    r = client.post(
+        f"/v1/admin/profiles/{uuid.uuid4()}/set-default",
+        json={"direction": "inbound"},
+        headers=_OP,
+    )
+    assert r.status_code == 404
+
+
+def test_archive_unknown_profile_returns_404(client):
+    r = client.post(f"/v1/admin/profiles/{uuid.uuid4()}/archive", json={}, headers=_OP)
+    assert r.status_code == 404

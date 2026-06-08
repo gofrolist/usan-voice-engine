@@ -6,6 +6,7 @@ from usan_api.schemas.agent_config import (
     AgentConfig,
     PromptsConfig,
     SpeechAdvancedConfig,
+    TimingConfig,
     ToolsConfig,
 )
 
@@ -29,6 +30,28 @@ def test_config_round_trips_through_dict():
     data = DEFAULT_AGENT_CONFIG.model_dump()
     restored = AgentConfig.model_validate(data)
     assert restored == DEFAULT_AGENT_CONFIG
+
+
+def test_legacy_config_still_deserializes():
+    # Forward-compat invariant: a stored snapshot that predates later (optional)
+    # fields must still validate on read. A config carrying only `prompts` must fill
+    # every other bundle from defaults rather than raising — otherwise old
+    # agent_profile_versions rows would 500 on GET. Guards the AgentConfig invariant.
+    legacy = {"prompts": DEFAULT_AGENT_CONFIG.prompts.model_dump()}
+    cfg = AgentConfig.model_validate(legacy)
+    assert cfg.timing.max_call_duration_s == 1800
+    assert cfg.voice == DEFAULT_AGENT_CONFIG.voice
+    assert set(cfg.tools.enabled) == set(DEFAULT_AGENT_CONFIG.tools.enabled)
+
+
+def test_timing_rejects_cap_below_answer_timeout():
+    # Cross-field guard: the cap must exceed the answer wait or the inbound
+    # watchdog could fire during the greeting.
+    with pytest.raises(ValidationError):
+        TimingConfig(answer_timeout_s=180.0, max_call_duration_s=60)
+    # A sane ordering is accepted.
+    ok = TimingConfig(answer_timeout_s=50.0, max_call_duration_s=1800)
+    assert ok.max_call_duration_s == 1800
 
 
 def test_prompt_field_rejects_braces():

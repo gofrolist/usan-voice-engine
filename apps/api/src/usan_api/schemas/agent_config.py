@@ -91,6 +91,19 @@ class TimingConfig(BaseModel):
     answer_timeout_s: float = Field(default=50.0, ge=5.0, le=180.0)
     max_call_duration_s: int = Field(default=1800, ge=60, le=7200)
 
+    @model_validator(mode="after")
+    def _duration_exceeds_answer_timeout(self) -> TimingConfig:
+        # The agent arms the max-duration watchdog at session start on inbound (before
+        # any answer), so a cap at or below the answer-wait could fire during the
+        # greeting. The per-field ranges alone allow e.g. answer=180 with max=60, so
+        # enforce the cross-field relationship here.
+        if self.max_call_duration_s <= self.answer_timeout_s:
+            raise ValueError(
+                f"max_call_duration_s ({self.max_call_duration_s}) must be greater than "
+                f"answer_timeout_s ({self.answer_timeout_s})"
+            )
+        return self
+
 
 class ToolsConfig(BaseModel):
     enabled: list[str] = Field(
@@ -138,6 +151,12 @@ class SpeechAdvancedConfig(BaseModel):
         return self
 
 
+# FORWARD-COMPATIBILITY INVARIANT: version snapshots in agent_profile_versions.config
+# are immutable and long-lived, and are re-validated through AgentConfig on every read
+# (ProfileDetail/VersionDetail.from_model). Any NEW field added here MUST be Optional
+# with a default (and any tightened constraint must stay satisfiable by older configs),
+# or previously-published rows will fail validation and 500 on read. See
+# test_agent_config_schema.test_legacy_config_still_deserializes.
 class AgentConfig(BaseModel):
     prompts: PromptsConfig
     voice: VoiceConfig = Field(default_factory=VoiceConfig)

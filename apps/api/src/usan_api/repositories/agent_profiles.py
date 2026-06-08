@@ -99,6 +99,10 @@ async def publish(
     note: str | None,
     actor_email: str,
 ) -> AgentProfileVersion | None:
+    # Concurrency note: version assignment (_next_version) is SELECT MAX + INSERT and
+    # not atomic. P1 is single-controller so this cannot race; if a second writer is
+    # added, the uq_(profile_id, version) index makes the loser raise IntegrityError
+    # (currently surfacing as a 500) — handle it there with a row lock or 409 retry.
     profile = await db.get(AgentProfile, profile_id)
     if profile is None:
         return None
@@ -118,11 +122,20 @@ async def publish(
     return version
 
 
-async def list_versions(db: AsyncSession, profile_id: uuid.UUID) -> list[AgentProfileVersion]:
+# Bound the version history read: publish/rollback append a row each time, so a
+# long-lived profile's history grows monotonically. Default cap mirrors the audit
+# repo (_MAX_LIST_LIMIT=500); newest-first so the cap keeps the most recent.
+MAX_VERSIONS_LIMIT = 500
+
+
+async def list_versions(
+    db: AsyncSession, profile_id: uuid.UUID, *, limit: int = MAX_VERSIONS_LIMIT
+) -> list[AgentProfileVersion]:
     result = await db.execute(
         select(AgentProfileVersion)
         .where(AgentProfileVersion.profile_id == profile_id)
         .order_by(AgentProfileVersion.version.desc())
+        .limit(limit)
     )
     return list(result.scalars().all())
 
