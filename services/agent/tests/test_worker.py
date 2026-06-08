@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from usan_agent import worker
+from usan_agent.agent_config import DEFAULT_AGENT_CONFIG
 from usan_agent.pipeline import RECORDING_DISCLOSURE
 from usan_agent.voicemail import VoicemailWatcher
 from usan_agent.worker import CallMetadata, parse_metadata
@@ -112,7 +113,7 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
 
     built = {}
 
-    def _fake_build_check_in_agent():
+    def _fake_build_check_in_agent(cfg=None):
         agent = MagicMock(name="check_in_agent")
         built["agent"] = agent
         return agent
@@ -121,6 +122,7 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
     monkeypatch.setattr(worker, "build_agent", fake_build_agent)
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
     monkeypatch.setattr(worker, "build_check_in_agent", _fake_build_check_in_agent)
+    monkeypatch.setattr(worker, "fetch_agent_config", AsyncMock(return_value=DEFAULT_AGENT_CONFIG))
     # Short-circuit the detection window so the test doesn't run the real conversation.
     monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
 
@@ -155,7 +157,8 @@ async def test_outbound_registers_transcript_flush(monkeypatch):
         return session
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
-    monkeypatch.setattr(worker, "build_check_in_agent", lambda: MagicMock())
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
+    monkeypatch.setattr(worker, "fetch_agent_config", AsyncMock(return_value=DEFAULT_AGENT_CONFIG))
     monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
 
     registered = {}
@@ -390,7 +393,8 @@ async def test_outbound_starts_call_recording(monkeypatch):
         return session
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
-    monkeypatch.setattr(worker, "build_check_in_agent", lambda: MagicMock())
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
+    monkeypatch.setattr(worker, "fetch_agent_config", AsyncMock(return_value=DEFAULT_AGENT_CONFIG))
     monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
     monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
 
