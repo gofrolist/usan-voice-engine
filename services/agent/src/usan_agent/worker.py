@@ -108,7 +108,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, log: Any) -> None:
         dynamic_vars = info.get("dynamic_vars") or {}
         data = CheckInData(call_id=call_id, settings=settings, job_ctx=ctx)
         session = build_session(settings, userdata=data)
-        agent = build_inbound_agent(dynamic_vars)
+        agent = build_inbound_agent(None, dynamic_vars)
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
