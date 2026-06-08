@@ -13,7 +13,7 @@ from typing import Any
 from livekit.agents import JobContext, WorkerOptions, cli
 from loguru import logger
 
-from usan_agent.api_client import start_inbound_call
+from usan_agent.api_client import fetch_agent_config, start_inbound_call
 from usan_agent.check_in import CheckInData, build_check_in_agent, build_inbound_agent
 from usan_agent.ids import validate_call_id
 from usan_agent.logging_config import configure_logging
@@ -28,7 +28,7 @@ from usan_agent.pipeline import (
 from usan_agent.recording import start_call_recording
 from usan_agent.settings import Settings, get_settings
 from usan_agent.transcript import register_transcript_flush
-from usan_agent.voicemail import VOICEMAIL_WINDOW_S, VoicemailWatcher
+from usan_agent.voicemail import VOICEMAIL_WINDOW_S, VoicemailWatcher, build_matcher
 from usan_agent.voicemail_action import leave_voicemail
 
 
@@ -168,9 +168,13 @@ async def entrypoint(ctx: JobContext) -> None:
             log.error("Invalid call_id in job metadata; refusing outbound job")
             ctx.shutdown(reason="invalid_metadata")
             return
+        # Resolve the admin-editable config so per-call settings (enabled tools,
+        # voicemail trigger phrases) actually take effect; degrades to defaults on
+        # any failure (fetch_agent_config never raises).
+        agent_cfg = await fetch_agent_config(settings, direction="outbound", call_id=call_id)
         data = CheckInData(call_id=call_id, settings=settings, job_ctx=ctx)
         session = build_session(settings, userdata=data)
-        agent = build_check_in_agent()
+        agent = build_check_in_agent(agent_cfg)
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
@@ -190,7 +194,9 @@ async def entrypoint(ctx: JobContext) -> None:
         # egress, so no audio is recorded before the spoken notice (consent ordering).
         await say_recording_disclosure(session)
         await start_call_recording(ctx, call_id, settings)
-        watcher = VoicemailWatcher()
+        # Honour admin-configured voicemail phrases; empty -> built-in §7 patterns.
+        matcher = build_matcher(agent_cfg.voicemail_detection.trigger_phrases)
+        watcher = VoicemailWatcher(matcher=matcher)
         session.on("user_input_transcribed", lambda ev: watcher.feed(ev.transcript))
         log.info("Participant present; running voicemail detection window")
         await _run_detection_window(ctx, session, watcher, call_id=call_id, settings=settings)

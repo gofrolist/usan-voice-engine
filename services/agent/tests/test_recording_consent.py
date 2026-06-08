@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 from usan_agent import worker
+from usan_agent.agent_config import DEFAULT_AGENT_CONFIG
 from usan_agent.pipeline import GREETING, RECORDING_DISCLOSURE, greet
 
 
@@ -56,7 +57,8 @@ async def test_outbound_disclosure_precedes_recording(monkeypatch):
         return session
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
-    monkeypatch.setattr(worker, "build_check_in_agent", lambda: MagicMock())
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
+    monkeypatch.setattr(worker, "fetch_agent_config", AsyncMock(return_value=DEFAULT_AGENT_CONFIG))
     monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
     monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
     rec = AsyncMock(return_value="EG_1")
