@@ -30,8 +30,12 @@ Then:
    docker compose --env-file infra/.env \
      -f infra/docker-compose.yml \
      -f infra/docker-compose.prod.yml \
-     -f infra/docker-compose.tls.yml up -d
+     -f infra/docker-compose.tls.yml \
+     -f infra/docker-compose.monitoring.yml \
+     -f infra/docker-compose.admin.yml up -d
    ```
+   (Drop the `monitoring`/`admin` overlays if you are not running those services
+   yet; the deploy workflow always layers the full chain.)
 5. **Verify TLS:** `curl -fsS https://api.<domain>/health` -> `{"status":"ok"}`.
 
 ## Prerequisites
@@ -380,3 +384,61 @@ do not). Verify in Grafana → Connections → Data sources: "Cloud Monitoring" 
 keep `id: null` and a unique `uid`/`title`, run `python -m pytest scripts/tests`,
 commit, and ship on the next tag. CI's `pytest (scripts)` job validates structure
 (datasource uids, gridPos, no PHI columns) on every PR.
+
+## Admin UI (Plan admin-5)
+
+The React admin console (`apps/admin-ui`) is served as static assets by a tiny
+`usan-admin-ui` Caddy image, reverse-proxied by the edge Caddy at `admin.<domain>`,
+and gated to an operator CIDR allowlist at L7 (`ADMIN_ALLOWED_CIDR`) — the same
+pattern as Grafana. The SPA and the API share that origin (`/v1/*` → `api:8000`,
+everything else → the SPA container), so the Google-SSO `SameSite=Strict` session
+cookie works with no CORS. Auth itself (Google SSO + the `admin_users` allow-list)
+ships in the API from Plan admin-3.
+
+> **Going live needs BOTH a `v*` tag (app/compose) AND `terraform apply` (DNS).**
+> The tag deploy ships `docker-compose.admin.yml` and brings up the `admin-ui`
+> service; it does **not** create DNS or re-fetch the `.env` secret.
+
+One-time setup before the first deploy that includes the admin overlay:
+
+1. **Google OAuth client.** GCP console → APIs & Services → Credentials → Create
+   credentials → OAuth client ID → **Web application**. Add the authorized redirect
+   URI **exactly** `https://admin.<domain>/v1/auth/callback`. Note the client ID and
+   secret. (This redirect-URI registration is a manual step — the API only verifies
+   the token; it cannot register the URI for you.)
+2. `cd infra/terraform && terraform apply` — creates the `admin.<domain>` DNS
+   record (alongside `api`/`lk`/`grafana`; `proxied = false`).
+3. Fold the new keys into the `usan-prod-env` Secret Manager secret (the `.env`):
+   - `ADMIN_DOMAIN=admin.<domain>`
+   - `ADMIN_ALLOWED_CIDR=<your office/VPN CIDR>` (must be set, or compose aborts)
+   - `GOOGLE_OAUTH_CLIENT_ID=<client id>`
+   - `GOOGLE_OAUTH_CLIENT_SECRET=<client secret>`
+   - `GOOGLE_OAUTH_REDIRECT_URI=https://admin.<domain>/v1/auth/callback`
+   - `ADMIN_BOOTSTRAP_EMAILS=<comma-separated operator emails>` (seeded as `admin`
+     on first boot; afterwards managed in the UI's Admin users screen)
+   - optional: `GOOGLE_OAUTH_HD=<gsuite domain>`, `SESSION_COOKIE_SECURE=true`
+     (the default), `ADMIN_SESSION_TTL_S`, `ADMIN_POST_LOGIN_REDIRECT`
+4. **Seed the VM `.env` BEFORE the tag deploy.** The `v*` deploy runs
+   `compose up --env-file infra/.env` but never re-fetches the secret, so new keys
+   must already be on `/opt/usan/infra/.env`. Reboot the VM (startup.sh re-fetches
+   the secret) **or** IAP-SSH in and refresh the file by hand, *then* cut the tag.
+   (IAP SSH works even if your IP isn't in `operator_ssh_cidr`.)
+
+   > ⚠️ **A missing admin key aborts the ENTIRE stack deploy, not just the console.**
+   > The deploy layers all overlays in one `docker compose up`, and the admin overlay
+   > uses `${ADMIN_ALLOWED_CIDR:?…}` (+ a non-empty `ADMIN_DOMAIN`). If either is unset
+   > when the tag deploys, compose interpolation fails and `api`/`agent`/`livekit`/
+   > `grafana` all fail to come up too. Mirrors the pre-existing `GRAFANA_ALLOWED_CIDR:?`
+   > behavior — seed these keys first.
+5. Cut a `v*` tag → the deploy builds/pushes `usan-admin-ui`, ships
+   `docker-compose.admin.yml`, and brings up the `admin-ui` service behind Caddy.
+
+Verify post-deploy:
+- From an IP inside `ADMIN_ALLOWED_CIDR`, open `https://admin.<domain>` → the SPA
+  loads → "Sign in with Google" → after consent you land on the console.
+- From an IP **outside** the CIDR → **403** (edge-blocked, same as Grafana).
+- `curl -fsS https://admin.<domain>/v1/auth/me` (with the session cookie) returns
+  the operator's email + role; a non-allow-listed Google account gets a 403 at
+  callback (audit-logged).
+- If the SPA loads but every `/v1/*` call 404s, the `/v1/*` handle is missing from
+  the `{$ADMIN_DOMAIN}` Caddy block — fix `infra/Caddyfile`, not Grafana.

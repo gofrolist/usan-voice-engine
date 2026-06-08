@@ -12,6 +12,16 @@
 	@metrics path /metrics
 	respond @metrics 403
 
+	# The admin-console plane (session-cookie auth) and the Google-SSO endpoints are
+	# served ONLY via the CIDR-gated admin.<domain> origin below. Block them on this
+	# ungated public api host so the admin plane has a single gated entry point
+	# (defense in depth: a stolen session cookie can't be replayed off-CIDR here, and
+	# the OAuth routes aren't probeable). The SPA + /v1 are same-origin on admin.<domain>;
+	# the agent (/v1/runtime, /v1/calls/*) and operator (/v1/elders, /v1/dnc, /v1/calls)
+	# planes do not use these prefixes, so nothing legitimate is blocked.
+	@adminplane path /v1/admin/* /v1/auth/*
+	respond @adminplane 403
+
 	reverse_proxy api:8000 {
 		# Overwrite X-Forwarded-For with the direct client so the API rate
 		# limiter keys on the real (non-spoofable) caller IP, not this proxy's.
@@ -35,6 +45,31 @@
 	@operator remote_ip {$GRAFANA_ALLOWED_CIDR}
 	handle @operator {
 		reverse_proxy grafana:3000
+	}
+	respond 403
+}
+
+{$ADMIN_DOMAIN} {
+	encode zstd gzip
+	# Operator-CIDR allowlist enforced at L7 (443 is SNI-shared across all sites,
+	# so this cannot be a VM firewall rule). Outside the CIDR -> 403. The admin SPA
+	# and the API share THIS origin, so the SameSite=Strict session cookie set by
+	# /v1/auth works (no cross-site cookie, no CORS).
+	@operator remote_ip {$ADMIN_ALLOWED_CIDR}
+	handle @operator {
+		# Same-origin API: admin/auth/runtime endpoints go to the api container.
+		@api path /v1/*
+		handle @api {
+			reverse_proxy api:8000 {
+				# Real (non-spoofable) client IP for the API rate limiter.
+				header_up X-Forwarded-For {remote_host}
+			}
+		}
+		# Everything else is the React SPA static container (client-side routing is
+		# handled inside that container via try_files -> /index.html).
+		handle {
+			reverse_proxy admin-ui:8080
+		}
 	}
 	respond 403
 }
