@@ -71,6 +71,18 @@ def test_caddyfile_admin_block_is_cidr_gated():
     assert "respond 403" in admin_block
 
 
+def test_api_origin_does_not_expose_admin_plane():
+    # Defense in depth: the admin/auth plane must be reachable ONLY via the
+    # CIDR-gated admin.<domain> origin, so the ungated api.<domain> block must 403
+    # the /v1/admin/* and /v1/auth/* prefixes.
+    text = (INFRA / "Caddyfile").read_text()
+    # Anchor on the site headers ("<domain> {"), not the leading comment that also
+    # mentions both placeholders.
+    api_block = text.split("{$API_DOMAIN} {", 1)[1].split("{$LIVEKIT_DOMAIN} {", 1)[0]
+    assert "/v1/admin/*" in api_block and "/v1/auth/*" in api_block
+    assert "403" in api_block
+
+
 def test_inner_caddyfile_has_spa_fallback():
     text = (ROOT / "apps/admin-ui/Caddyfile").read_text()
     assert "try_files" in text and "/index.html" in text
