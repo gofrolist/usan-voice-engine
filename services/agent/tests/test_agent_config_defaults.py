@@ -1,4 +1,4 @@
-from usan_agent import check_in, pipeline, worker
+from usan_agent import check_in, pipeline
 from usan_agent.agent_config import DEFAULT_AGENT_CONFIG
 
 
@@ -17,8 +17,12 @@ def test_default_prompts_match_check_in_constants():
     assert p.inbound_personalization_template == check_in.INBOUND_INSTRUCTIONS_TEMPLATE
 
 
-def test_default_inbound_opening_matches_worker_constant():
-    assert DEFAULT_AGENT_CONFIG.prompts.inbound_opening == worker._INBOUND_OPENING
+def test_default_inbound_opening_is_present():
+    # The worker no longer holds its own _INBOUND_OPENING constant; the inbound
+    # opening now lives canonically in the config and is threaded via cfg.
+    opening = DEFAULT_AGENT_CONFIG.prompts.inbound_opening
+    assert isinstance(opening, str)
+    assert opening.strip()
 
 
 def test_default_models_match_pipeline_constants():

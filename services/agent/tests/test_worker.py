@@ -9,6 +9,10 @@ from usan_agent.voicemail import VoicemailWatcher
 from usan_agent.worker import CallMetadata, parse_metadata
 
 
+async def _fake_fetch(settings, *, direction, call_id=None):
+    return DEFAULT_AGENT_CONFIG
+
+
 def test_parse_metadata_outbound():
     raw = '{"call_id": "abc", "direction": "outbound", "dynamic_vars": {"name": "Ada"}}'
     md = parse_metadata(raw)
@@ -39,7 +43,7 @@ def test_parse_metadata_invalid_json_is_inbound():
 async def test_run_detection_window_triggers_voicemail(monkeypatch):
     left = []
 
-    async def _fake_leave(ctx, session, call_id, settings):
+    async def _fake_leave(ctx, session, call_id, settings, voicemail_message=None):
         left.append(call_id)
 
     monkeypatch.setattr(worker, "leave_voicemail", _fake_leave)
@@ -51,12 +55,14 @@ async def test_run_detection_window_triggers_voicemail(monkeypatch):
     ctx = MagicMock()
     greeted = []
 
-    async def _greet(_s, *, include_disclosure=True):
+    async def _greet(_s, cfg=None, *, include_disclosure=True):
         greeted.append(True)
 
     monkeypatch.setattr(worker, "greet", _greet)
 
-    await worker._run_detection_window(ctx, session, watcher, call_id="c1", settings=MagicMock())
+    await worker._run_detection_window(
+        ctx, session, watcher, call_id="c1", settings=MagicMock(), cfg=DEFAULT_AGENT_CONFIG
+    )
 
     assert greeted == [True]
     assert left == ["c1"]
@@ -66,18 +72,24 @@ async def test_run_detection_window_triggers_voicemail(monkeypatch):
 async def test_run_detection_window_human_falls_through(monkeypatch):
     left = []
 
-    async def _fake_leave(ctx, session, call_id, settings):
+    async def _fake_leave(ctx, session, call_id, settings, voicemail_message=None):
         left.append(call_id)
 
     monkeypatch.setattr(worker, "leave_voicemail", _fake_leave)
     monkeypatch.setattr(worker, "greet", AsyncMock())
-    # shorten the window so the test is fast
-    monkeypatch.setattr(worker, "VOICEMAIL_WINDOW_S", 0.05)
+    # shorten the window so the test is fast (now via cfg, not a module constant)
+    cfg = DEFAULT_AGENT_CONFIG.model_copy(
+        update={
+            "voicemail_detection": DEFAULT_AGENT_CONFIG.voicemail_detection.model_copy(
+                update={"window_s": 0.05}
+            )
+        }
+    )
 
     watcher = VoicemailWatcher()  # never fed a voicemail phrase
 
     await worker._run_detection_window(
-        MagicMock(), MagicMock(), watcher, call_id="c2", settings=MagicMock()
+        MagicMock(), MagicMock(), watcher, call_id="c2", settings=MagicMock(), cfg=cfg
     )
 
     assert left == []  # human → no voicemail action
@@ -102,7 +114,7 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
 
     captured = {}
 
-    def _fake_build_session(settings, userdata=None):
+    def _fake_build_session(settings, cfg=None, userdata=None):
         captured["userdata"] = userdata
         session = MagicMock()
         session.start = AsyncMock()
@@ -122,7 +134,8 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
     monkeypatch.setattr(worker, "build_agent", fake_build_agent)
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
     monkeypatch.setattr(worker, "build_check_in_agent", _fake_build_check_in_agent)
-    monkeypatch.setattr(worker, "fetch_agent_config", AsyncMock(return_value=DEFAULT_AGENT_CONFIG))
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
+    monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
     # Short-circuit the detection window so the test doesn't run the real conversation.
     monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
 
@@ -149,7 +162,7 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
 async def test_outbound_registers_transcript_flush(monkeypatch):
     _settings(monkeypatch)
 
-    def _fake_build_session(settings, userdata=None):
+    def _fake_build_session(settings, cfg=None, userdata=None):
         session = MagicMock()
         session.start = AsyncMock()
         session.say = AsyncMock()
@@ -158,7 +171,8 @@ async def test_outbound_registers_transcript_flush(monkeypatch):
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
     monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
-    monkeypatch.setattr(worker, "fetch_agent_config", AsyncMock(return_value=DEFAULT_AGENT_CONFIG))
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
+    monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
     monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
 
     registered = {}
@@ -187,7 +201,7 @@ async def test_outbound_invalid_call_id_shuts_down(monkeypatch):
     _settings(monkeypatch)
     started = {"n": 0}
 
-    def _fake_build_session(settings, userdata=None):
+    def _fake_build_session(settings, cfg=None, userdata=None):
         started["n"] += 1
         return MagicMock()
 
@@ -241,7 +255,7 @@ async def test_inbound_known_elder_runs_check_in(monkeypatch):
 
     captured = {}
 
-    def _fake_build_session(settings, userdata=None):
+    def _fake_build_session(settings, cfg=None, userdata=None):
         captured["userdata"] = userdata
         session = MagicMock()
         session.start = AsyncMock()
@@ -259,6 +273,9 @@ async def test_inbound_known_elder_runs_check_in(monkeypatch):
     monkeypatch.setattr(worker, "build_inbound_agent", _fake_build_inbound_agent)
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
     monkeypatch.setattr(worker, "register_transcript_flush", _fake_register)
+    monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
+    monkeypatch.setattr(worker, "start_call_recording", AsyncMock())
     monkeypatch.setattr(worker, "build_agent", fake_build_agent)
 
     participant = MagicMock()
@@ -292,7 +309,7 @@ async def test_inbound_unknown_caller_falls_back_to_greet_only(monkeypatch):
 
     captured = {}
 
-    def _fake_build_session(settings, userdata=None):
+    def _fake_build_session(settings, cfg=None, userdata=None):
         captured["userdata"] = userdata
         session = MagicMock()
         session.start = AsyncMock()
@@ -301,6 +318,7 @@ async def test_inbound_unknown_caller_falls_back_to_greet_only(monkeypatch):
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
     monkeypatch.setattr(worker, "greet", AsyncMock())
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
     fake_inbound_agent = MagicMock()
     monkeypatch.setattr(worker, "build_inbound_agent", fake_inbound_agent)
 
@@ -342,7 +360,7 @@ async def test_inbound_unknown_elder_known_false_falls_back_to_greet_only(monkey
 
     captured = {}
 
-    def _fake_build_session(settings, userdata=None):
+    def _fake_build_session(settings, cfg=None, userdata=None):
         captured["userdata"] = userdata
         session = MagicMock()
         session.start = AsyncMock()
@@ -351,6 +369,7 @@ async def test_inbound_unknown_elder_known_false_falls_back_to_greet_only(monkey
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
     monkeypatch.setattr(worker, "greet", AsyncMock())
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
     fake_inbound_agent = MagicMock()
     monkeypatch.setattr(worker, "build_inbound_agent", fake_inbound_agent)
 
@@ -384,7 +403,7 @@ async def test_outbound_starts_call_recording(monkeypatch):
 
     captured = {}
 
-    def _fake_build_session(settings, userdata=None):
+    def _fake_build_session(settings, cfg=None, userdata=None):
         session = MagicMock()
         session.start = AsyncMock()
         session.say = AsyncMock()
@@ -394,8 +413,9 @@ async def test_outbound_starts_call_recording(monkeypatch):
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
     monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
-    monkeypatch.setattr(worker, "fetch_agent_config", AsyncMock(return_value=DEFAULT_AGENT_CONFIG))
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
     monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
     monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
 
     rec = AsyncMock(return_value="EG_1")
@@ -429,7 +449,7 @@ async def test_inbound_known_starts_call_recording(monkeypatch):
 
     captured = {}
 
-    def _fake_build_session(settings, userdata=None):
+    def _fake_build_session(settings, cfg=None, userdata=None):
         session = MagicMock()
         session.start = AsyncMock()
         session.generate_reply = AsyncMock()
@@ -439,6 +459,8 @@ async def test_inbound_known_starts_call_recording(monkeypatch):
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
     monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
 
     rec = AsyncMock(return_value="EG_2")
     monkeypatch.setattr(worker, "start_call_recording", rec)
@@ -459,3 +481,41 @@ async def test_inbound_known_starts_call_recording(monkeypatch):
     # Consent ordering: the spoken recording disclosure must precede egress start.
     say = captured["session"].say
     assert say.await_args_list[0].args[0] == RECORDING_DISCLOSURE
+
+
+async def test_outbound_fetches_and_applies_config(monkeypatch):
+    _settings(monkeypatch)
+    seen = {}
+
+    async def _fetch(settings, *, direction, call_id=None):
+        seen["direction"] = direction
+        seen["call_id"] = call_id
+        return DEFAULT_AGENT_CONFIG
+
+    def _fake_build_session(settings, cfg=None, userdata=None):
+        seen["session_cfg"] = cfg
+        session = MagicMock()
+        session.start = AsyncMock()
+        session.say = AsyncMock()
+        session.on = MagicMock()
+        return session
+
+    monkeypatch.setattr(worker, "fetch_agent_config", _fetch)
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
+    monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
+    monkeypatch.setattr(worker, "start_call_recording", AsyncMock())
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock()
+    ctx.room.name = "usan-outbound-x"
+    ctx.job.metadata = '{"call_id": "call-1", "direction": "outbound", "dynamic_vars": {}}'
+
+    await worker.entrypoint(ctx)
+
+    assert seen["direction"] == "outbound"
+    assert seen["call_id"] == "call-1"
+    assert seen["session_cfg"] is not None
