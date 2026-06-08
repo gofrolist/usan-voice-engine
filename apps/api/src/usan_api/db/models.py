@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from usan_api.db.base import Base, CallDirection, CallStatus
+from usan_api.db.base import AdminRole, Base, CallDirection, CallStatus, ProfileStatus
 
 
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
@@ -39,6 +39,9 @@ class Elder(Base):
     phone_e164: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     timezone: Mapped[str] = mapped_column(Text, nullable=False)
     preferred_voice: Mapped[str | None] = mapped_column(Text)
+    agent_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_profiles.id", ondelete="SET NULL")
+    )
     # SQLAlchemy reserves the ``metadata`` attribute on Declarative classes, so
     # the Python attribute is ``meta`` while the column stays ``metadata``.
     meta: Mapped[dict[str, Any]] = mapped_column(
@@ -98,6 +101,9 @@ class Call(Base):
     sip_call_id: Mapped[str | None] = mapped_column(Text)
     dynamic_vars: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
+    )
+    profile_override: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_profiles.id", ondelete="SET NULL")
     )
     parent_call_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("calls.id")
@@ -237,6 +243,105 @@ class CallMetrics(Base):
         Numeric(12, 6), nullable=False, server_default=text("0")
     )
     pricing_version: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AgentProfile(Base):
+    __tablename__ = "agent_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[ProfileStatus] = mapped_column(
+        SAEnum(
+            ProfileStatus,
+            name="profile_status",
+            values_callable=_enum_values,
+            create_type=False,
+        ),
+        nullable=False,
+        server_default=ProfileStatus.ACTIVE.value,
+    )
+    draft_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    # The live version number (joins agent_profile_versions on (id, version));
+    # NULL means the profile has never been published.
+    published_version: Mapped[int | None] = mapped_column(Integer)
+    is_default_outbound: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    is_default_inbound: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    created_by: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class AgentProfileVersion(Base):
+    __tablename__ = "agent_profile_versions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+    published_by: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+
+    email: Mapped[str] = mapped_column(Text, primary_key=True)
+    role: Mapped[AdminRole] = mapped_column(
+        SAEnum(
+            AdminRole,
+            name="admin_role",
+            values_callable=_enum_values,
+            create_type=False,
+        ),
+        nullable=False,
+        server_default=AdminRole.ADMIN.value,
+    )
+    added_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    actor_email: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_type: Mapped[str | None] = mapped_column(Text)
+    entity_id: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
