@@ -203,43 +203,55 @@ Diffs (UI) compare two version `config` blobs (or draft vs current live).
 
 ### 6.2 Call-time resolution (agent → API, per call)
 
-The `calls` row records direction, the matched elder, and (new) an optional
-`profile_override`. The agent passes only `call_id`:
+**Shipped (P2):** a single endpoint, guarded by the **worker JWT** (the resolved
+config is profile-global, not per-elder PHI), always returns **200** with a usable
+config:
 
 ```
-GET /v1/runtime/agent-config?call_id=<id>     (auth: service JWT, call-scoped)
+GET /v1/runtime/agent-config?direction=<inbound|outbound>&call_id=<id>   (auth: worker token)
 ```
 
-The API resolves server-side, in priority order:
+`direction` is required; `call_id` is optional. The `calls` row records direction,
+the matched elder, and an optional `profile_override`. The API resolves server-side,
+in priority order:
 
-- **Outbound:** enqueue `profile_override` → `elder.agent_profile_id` →
+- **Outbound:** `call.profile_override` → matched `elder.agent_profile_id` →
   `is_default_outbound` profile.
-- **Inbound:** caller-ID → matched `elder.agent_profile_id` →
-  `is_default_inbound` profile.
+- **Inbound:** matched `elder.agent_profile_id` → `is_default_inbound` profile.
 - If the resolved profile has no published version → default profile's published
-  version → `"no config"` signal.
+  version → no resolution → server-side `DEFAULT_AGENT_CONFIG` fallback.
 
-Returns the resolved profile's **published** `config` plus `profile_id` and
-`version_number` (for logging). The endpoint enforces that the JWT's `call_id`
-claim matches the query parameter (consistent with existing tool auth).
+The response is `ResolvedAgentConfig` = `{source, profile_id, version, config}`
+(`source`/`profile_id`/`version` are for logging; `config` is the resolved
+`AgentConfig`). A missing or unknown `call_id` is **not** an error — resolution
+degrades to the `direction` default and ultimately to `DEFAULT_AGENT_CONFIG`,
+so the agent always receives a complete config. The override-resolution reads
+`Call.profile_override` and `Elder.agent_profile_id`; the **admin setters** that
+populate those columns (per-elder / per-call profile assignment) are a later slice,
+so the configurable lever today is the per-`direction` default profile.
 
-### 6.3 Agent integration (refactor)
+### 6.3 Agent integration (refactor) — shipped (P2)
 
-`pipeline.py` / `check_in.py` / `worker.py` change from reading module constants
-to functions of a fetched `ResolvedConfig`:
+`pipeline.py` / `check_in.py` / `worker.py` build from an `AgentConfig` instead of
+reading module constants. Every builder takes an optional `cfg: AgentConfig | None`
+that defaults to the agent's local `DEFAULT_AGENT_CONFIG` — the single source of
+default truth (the retained module constants are now thin aliases of it):
 
-- `build_session(settings, config, userdata)` reads
-  `config.voice / llm / stt / timing / speech_advanced`.
-- `build_agent(config)` uses `config.prompts.system_prompt` and registers **only
-  the tools in `config.tools.enabled`**. The tool set becomes a registry (dict
-  keyed by tool name) that is filtered at build time — this is how the tools
-  toggle takes effect.
+- `build_session(settings, cfg, userdata)` reads
+  `cfg.voice / llm / stt / timing / speech_advanced` (incl. `answer_timeout`).
+- `build_agent(cfg)` / `build_inbound_agent(cfg, dynamic_vars)` use
+  `cfg.prompts.system_prompt` and register **only the tools in
+  `cfg.tools.enabled`** via a tool registry (dict keyed by tool name) filtered at
+  build time (`end_call` is force-included). This is how the tools toggle takes
+  effect.
 - All spoken text (greeting, disclosure, voicemail, goodbye, check-in flow,
-  inbound opening + personalization template) comes from `config.prompts`.
-- `worker.py` fetches the config at call start. On timeout / error / `"no
-  config"`, it logs a `WARNING` (with `call_id`) and builds from the **existing
-  module constants**, which are retained as the hardcoded fallback. A call is
-  never failed because of the config service.
+  inbound opening + personalization template) comes from `cfg.prompts`.
+- `worker.py` fetches the config **once per call**, after `ctx.connect()`, via
+  `fetch_agent_config(settings, direction=..., call_id=...)`. On timeout / error /
+  no resolution it logs a `WARNING` and falls back to the local
+  `DEFAULT_AGENT_CONFIG`; a `max_call_duration` watchdog is armed from the resolved
+  timing and cancelled on call end. A call is never failed because of the config
+  service.
 
 ## 7. Prompt safety
 
@@ -419,10 +431,15 @@ workflow). Order chosen so each phase is independently testable.
    repository; admin CRUD + draft/publish/versions/rollback/defaults endpoints
    (guarded by `OPERATOR_API_KEY` temporarily until P3). No UI. Fully testable via
    API. Scope: `api`.
-2. **P2 — Agent integration.** `runtime/agent-config` resolve endpoint; refactor
-   `pipeline.py`/`check_in.py`/`worker.py` to build from `ResolvedConfig`; tool
-   registry; fallback-to-constants; prompt-safety validation. Config now drives
-   calls. Scope: `api`, `agent`.
+2. **P2 — Agent integration. ✅ Done.** Single worker-token-guarded
+   `GET /v1/runtime/agent-config?direction=&call_id=` resolve endpoint (always 200,
+   returns `{source, profile_id, version, config}`); refactor of
+   `pipeline.py`/`check_in.py`/`worker.py` to build from a resolved `AgentConfig`;
+   tool registry; once-per-call fetch with fallback to local `DEFAULT_AGENT_CONFIG`;
+   `max_call_duration` watchdog; prompt-safety validation. Override resolution reads
+   `Call.profile_override` + `Elder.agent_profile_id`; the **admin setters** for
+   those remain a later slice, so the live lever is the per-`direction` default.
+   Config now drives calls. Scope: `api`, `agent`.
 3. **P3 — Google SSO + audit attribution.** `/v1/auth/*`, session cookie,
    `admin_users` allow-list + bootstrap, `require_admin_session`/role
    dependencies; swap admin routes from `OPERATOR_API_KEY` to session auth; wire
