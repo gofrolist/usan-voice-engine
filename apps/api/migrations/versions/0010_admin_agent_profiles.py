@@ -110,10 +110,15 @@ def upgrade() -> None:
         "ON agent_profiles((is_default_inbound)) WHERE is_default_inbound"
     )
     op.execute("CREATE INDEX idx_admin_audit_log_created ON admin_audit_log(created_at DESC)")
+    op.execute(
+        "CREATE INDEX idx_elders_agent_profile ON elders (agent_profile_id) "
+        "WHERE agent_profile_id IS NOT NULL"
+    )
 
 
 def downgrade() -> None:
     op.execute("ALTER TABLE calls DROP COLUMN IF EXISTS profile_override")
+    op.execute("DROP INDEX IF EXISTS idx_elders_agent_profile")
     op.execute("ALTER TABLE elders DROP COLUMN IF EXISTS agent_profile_id")
     op.execute("DROP TABLE IF EXISTS admin_audit_log CASCADE")
     op.execute("DROP TABLE IF EXISTS admin_users CASCADE")
