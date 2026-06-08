@@ -10,7 +10,11 @@ from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG
 
 
 class ProfileInUseError(Exception):
-    """Raised when archiving a profile that is still a default or assigned to elders."""
+    """Archiving or defaulting is blocked (profile is a live default or assigned to elders).
+
+    The message is returned verbatim in the API 409 response body, so keep it
+    user-facing and free of internal detail.
+    """
 
 
 class CloneSourceNotFoundError(Exception):

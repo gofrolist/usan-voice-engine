@@ -99,3 +99,15 @@ def test_archive_blocked_when_default_returns_409(client):
 def test_get_missing_profile_returns_404(client):
     r = client.get(f"/v1/admin/profiles/{uuid.uuid4()}", headers=_OP)
     assert r.status_code == 404
+
+
+def test_list_versions_unknown_profile_returns_404(client):
+    r = client.get(f"/v1/admin/profiles/{uuid.uuid4()}/versions", headers=_OP)
+    assert r.status_code == 404
+
+
+def test_update_draft_unknown_profile_returns_404(client):
+    pid = client.post("/v1/admin/profiles", json={"name": _name()}, headers=_OP).json()["id"]
+    cfg = client.get(f"/v1/admin/profiles/{pid}", headers=_OP).json()["draft_config"]
+    r = client.put(f"/v1/admin/profiles/{uuid.uuid4()}/draft", json={"config": cfg}, headers=_OP)
+    assert r.status_code == 404

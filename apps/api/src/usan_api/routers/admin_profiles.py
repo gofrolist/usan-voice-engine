@@ -32,6 +32,8 @@ router = APIRouter(
 async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[ProfileSummary]:
     profiles = await repo.list_profiles(db)
     summaries: list[ProfileSummary] = []
+    # TODO(perf): N+1 — has_unpublished_draft + count_assigned_elders run per profile.
+    # Batch into a single join/group-by query when the profile list grows.
     for p in profiles:
         summaries.append(
             ProfileSummary.from_model(
@@ -143,6 +145,8 @@ async def publish(
 async def list_versions(
     profile_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 ) -> list[VersionSummary]:
+    if await repo.get_profile(db, profile_id) is None:
+        raise HTTPException(status_code=404, detail="profile not found")
     versions = await repo.list_versions(db, profile_id)
     return [VersionSummary.from_model(v) for v in versions]
 
