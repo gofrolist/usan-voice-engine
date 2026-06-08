@@ -7,6 +7,7 @@ from sqlalchemy.pool import NullPool
 
 from usan_api.db.session import dispose_engine, get_db
 from usan_api.main import create_app
+from usan_api.repositories import admin_users
 from usan_api.settings import get_settings
 
 TEST_SECRET = "a" * 32
@@ -63,6 +64,46 @@ def test_lifespan_seeds_bootstrap_emails(database_url, async_database_url, monke
             pass
         emails = asyncio.run(_emails(async_database_url))
         assert {"founder@example.com", "ops@example.com"} <= emails
+    finally:
+        asyncio.run(engine.dispose())
+        get_settings.cache_clear()
+
+
+def test_lifespan_survives_seed_failure(database_url, async_database_url, monkeypatch):
+    # The bootstrap seed is best-effort: a DB hiccup during seeding must NOT crash
+    # startup (main._seed_admin_allowlist swallows it). Force seed_bootstrap to raise
+    # and assert the app still comes up and /health is ok.
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+    monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_EMAILS", "ops@example.com")
+    monkeypatch.setenv("RETRY_POLLER_ENABLED", "false")
+    get_settings.cache_clear()
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("seed exploded")
+
+    monkeypatch.setattr(admin_users, "seed_bootstrap", _boom)
+
+    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _override_get_db():
+        async with factory() as session:
+            yield session
+
+    asyncio.run(dispose_engine())
+    app = create_app()
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        with TestClient(app) as c:  # lifespan runs the (failing) seed
+            r = c.get("/health")
+            assert r.status_code == 200
+            assert r.json()["status"] == "ok"
     finally:
         asyncio.run(engine.dispose())
         get_settings.cache_clear()

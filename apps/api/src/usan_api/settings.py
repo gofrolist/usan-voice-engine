@@ -134,6 +134,16 @@ class Settings(BaseSettings):
             raise ValueError("must be a ws:// or wss:// URL")
         return v
 
+    @field_validator("admin_post_login_redirect")
+    @classmethod
+    def _relative_redirect(cls, v: str) -> str:
+        # Operator config, not user input, so not an attacker-driven open redirect — but
+        # validate it is a site-relative path (not absolute/protocol-relative) so a
+        # misconfiguration can't bounce operators off-site right after login.
+        if not v.startswith("/") or v.startswith("//"):
+            raise ValueError("ADMIN_POST_LOGIN_REDIRECT must be a relative path starting with '/'")
+        return v
+
     @property
     def database_url_async(self) -> str:
         """DATABASE_URL with the asyncpg driver, for SQLAlchemy's async engine."""

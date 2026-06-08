@@ -97,6 +97,9 @@ async def callback(
         return _fail(status.HTTP_403_FORBIDDEN, "no email in token", settings)
     user = await admin_users_repo.get_admin_user(db, email)
     if user is None:
+        # Per design §9, denials ARE audited (a security trail). Any Google-verified
+        # identity reaching here writes one row; the /v1/auth/* rate limit bounds the
+        # write rate, which is acceptable for this low-traffic admin plane.
         await admin_audit.record(
             db, actor_email=email, action="auth.denied", entity_type="admin_user", entity_id=email
         )
@@ -117,15 +120,28 @@ async def callback(
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(request: Request, settings: Settings = Depends(get_settings)) -> Response:
+async def logout(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
     """Clear the session cookie. Idempotent; safe without an active session."""
     resp = Response(status_code=status.HTTP_204_NO_CONTENT)
     clear_session_cookie(resp, settings)
     cookie = request.cookies.get(SESSION_COOKIE_NAME)
     if cookie:
-        # Best-effort attribution; logout must never fail on a bad/expired cookie.
+        # Best-effort attribution + audit (design §9 lists auth.logout); logout must
+        # never fail on a bad/expired cookie or an audit-write hiccup.
         with contextlib.suppress(Exception):
             email = str(decode_session(cookie, settings)["sub"]).lower()
+            await admin_audit.record(
+                db,
+                actor_email=email,
+                action="auth.logout",
+                entity_type="admin_user",
+                entity_id=email,
+            )
+            await db.commit()
             logger.bind(email=email).info("admin logout")
     return resp
 

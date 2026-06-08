@@ -22,6 +22,10 @@ def _norm(email: str) -> str:
 
 
 async def count_admins(db: AsyncSession) -> int:
+    # Callers use this in a check-then-act last-admin guard (add/remove). That is a
+    # benign TOCTOU: two concurrent removals could each read count==2 and both proceed.
+    # Acceptable on this single-worker, low-traffic admin plane; if hardened later, do
+    # the count and the DML in one statement or under SELECT ... FOR UPDATE.
     result = await db.execute(
         select(func.count()).select_from(AdminUser).where(AdminUser.role == AdminRole.ADMIN)
     )
@@ -56,6 +60,9 @@ async def add_admin_user(
     stmt = (
         pg_insert(AdminUser)
         .values(email=norm, role=role, added_by=added_by)
+        # on_conflict updates ONLY role: re-adding an existing operator intentionally
+        # preserves the original added_by (who first added them); the role change itself
+        # is captured in the admin_audit_log by the calling route.
         .on_conflict_do_update(index_elements=["email"], set_={"role": role})
     )
     await db.execute(stmt)
