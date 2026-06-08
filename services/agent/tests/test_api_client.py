@@ -2,6 +2,7 @@ import jwt
 import pytest
 
 from usan_agent import api_client
+from usan_agent.agent_config import DEFAULT_AGENT_CONFIG
 from usan_agent.settings import Settings
 
 SECRET = "s" * 32
@@ -272,3 +273,122 @@ async def test_post_metrics_posts_signed_request(monkeypatch):
     token = captured["headers"]["Authorization"].removeprefix("Bearer ")
     claims = jwt.decode(token, SECRET, algorithms=["HS256"])
     assert claims["call_id"] == "call-123"
+
+
+@pytest.mark.asyncio
+async def test_fetch_agent_config_parses_config(monkeypatch):
+    captured = {}
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            doc = DEFAULT_AGENT_CONFIG.model_dump()
+            doc["voice"]["cartesia_voice_id"] = "resolved-voice"
+            return {"source": "resolved", "profile_id": "p", "version": 3, "config": doc}
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, params, headers):
+            captured["url"] = url
+            captured["params"] = params
+            captured["headers"] = headers
+            return _FakeResponse()
+
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _FakeClient)
+
+    cfg = await api_client.fetch_agent_config(_settings(), direction="outbound", call_id="call-1")
+
+    assert cfg.voice.cartesia_voice_id == "resolved-voice"
+    assert captured["url"] == "http://api:8000/v1/runtime/agent-config"
+    assert captured["params"] == {"direction": "outbound", "call_id": "call-1"}
+    token = captured["headers"]["Authorization"].removeprefix("Bearer ")
+    claims = jwt.decode(token, SECRET, algorithms=["HS256"])
+    assert "call_id" not in claims  # worker token, NOT call-scoped
+
+
+@pytest.mark.asyncio
+async def test_fetch_agent_config_omits_call_id_when_absent(monkeypatch):
+    captured = {}
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"source": "default", "config": DEFAULT_AGENT_CONFIG.model_dump()}
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, params, headers):
+            captured["params"] = params
+            return _FakeResponse()
+
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _FakeClient)
+    cfg = await api_client.fetch_agent_config(_settings(), direction="inbound")
+    assert captured["params"] == {"direction": "inbound"}
+    assert cfg == DEFAULT_AGENT_CONFIG
+
+
+@pytest.mark.asyncio
+async def test_fetch_agent_config_returns_default_on_error(monkeypatch):
+    class _BoomClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **k):
+            raise RuntimeError("network down")
+
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _BoomClient)
+    cfg = await api_client.fetch_agent_config(_settings(), direction="outbound", call_id="call-1")
+    assert cfg == DEFAULT_AGENT_CONFIG  # never raises; local default
+
+
+@pytest.mark.asyncio
+async def test_fetch_agent_config_returns_default_on_bad_body(monkeypatch):
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"source": "resolved"}  # missing "config"
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **k):
+            return _FakeResponse()
+
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _FakeClient)
+    cfg = await api_client.fetch_agent_config(_settings(), direction="outbound")
+    assert cfg == DEFAULT_AGENT_CONFIG
