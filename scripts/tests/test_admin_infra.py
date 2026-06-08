@@ -1,0 +1,124 @@
+"""Structural contract for the admin-UI infra/deploy wiring (Plan admin-5).
+
+Runs in the `pytest (scripts)` CI job (Python 3.12 + pytest + pyyaml). Pins the
+P5 invariants so a regression in the compose overlay, Caddyfile, CI workflow,
+Terraform DNS, or env docs fails CI before it can reach the VM.
+"""
+
+import re
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+INFRA = ROOT / "infra"
+
+
+def _load_yaml(rel: str):
+    return yaml.safe_load((ROOT / rel).read_text())
+
+
+def _env_keys(env) -> set[str]:
+    """Normalize a compose `environment:` (map or list form) to a set of keys."""
+    if isinstance(env, dict):
+        return set(env.keys())
+    return {str(e).split("=", 1)[0] for e in (env or [])}
+
+
+def test_admin_overlay_service_shape():
+    doc = _load_yaml("infra/docker-compose.admin.yml")
+    svc = doc["services"]["admin-ui"]
+    assert "usan-admin-ui" in svc["image"]
+    assert "${IMAGE_TAG" in svc["image"]  # explicit-tag required
+    assert svc["pull_policy"] == "always"
+    assert svc["logging"]["driver"] == "journald"
+    assert svc["restart"] == "unless-stopped"
+    # No published port: the edge Caddy reaches it on the bridge.
+    assert "ports" not in svc
+
+
+def test_admin_overlay_caddy_env():
+    doc = _load_yaml("infra/docker-compose.admin.yml")
+    keys = _env_keys(doc["services"]["caddy"]["environment"])
+    assert "ADMIN_DOMAIN" in keys
+    assert "ADMIN_ALLOWED_CIDR" in keys
+
+
+def test_api_env_passes_sso_settings():
+    doc = _load_yaml("infra/docker-compose.yml")
+    keys = _env_keys(doc["services"]["api"]["environment"])
+    for k in (
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "GOOGLE_OAUTH_REDIRECT_URI",
+        "GOOGLE_OAUTH_HD",
+        "ADMIN_BOOTSTRAP_EMAILS",
+        "ADMIN_SESSION_TTL_S",
+        "SESSION_COOKIE_SECURE",
+        "ADMIN_POST_LOGIN_REDIRECT",
+    ):
+        assert k in keys, f"api service must pass {k} to the container"
+
+
+def test_caddyfile_admin_block_is_cidr_gated():
+    text = (INFRA / "Caddyfile").read_text()
+    assert "{$ADMIN_DOMAIN}" in text
+    assert "remote_ip {$ADMIN_ALLOWED_CIDR}" in text
+    # Same-origin: /v1 to the API, everything else to the SPA container.
+    assert "admin-ui:8080" in text
+    # The 403 gate must exist in the admin block (default-deny outside the CIDR).
+    admin_block = text.split("{$ADMIN_DOMAIN}", 1)[1]
+    assert "respond 403" in admin_block
+
+
+def test_inner_caddyfile_has_spa_fallback():
+    text = (ROOT / "apps/admin-ui/Caddyfile").read_text()
+    assert "try_files" in text and "/index.html" in text
+    assert ":8080" in text
+
+
+def test_dockerfile_runs_nonroot_static_server():
+    text = (ROOT / "apps/admin-ui/Dockerfile").read_text()
+    assert "vite build" in text or "npm run build" in text
+    assert "caddy:2-alpine" in text
+    assert re.search(r"USER\s+1001", text)
+
+
+def test_build_workflow_builds_and_ships_admin_ui():
+    text = (ROOT / ".github/workflows/build.yml").read_text()
+    assert "usan-admin-ui" in text
+    assert "scope=admin-ui" in text
+    # Deploy job ships the overlay and includes it in the compose chain.
+    assert "docker-compose.admin.yml" in text
+    assert text.count("docker-compose.admin.yml") >= 2  # SCP source + -f chain
+
+
+def test_frontend_ci_jobs_exist():
+    test_yml = (ROOT / ".github/workflows/test.yml").read_text()
+    lint_yml = (ROOT / ".github/workflows/lint.yml").read_text()
+    assert "apps/admin-ui" in test_yml and "npm" in test_yml
+    assert "apps/admin-ui" in lint_yml and "npm run lint" in lint_yml
+    # The scripts job needs pyyaml for this very test.
+    assert "pyyaml" in test_yml
+
+
+def test_terraform_has_admin_dns_record():
+    text = (INFRA / "terraform/dns.tf").read_text()
+    assert 'cloudflare_dns_record" "admin"' in text
+    block = text.split('"admin"', 1)[1]
+    assert 'name    = "admin"' in block
+    assert "proxied = false" in block
+
+
+def test_env_examples_document_admin_keys():
+    prod = (INFRA / ".env.prod.example").read_text()
+    for k in (
+        "ADMIN_DOMAIN",
+        "ADMIN_ALLOWED_CIDR",
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "GOOGLE_OAUTH_REDIRECT_URI",
+        "ADMIN_BOOTSTRAP_EMAILS",
+    ):
+        assert k in prod, f".env.prod.example must document {k}"
+    assert "/v1/auth/callback" in prod  # the exact redirect URI shape

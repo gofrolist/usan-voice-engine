@@ -45,6 +45,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install pytest
-        run: pip install pytest
+        run: pip install pytest pyyaml
       - name: pytest
         run: python -m pytest scripts/tests -v --tb=short
