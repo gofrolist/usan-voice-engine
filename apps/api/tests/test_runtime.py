@@ -190,6 +190,21 @@ def test_agent_config_call_override_wins_over_elder(client, async_database_url):
     assert body["config"]["voice"]["cartesia_voice_id"] == "override-voice"
 
 
+def test_inbound_resolves_direction_default_not_elder_profile(client, async_database_url):
+    # Conscious contract (runtime.get_agent_config docstring): the agent fetches inbound
+    # config with call_id=None (dispatch-rule jobs carry no metadata), so an elder's
+    # assigned profile is NOT applied on inbound — inbound always resolves to the
+    # per-direction default. An elder assigned a DIFFERENT profile exists here, but the
+    # call_id-less inbound fetch must still return the inbound default's config.
+    asyncio.run(_seed_default(async_database_url, direction="inbound", voice_id="inbound-default"))
+    asyncio.run(_seed_call_with_elder(async_database_url, elder_voice_id="elder-assigned"))
+    r = client.get("/v1/runtime/agent-config", params={"direction": "inbound"}, headers=_wauth())
+    assert r.status_code == 200
+    body = r.json()
+    assert body["source"] == "resolved"
+    assert body["config"]["voice"]["cartesia_voice_id"] == "inbound-default"
+
+
 def test_agent_config_not_rate_limited(client, async_database_url):
     # Runtime route must not be throttled by the operator rate limiter.
     asyncio.run(_seed_default(async_database_url, direction="inbound", voice_id="vin"))

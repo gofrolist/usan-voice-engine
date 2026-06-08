@@ -14,6 +14,9 @@ async def session_factory(async_database_url):
     # These repo tests commit profile rows (defaults persist across tests) and never
     # go through the `client` fixture that truncates. Reset profile state per test so
     # "nothing resolvable" assertions see a clean DB regardless of run order.
+    # NOTE: this hand-rolled TRUNCATE set must stay in sync with conftest's truncation
+    # set — if a future migration adds a table referencing agent_profiles, add it here
+    # (and to conftest) or cross-file leakage / run-order flakiness can return.
     async with engine.begin() as conn:
         await conn.execute(
             text("TRUNCATE agent_profile_versions, agent_profiles RESTART IDENTITY CASCADE")
