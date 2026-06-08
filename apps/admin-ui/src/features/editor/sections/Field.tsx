@@ -19,11 +19,11 @@ export function Field({ path, error, children, label, help }: FieldProps) {
   const resolvedHelp = help ?? meta?.help;
   return (
     <div className="space-y-1">
-      <label className="block text-sm font-medium text-gray-700" htmlFor={path}>
+      <label className="block text-sm font-medium text-slate-700" htmlFor={path}>
         {resolvedLabel}
       </label>
       {children}
-      {resolvedHelp ? <p className="text-xs text-gray-500">{resolvedHelp}</p> : null}
+      {resolvedHelp ? <p className="text-xs text-slate-500">{resolvedHelp}</p> : null}
       {error ? <p className="text-xs font-medium text-red-700">{error}</p> : null}
     </div>
   );

@@ -23,7 +23,7 @@ export function AdminUsersPage() {
   const [toRemove, setToRemove] = useState<string | null>(null);
 
   if (!isAdmin) {
-    return <p className="text-sm text-gray-600">Admins only.</p>;
+    return <p className="text-sm text-slate-600">Admins only.</p>;
   }
 
   function handleAdd(e: FormEvent): void {
@@ -43,7 +43,7 @@ export function AdminUsersPage() {
 
   if (users.isLoading) {
     return (
-      <div className="flex items-center gap-2 text-gray-600">
+      <div className="flex items-center gap-2 text-slate-600">
         <Spinner /> Loading admin users…
       </div>
     );
@@ -62,9 +62,9 @@ export function AdminUsersPage() {
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Admin users (SSO allow-list)</h1>
 
-      <form onSubmit={handleAdd} className="flex flex-wrap items-end gap-3 rounded border border-gray-200 bg-white p-4">
+      <form onSubmit={handleAdd} className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-card">
         <div>
-          <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="au-email">
+          <label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="au-email">
             Email
           </label>
           <Input
@@ -77,7 +77,7 @@ export function AdminUsersPage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="au-role">
+          <label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="au-role">
             Role
           </label>
           <Select
@@ -107,7 +107,7 @@ export function AdminUsersPage() {
         <Tbody>
           {list.length === 0 ? (
             <Tr>
-              <Td className="text-gray-500" colSpan={4}>
+              <Td className="text-slate-500" colSpan={4}>
                 No admin users.
               </Td>
             </Tr>
@@ -118,7 +118,7 @@ export function AdminUsersPage() {
               <Td>
                 <Badge tone={u.role === "admin" ? "blue" : "gray"}>{u.role}</Badge>
               </Td>
-              <Td className="text-xs text-gray-500">{u.added_by ?? "—"}</Td>
+              <Td className="text-xs text-slate-500">{u.added_by ?? "—"}</Td>
               <Td className="text-right">
                 <Button variant="danger" onClick={() => setToRemove(u.email)}>
                   Remove

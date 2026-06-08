@@ -50,7 +50,7 @@ export function AuditPage() {
 
       <div className="flex flex-wrap items-end gap-3">
         <div>
-          <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="audit-actor">
+          <label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="audit-actor">
             Actor
           </label>
           <Input
@@ -62,7 +62,7 @@ export function AuditPage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="audit-action">
+          <label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="audit-action">
             Action
           </label>
           <Select
@@ -80,7 +80,7 @@ export function AuditPage() {
           </Select>
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="audit-limit">
+          <label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="audit-limit">
             Limit
           </label>
           <Select
@@ -99,14 +99,14 @@ export function AuditPage() {
       </div>
 
       {isLoading ? (
-        <div className="flex items-center gap-2 text-gray-600">
+        <div className="flex items-center gap-2 text-slate-600">
           <Spinner /> Loading audit log…
         </div>
       ) : isError ? (
         <p className="text-sm text-red-700">Failed to load audit log: {(error as Error)?.message}</p>
       ) : (
         <>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-slate-500">
             Showing the most recent {limit} entries matching the current filters (filters
             are applied across the whole log, not just this page).
           </p>
@@ -123,7 +123,7 @@ export function AuditPage() {
             <Tbody>
               {entries.length === 0 ? (
                 <Tr>
-                  <Td className="text-gray-500" colSpan={5}>
+                  <Td className="text-slate-500" colSpan={5}>
                     No matching entries.
                   </Td>
                 </Tr>
@@ -136,13 +136,13 @@ export function AuditPage() {
                   <Td className="text-xs">
                     {e.entity_type ? (
                       <>
-                        <span className="text-gray-500">{e.entity_type}</span>
+                        <span className="text-slate-500">{e.entity_type}</span>
                         {e.entity_id ? (
-                          <span className="ml-1 font-mono text-gray-700">{e.entity_id}</span>
+                          <span className="ml-1 font-mono text-slate-700">{e.entity_id}</span>
                         ) : null}
                       </>
                     ) : (
-                      <span className="text-gray-400">—</span>
+                      <span className="text-slate-400">—</span>
                     )}
                   </Td>
                   <Td className="max-w-md truncate font-mono text-xs" title={fmtDetail(e.detail)}>

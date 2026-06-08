@@ -19,12 +19,12 @@ export function EldersPage() {
   const assign = useAssignProfile();
 
   if (!isAdmin) {
-    return <p className="text-sm text-gray-600">Admins only.</p>;
+    return <p className="text-sm text-slate-600">Admins only.</p>;
   }
 
   if (elders.isLoading || profiles.isLoading) {
     return (
-      <div className="flex items-center gap-2 text-gray-600">
+      <div className="flex items-center gap-2 text-slate-600">
         <Spinner /> Loading elders…
       </div>
     );
@@ -59,14 +59,14 @@ export function EldersPage() {
         <Tbody>
           {elderList.length === 0 ? (
             <Tr>
-              <Td className="text-gray-500" colSpan={3}>
+              <Td className="text-slate-500" colSpan={3}>
                 No elders.
               </Td>
             </Tr>
           ) : null}
           {elderList.map((e) => (
             <Tr key={e.id}>
-              <Td className="font-medium text-gray-900">{e.name}</Td>
+              <Td className="font-medium text-slate-900">{e.name}</Td>
               <Td className="font-mono text-xs">{e.masked_phone}</Td>
               <Td>
                 <Select
@@ -101,7 +101,7 @@ export function EldersPage() {
         </Tbody>
       </Table>
 
-      <div className="flex items-center gap-3 text-sm text-gray-600">
+      <div className="flex items-center gap-3 text-sm text-slate-600">
         <Button
           variant="secondary"
           disabled={!hasPrev}

@@ -63,7 +63,7 @@ export function diffConfigs(oldCfg: AgentConfig, newCfg: AgentConfig): DiffRow[]
 export function DiffView({ oldConfig, newConfig }: { oldConfig: AgentConfig; newConfig: AgentConfig }) {
   const rows = diffConfigs(oldConfig, newConfig);
   if (rows.length === 0) {
-    return <p className="text-sm text-gray-500">No changes.</p>;
+    return <p className="text-sm text-slate-500">No changes.</p>;
   }
   return (
     <Table>

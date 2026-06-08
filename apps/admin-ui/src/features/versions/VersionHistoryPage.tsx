@@ -29,7 +29,7 @@ export function VersionHistoryPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 text-gray-600">
+      <div className="flex items-center gap-2 text-slate-600">
         <Spinner /> Loading versions…
       </div>
     );
@@ -66,19 +66,19 @@ export function VersionHistoryPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Version history</h1>
-        <Link to={`/profiles/${id}`} className="text-sm text-blue-600 hover:underline">
+        <Link to={`/profiles/${id}`} className="text-sm text-indigo-600 hover:underline">
           ← Back to editor
         </Link>
       </div>
 
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-slate-500">
         Pick two versions to compare. Selected:{" "}
-        {left !== null ? <Badge tone="blue">v{left}</Badge> : <span className="text-gray-400">—</span>}{" "}
+        {left !== null ? <Badge tone="blue">v{left}</Badge> : <span className="text-slate-400">—</span>}{" "}
         vs{" "}
         {right !== null ? (
           <Badge tone="blue">v{right}</Badge>
         ) : (
-          <span className="text-gray-400">—</span>
+          <span className="text-slate-400">—</span>
         )}
       </p>
 
@@ -95,7 +95,7 @@ export function VersionHistoryPage() {
         <Tbody>
           {list.length === 0 ? (
             <Tr>
-              <Td className="text-gray-500" colSpan={5}>
+              <Td className="text-slate-500" colSpan={5}>
                 No published versions yet.
               </Td>
             </Tr>
@@ -105,9 +105,9 @@ export function VersionHistoryPage() {
             return (
               <Tr key={v.version} className={selected ? "bg-blue-50" : undefined}>
                 <Td className="font-medium">v{v.version}</Td>
-                <Td>{v.published_by ?? <span className="text-gray-400">—</span>}</Td>
+                <Td>{v.published_by ?? <span className="text-slate-400">—</span>}</Td>
                 <Td>{fmtDate(v.published_at)}</Td>
-                <Td>{v.note ?? <span className="text-gray-400">—</span>}</Td>
+                <Td>{v.note ?? <span className="text-slate-400">—</span>}</Td>
                 <Td className="text-right">
                   <div className="flex justify-end gap-2">
                     <Button variant="ghost" onClick={() => pick(v.version)}>
@@ -132,7 +132,7 @@ export function VersionHistoryPage() {
             Diff: v{left} → v{right}
           </h2>
           {leftQuery.isLoading || rightQuery.isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-gray-500">
+            <div className="flex items-center gap-2 text-sm text-slate-500">
               <Spinner /> Loading versions…
             </div>
           ) : canDiff && leftQuery.data && rightQuery.data ? (
