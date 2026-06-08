@@ -29,9 +29,10 @@ class Settings(BaseSettings):
     api_base_url: str = Field(..., min_length=1, alias="API_BASE_URL")
     jwt_signing_key: str = Field(..., min_length=32, alias="JWT_SIGNING_KEY")
     gcs_bucket: str | None = Field(default=None, alias="GCS_BUCKET")
-    outbound_answer_timeout_s: float = Field(
-        default=50.0, ge=5.0, le=180.0, alias="OUTBOUND_ANSWER_TIMEOUT_S"
-    )
+    # The outbound answer timeout is now driven by the published agent config
+    # (agent_config.TimingConfig.answer_timeout_s), resolved per call at start.
+    # The former OUTBOUND_ANSWER_TIMEOUT_S env var / Settings field was removed to
+    # avoid a setting that is silently ignored at runtime.
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO", alias="LOG_LEVEL"
     )
