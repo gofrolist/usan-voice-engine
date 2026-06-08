@@ -28,12 +28,26 @@ def is_voicemail(text: str) -> bool:
     return bool(_PATTERN.search(text))
 
 
+def build_matcher(trigger_phrases: list[str]) -> "re.Pattern[str]":
+    """Compile a case-insensitive, LITERAL matcher from admin trigger phrases.
+
+    Empty (or all-blank) phrases -> the built-in §7 _PATTERN. Phrases are re.escape'd
+    and OR-joined so admin input is matched literally (never as a regex) — a false
+    positive would hang up on a live elder.
+    """
+    cleaned = [p for p in trigger_phrases if p and p.strip()]
+    if not cleaned:
+        return _PATTERN
+    return re.compile("|".join(re.escape(p) for p in cleaned), re.IGNORECASE)
+
+
 class VoicemailWatcher:
     """Accumulate STT chunks and flag when a voicemail greeting is recognised."""
 
-    def __init__(self) -> None:
+    def __init__(self, matcher: "re.Pattern[str] | None" = None) -> None:
         self._buffer = ""
         self._event = asyncio.Event()
+        self._matcher = matcher or _PATTERN
 
     def feed(self, transcript: str) -> None:
         if self._event.is_set():
@@ -41,7 +55,7 @@ class VoicemailWatcher:
         # Interim chunks are revised rather than strictly additive, but matching
         # the §7 phrases against the running buffer is robust to that.
         self._buffer = f"{self._buffer} {transcript}".strip()
-        if is_voicemail(self._buffer):
+        if self._matcher.search(self._buffer):
             self._event.set()
 
     @property
