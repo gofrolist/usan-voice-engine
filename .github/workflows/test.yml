@@ -48,3 +48,20 @@ jobs:
         run: pip install pytest pyyaml
       - name: pytest
         run: python -m pytest scripts/tests -v --tb=short
+
+  vitest-admin-ui:
+    name: vitest (apps/admin-ui)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/admin-ui/package-lock.json
+      - name: Install
+        working-directory: apps/admin-ui
+        run: npm ci
+      - name: vitest
+        working-directory: apps/admin-ui
+        run: npm test

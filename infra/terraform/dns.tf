@@ -41,3 +41,13 @@ resource "cloudflare_dns_record" "grafana" {
   proxied = false
   ttl     = 300
 }
+
+resource "cloudflare_dns_record" "admin" {
+  count   = local.manage_dns ? 1 : 0
+  zone_id = var.cloudflare_zone_id
+  name    = "admin" # -> admin.<zone domain> (Admin UI console, Plan admin-5)
+  type    = "A"
+  content = google_compute_address.usan.address
+  proxied = false
+  ttl     = 300
+}
