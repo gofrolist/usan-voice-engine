@@ -46,6 +46,28 @@ class Settings(BaseSettings):
     # outbound call enqueue/lookup). Distinct from the agent's per-call JWTs. Held as
     # SecretStr so it is masked in repr()/model_dump()/tracebacks, never logged raw.
     operator_api_key: SecretStr = Field(..., min_length=16, alias="OPERATOR_API_KEY")
+    # --- Admin UI / Google SSO (P3). All optional: SSO is off unless the OAuth
+    # client id, secret, and redirect URI are all set (sso_enabled). Infra wiring
+    # (Secret Manager + compose) is P5; the API boots fine without these.
+    google_oauth_client_id: str | None = Field(default=None, alias="GOOGLE_OAUTH_CLIENT_ID")
+    google_oauth_client_secret: SecretStr | None = Field(
+        default=None, alias="GOOGLE_OAUTH_CLIENT_SECRET"
+    )
+    google_oauth_redirect_uri: str | None = Field(default=None, alias="GOOGLE_OAUTH_REDIRECT_URI")
+    # Optional G Suite hosted-domain restriction (the `hd` claim). When set, an ID
+    # token whose hd != this value is rejected even if the email is allow-listed.
+    google_oauth_hd: str | None = Field(default=None, alias="GOOGLE_OAUTH_HD")
+    # Comma-separated emails seeded into admin_users (role=admin) on first boot.
+    admin_bootstrap_emails: str = Field(default="", alias="ADMIN_BOOTSTRAP_EMAILS")
+    # Session-cookie lifetime. Removal/role changes still take effect immediately
+    # (require_admin_session re-checks the DB), so this only bounds re-login.
+    admin_session_ttl_s: int = Field(default=28800, ge=300, le=86400, alias="ADMIN_SESSION_TTL_S")
+    # Set the Secure flag on the session/tx cookies. Default True for prod (Caddy
+    # terminates TLS). The test client + local http serve over http, where a Secure
+    # cookie is never returned by the client, so they set this false.
+    session_cookie_secure: bool = Field(default=True, alias="SESSION_COOKIE_SECURE")
+    # Where /v1/auth/callback redirects the browser after a successful login (the SPA).
+    admin_post_login_redirect: str = Field(default="/", alias="ADMIN_POST_LOGIN_REDIRECT")
     gcs_bucket: str | None = Field(default=None, alias="GCS_BUCKET")
     recording_signed_url_ttl_s: int = Field(
         default=3600, ge=60, le=3600, alias="RECORDING_SIGNED_URL_TTL_S"
@@ -88,6 +110,9 @@ class Settings(BaseSettings):
         "telnyx_sip_username",
         "telnyx_sip_password",
         "livekit_sip_outbound_trunk_id",
+        "google_oauth_client_id",
+        "google_oauth_redirect_uri",
+        "google_oauth_hd",
         # Compose passes PHI_RETENTION_DAYS as "" when unset (${VAR:-}); without
         # this, the empty string fails int|None coercion and crashes startup.
         # Blank => None => retention disabled, matching the documented default.
@@ -130,6 +155,21 @@ class Settings(BaseSettings):
         if url.startswith("ws://"):
             return "http://" + url[len("ws://") :]
         return url
+
+    @property
+    def sso_enabled(self) -> bool:
+        """True when Google SSO is fully configured (client id + secret + redirect)."""
+        secret = (
+            self.google_oauth_client_secret.get_secret_value()
+            if self.google_oauth_client_secret is not None
+            else ""
+        )
+        return bool(self.google_oauth_client_id and secret and self.google_oauth_redirect_uri)
+
+    @property
+    def bootstrap_emails_list(self) -> list[str]:
+        """Allow-list bootstrap emails, trimmed + lowercased, blanks dropped."""
+        return [e.strip().lower() for e in self.admin_bootstrap_emails.split(",") if e.strip()]
 
     def warn_if_db_tls_disabled(self) -> None:
         """Warn (never fail) when a non-local DATABASE_URL has no TLS configured.

@@ -58,9 +58,9 @@ def test_operator_route_throttled_before_auth(monkeypatch):
 
 
 def test_admin_routes_are_rate_limited(monkeypatch):
-    # The /v1/admin/* management plane is operator-token guarded but must also be
-    # throttled pre-auth, like the other operator routes. No auth header is sent:
-    # the first requests get 401 (auth), later ones 429 (rate limit).
+    # The /v1/admin/* management plane is session-guarded but must also be throttled
+    # pre-auth, like the other operator routes. No session cookie is sent: the first
+    # requests get 401 (auth), later ones 429 (rate limit).
     app = _app_with_env(monkeypatch, RATE_LIMIT_ENABLED="true", RATE_LIMIT_DEFAULT="2/minute")
     try:
         client = TestClient(app, raise_server_exceptions=False)

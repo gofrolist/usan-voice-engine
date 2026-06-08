@@ -5,7 +5,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import require_operator_token
+from usan_api.auth import require_admin_role, require_admin_session
+from usan_api.db.base import AdminRole
 from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
@@ -24,7 +25,7 @@ from usan_api.schemas.agent_profile import (
 router = APIRouter(
     prefix="/v1/admin/profiles",
     tags=["admin-profiles"],
-    dependencies=[Depends(require_operator_token)],
+    dependencies=[Depends(require_admin_session)],
 )
 
 
@@ -50,6 +51,7 @@ async def create_profile(
     body: ProfileCreate,
     db: AsyncSession = Depends(get_db),
     actor: str = Depends(get_actor_email),
+    _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ProfileSummary:
     try:
         profile = await repo.create_profile(
@@ -92,6 +94,7 @@ async def update_draft(
     body: DraftUpdate,
     db: AsyncSession = Depends(get_db),
     actor: str = Depends(get_actor_email),
+    _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ProfileDetail:
     profile = await repo.update_draft(
         db,
@@ -124,6 +127,7 @@ async def publish(
     body: PublishRequest,
     db: AsyncSession = Depends(get_db),
     actor: str = Depends(get_actor_email),
+    _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> VersionSummary:
     version = await repo.publish(db, profile_id, note=body.note, actor_email=actor)
     if version is None:
@@ -171,6 +175,7 @@ async def rollback(
     version: int,
     db: AsyncSession = Depends(get_db),
     actor: str = Depends(get_actor_email),
+    _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> VersionSummary:
     new_version = await repo.rollback(db, profile_id, target_version=version, actor_email=actor)
     if new_version is None:
@@ -194,6 +199,7 @@ async def set_default(
     body: SetDefaultRequest,
     db: AsyncSession = Depends(get_db),
     actor: str = Depends(get_actor_email),
+    _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ProfileDetail:
     try:
         profile = await repo.set_default(db, profile_id, direction=body.direction)
@@ -220,6 +226,7 @@ async def archive(
     profile_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     actor: str = Depends(get_actor_email),
+    _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ProfileDetail:
     try:
         profile = await repo.archive_profile(db, profile_id)
