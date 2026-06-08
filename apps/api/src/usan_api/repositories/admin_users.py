@@ -5,7 +5,7 @@ require_admin_session re-checks it on every admin request, so a removal here rev
 access immediately. Emails are stored lowercase (the PK) for case-insensitive match.
 """
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,8 +13,19 @@ from usan_api.db.base import AdminRole
 from usan_api.db.models import AdminUser
 
 
+class LastAdminError(Exception):
+    """Refuse an operation that would remove or demote the last remaining admin."""
+
+
 def _norm(email: str) -> str:
     return email.strip().lower()
+
+
+async def count_admins(db: AsyncSession) -> int:
+    result = await db.execute(
+        select(func.count()).select_from(AdminUser).where(AdminUser.role == AdminRole.ADMIN)
+    )
+    return int(result.scalar_one())
 
 
 async def get_admin_user(db: AsyncSession, email: str) -> AdminUser | None:
@@ -29,8 +40,19 @@ async def list_admin_users(db: AsyncSession) -> list[AdminUser]:
 async def add_admin_user(
     db: AsyncSession, *, email: str, role: AdminRole, added_by: str | None
 ) -> AdminUser:
-    """Insert (or update the role of) an allow-listed operator. Caller commits."""
+    """Insert (or update the role of) an allow-listed operator. Caller commits.
+
+    Raises LastAdminError if the upsert would demote the only remaining admin.
+    """
     norm = _norm(email)
+    if role is AdminRole.VIEWER:
+        existing = await db.get(AdminUser, norm)
+        if (
+            existing is not None
+            and existing.role is AdminRole.ADMIN
+            and await count_admins(db) <= 1
+        ):
+            raise LastAdminError("cannot demote the last admin")
     stmt = (
         pg_insert(AdminUser)
         .values(email=norm, role=role, added_by=added_by)
@@ -44,10 +66,20 @@ async def add_admin_user(
 
 
 async def remove_admin_user(db: AsyncSession, email: str) -> bool:
-    """Delete an operator. Returns False if the email was not present. Caller commits."""
-    result = await db.execute(delete(AdminUser).where(AdminUser.email == _norm(email)))
+    """Delete an operator. Returns False if the email was not present. Caller commits.
+
+    Raises LastAdminError if the target is the only remaining admin — deleting it would
+    leave nobody able to perform admin mutations (an unrecoverable lockout).
+    """
+    norm = _norm(email)
+    existing = await db.get(AdminUser, norm)
+    if existing is None:
+        return False
+    if existing.role is AdminRole.ADMIN and await count_admins(db) <= 1:
+        raise LastAdminError("cannot remove the last admin")
+    await db.execute(delete(AdminUser).where(AdminUser.email == norm))
     await db.flush()
-    return (getattr(result, "rowcount", 0) or 0) > 0
+    return True
 
 
 async def seed_bootstrap(db: AsyncSession, emails: list[str]) -> int:

@@ -20,6 +20,21 @@ _bearer = HTTPBearer(auto_error=False)
 # clients and gateways know how to authenticate.
 _WWW_AUTH = {"WWW-Authenticate": "Bearer"}
 
+# Cookie-borne token types (admin session, OAuth tx) are signed with the same
+# JWT_SIGNING_KEY as the agent service/worker bearer tokens. The agent-plane verifiers
+# must reject them so an operator's session cookie cannot be lifted from the browser
+# and replayed as a Bearer worker/service token (cross-token-type confusion).
+_COOKIE_TOKEN_TYPES = frozenset({"admin_session", "oauth_tx"})
+
+
+def _reject_cookie_token(claims: dict[str, Any]) -> None:
+    if claims.get("typ") in _COOKIE_TOKEN_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid service token",
+            headers=_WWW_AUTH,
+        )
+
 
 def require_operator_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
@@ -64,7 +79,7 @@ def require_service_token(
             headers=_WWW_AUTH,
         )
     try:
-        return jwt.decode(
+        claims = jwt.decode(
             credentials.credentials,
             settings.jwt_signing_key.get_secret_value(),
             algorithms=["HS256"],
@@ -76,6 +91,8 @@ def require_service_token(
             detail="invalid service token",
             headers=_WWW_AUTH,
         ) from exc
+    _reject_cookie_token(claims)
+    return claims
 
 
 def require_worker_token(
@@ -97,7 +114,7 @@ def require_worker_token(
             headers=_WWW_AUTH,
         )
     try:
-        return jwt.decode(
+        claims = jwt.decode(
             credentials.credentials,
             settings.jwt_signing_key.get_secret_value(),
             algorithms=["HS256"],
@@ -109,6 +126,8 @@ def require_worker_token(
             detail="invalid service token",
             headers=_WWW_AUTH,
         ) from exc
+    _reject_cookie_token(claims)
+    return claims
 
 
 _COOKIE_AUTH = {"WWW-Authenticate": "Cookie"}

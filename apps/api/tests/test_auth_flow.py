@@ -94,3 +94,45 @@ def test_logout_clears_cookie(client, admin_session):
     r = client.post("/v1/auth/logout")
     assert r.status_code == 204
     assert SESSION_COOKIE_NAME in r.headers.get("set-cookie", "")
+
+
+def test_callback_error_param_is_400(sso_client):
+    r = sso_client.get("/v1/auth/callback", params={"error": "access_denied"})
+    assert r.status_code == 400
+
+
+def test_callback_missing_tx_cookie_is_400(sso_client):
+    r = sso_client.get("/v1/auth/callback", params={"code": "abc", "state": "S"})
+    assert r.status_code == 400
+
+
+def test_callback_garbage_tx_cookie_is_400(sso_client):
+    sso_client.cookies.set(TX_COOKIE_NAME, "not-a-jwt")
+    r = sso_client.get("/v1/auth/callback", params={"code": "abc", "state": "S"})
+    assert r.status_code == 400
+
+
+def test_callback_oauth_error_is_403(sso_client, monkeypatch):
+    async def _fake_exchange(settings, *, code, code_verifier):
+        return "fake-id-token"
+
+    def _raise(settings, raw_token):
+        raise oauth.OAuthError("verification failed")
+
+    monkeypatch.setattr(oauth, "exchange_code", _fake_exchange)
+    monkeypatch.setattr(oauth, "verify_id_token", _raise)
+    tx = issue_tx("S", "v", get_settings())
+    sso_client.cookies.set(TX_COOKIE_NAME, tx)
+    r = sso_client.get("/v1/auth/callback", params={"code": "abc", "state": "S"})
+    assert r.status_code == 403
+
+
+def test_logout_without_session_is_204(client):
+    r = client.post("/v1/auth/logout")
+    assert r.status_code == 204
+
+
+def test_logout_with_bad_cookie_is_204(client):
+    client.cookies.set(SESSION_COOKIE_NAME, "garbage.token.value")
+    r = client.post("/v1/auth/logout")
+    assert r.status_code == 204

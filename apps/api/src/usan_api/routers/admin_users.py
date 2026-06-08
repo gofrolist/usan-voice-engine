@@ -33,9 +33,13 @@ async def add_user(
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> AdminUserOut:
-    user = await repo.add_admin_user(
-        db, email=body.email, role=AdminRole(body.role), added_by=actor
-    )
+    try:
+        user = await repo.add_admin_user(
+            db, email=body.email, role=AdminRole(body.role), added_by=actor
+        )
+    except repo.LastAdminError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     await admin_audit.record(
         db,
         actor_email=actor,
@@ -55,7 +59,11 @@ async def remove_user(
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> None:
-    removed = await repo.remove_admin_user(db, email)
+    try:
+        removed = await repo.remove_admin_user(db, email)
+    except repo.LastAdminError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if not removed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="admin user not found")
     await admin_audit.record(

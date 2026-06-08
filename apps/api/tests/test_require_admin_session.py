@@ -1,5 +1,7 @@
 import asyncio
+import datetime
 
+import jwt
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
@@ -56,3 +58,16 @@ def test_role_gate_blocks_viewer(client, async_database_url):
     client.cookies.set(SESSION_COOKIE_NAME, token)
     assert client.get("/v1/admin/profiles").status_code == 200  # viewer can read
     assert client.post("/v1/admin/profiles", json={"name": "x"}).status_code == 403  # not write
+
+
+def test_invalid_signature_cookie_is_401(client, admin_session):
+    # A session cookie signed with a different key must be rejected at the endpoint
+    # (mapped to 401 by the dependency, not surfaced as a 500).
+    exp = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
+    bad = jwt.encode(
+        {"sub": "admin@example.com", "role": "admin", "typ": "admin_session", "exp": exp},
+        "x" * 32,
+        algorithm="HS256",
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, bad)
+    assert client.get("/v1/admin/profiles").status_code == 401

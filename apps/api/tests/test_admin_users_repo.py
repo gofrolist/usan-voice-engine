@@ -1,5 +1,6 @@
 import asyncio
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -31,6 +32,10 @@ def test_add_get_remove_round_trip(async_database_url):
                 await repo.add_admin_user(
                     db, email="Alice@Example.com", role=AdminRole.ADMIN, added_by="me@x.com"
                 )
+                # A second admin so removing one is allowed (not the last-admin guard).
+                await repo.add_admin_user(
+                    db, email="root@x.com", role=AdminRole.ADMIN, added_by="me@x.com"
+                )
                 await db.commit()
             async with factory() as db:
                 # email is normalized to lowercase on write.
@@ -39,14 +44,14 @@ def test_add_get_remove_round_trip(async_database_url):
                 assert u.role is AdminRole.ADMIN
                 assert u.added_by == "me@x.com"
                 users = await repo.list_admin_users(db)
-                assert [x.email for x in users] == ["alice@example.com"]
+                assert [x.email for x in users] == ["alice@example.com", "root@x.com"]
             async with factory() as db:
                 removed = await repo.remove_admin_user(db, "alice@example.com")
                 await db.commit()
                 assert removed is True
             async with factory() as db:
                 assert await repo.get_admin_user(db, "alice@example.com") is None
-                assert await repo.remove_admin_user(db, "alice@example.com") is False
+                assert await repo.remove_admin_user(db, "missing@x.com") is False
         finally:
             await engine.dispose()
 
@@ -70,6 +75,46 @@ def test_seed_bootstrap_is_idempotent(async_database_url):
             async with factory() as db:
                 emails = {u.email for u in await repo.list_admin_users(db)}
                 assert emails == {"a@x.com", "b@x.com", "c@x.com"}
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+def test_remove_last_admin_raises(async_database_url):
+    async def _run():
+        await _truncate(async_database_url)
+        engine, factory = _factory(async_database_url)
+        try:
+            async with factory() as db:
+                await repo.add_admin_user(
+                    db, email="solo@x.com", role=AdminRole.ADMIN, added_by="t"
+                )
+                await db.commit()
+            async with factory() as db:
+                with pytest.raises(repo.LastAdminError):
+                    await repo.remove_admin_user(db, "solo@x.com")
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+def test_demote_last_admin_raises(async_database_url):
+    async def _run():
+        await _truncate(async_database_url)
+        engine, factory = _factory(async_database_url)
+        try:
+            async with factory() as db:
+                await repo.add_admin_user(
+                    db, email="solo@x.com", role=AdminRole.ADMIN, added_by="t"
+                )
+                await db.commit()
+            async with factory() as db:
+                with pytest.raises(repo.LastAdminError):
+                    await repo.add_admin_user(
+                        db, email="solo@x.com", role=AdminRole.VIEWER, added_by="t"
+                    )
         finally:
             await engine.dispose()
 
