@@ -193,6 +193,18 @@ services:
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
       # Operator/management API plane auth (GET/POST /v1/elders, /v1/dnc, /v1/calls).
       OPERATOR_API_KEY: ${OPERATOR_API_KEY}
+      # Admin UI / Google SSO (Plan admin-3 code; admin-5 wires it through here so
+      # the settings actually reach the container). All optional — SSO is off until
+      # the client id + secret + redirect are all set; SESSION_COOKIE_SECURE defaults
+      # prod-safe (true) and only local-http dev sets it false.
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
+      GOOGLE_OAUTH_HD: ${GOOGLE_OAUTH_HD:-}
+      ADMIN_BOOTSTRAP_EMAILS: ${ADMIN_BOOTSTRAP_EMAILS:-}
+      ADMIN_SESSION_TTL_S: ${ADMIN_SESSION_TTL_S:-28800}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      ADMIN_POST_LOGIN_REDIRECT: ${ADMIN_POST_LOGIN_REDIRECT:-/}
       # OpenAPI docs (/docs, /redoc) — off by default; enable explicitly in dev.
       DOCS_ENABLED: ${DOCS_ENABLED:-false}
       # Per-client request rate limiting.
