@@ -9,6 +9,7 @@ plugin default".
 """
 
 import re
+import uuid
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -232,3 +233,18 @@ DEFAULT_AGENT_CONFIG = AgentConfig(
         ),
     ),
 )
+
+
+class ResolvedAgentConfig(BaseModel):
+    """The published config resolved for a call/direction, plus provenance.
+
+    ``source`` is "resolved" when a published profile matched the precedence walk,
+    or "default" when nothing resolved and the server's DEFAULT_AGENT_CONFIG is
+    returned. ``profile_id``/``version`` are the live snapshot's identity (non-PHI),
+    useful for agent-side logging and debugging.
+    """
+
+    source: Literal["resolved", "default"]
+    profile_id: uuid.UUID | None = None
+    version: int | None = None
+    config: AgentConfig
