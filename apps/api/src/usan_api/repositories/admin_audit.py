@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.models import AdminAuditLog
 
+_MAX_LIST_LIMIT = 500
+
 
 async def record(
     db: AsyncSession,
@@ -30,6 +32,7 @@ async def record(
 
 
 async def list_recent(db: AsyncSession, *, limit: int = 100) -> list[AdminAuditLog]:
+    limit = min(limit, _MAX_LIST_LIMIT)
     result = await db.execute(
         select(AdminAuditLog).order_by(AdminAuditLog.created_at.desc()).limit(limit)
     )
