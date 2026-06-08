@@ -11,7 +11,7 @@ plugin default".
 import re
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Tool names the agent can register; mirrors check_in.build_check_in_agent().
 TOOL_NAMES = frozenset({"log_wellness", "log_medication", "get_today_meds", "end_call"})
@@ -31,14 +31,14 @@ def _reject_braces(value: str) -> str:
 
 
 class PromptsConfig(BaseModel):
-    system_prompt: str = Field(max_length=4000)
-    greeting: str = Field(max_length=1000)
-    recording_disclosure: str = Field(max_length=1000)
-    voicemail_message: str = Field(max_length=1000)
-    checkin_flow_instructions: str = Field(max_length=6000)
-    goodbye_message: str = Field(max_length=1000)
-    inbound_opening: str = Field(max_length=1000)
-    inbound_personalization_template: str = Field(max_length=6000)
+    system_prompt: str = Field(min_length=1, max_length=4000)
+    greeting: str = Field(min_length=1, max_length=1000)
+    recording_disclosure: str = Field(min_length=1, max_length=1000)
+    voicemail_message: str = Field(min_length=1, max_length=1000)
+    checkin_flow_instructions: str = Field(min_length=1, max_length=6000)
+    goodbye_message: str = Field(min_length=1, max_length=1000)
+    inbound_opening: str = Field(min_length=1, max_length=1000)
+    inbound_personalization_template: str = Field(min_length=1, max_length=6000)
 
     @field_validator(
         "system_prompt",
@@ -71,10 +71,10 @@ class PromptsConfig(BaseModel):
 
 
 class VoiceConfig(BaseModel):
-    cartesia_voice_id: str | None = Field(default=None, max_length=200)
-    tts_model: str | None = Field(default=None, max_length=100)
+    cartesia_voice_id: str | None = Field(default=None, min_length=1, max_length=200)
+    tts_model: str | None = Field(default=None, min_length=1, max_length=100)
     speed: float | None = Field(default=None, ge=0.25, le=4.0)
-    language: str | None = Field(default=None, max_length=20)
+    language: str | None = Field(default=None, min_length=1, max_length=20)
 
 
 class LLMConfig(BaseModel):
@@ -84,7 +84,7 @@ class LLMConfig(BaseModel):
 
 class STTConfig(BaseModel):
     model: str = Field(default="ink-whisper", min_length=1, max_length=200)
-    language: str | None = Field(default=None, max_length=20)
+    language: str | None = Field(default=None, min_length=1, max_length=20)
 
 
 class TimingConfig(BaseModel):
@@ -126,6 +126,16 @@ class SpeechAdvancedConfig(BaseModel):
     max_endpointing_delay_s: float | None = Field(default=None, ge=0.0, le=30.0)
     min_interruption_duration_s: float | None = Field(default=None, ge=0.0, le=5.0)
     min_interruption_words: int | None = Field(default=None, ge=0, le=20)
+
+    @model_validator(mode="after")
+    def _endpointing_order(self) -> SpeechAdvancedConfig:
+        mn = self.min_endpointing_delay_s
+        mx = self.max_endpointing_delay_s
+        if mn is not None and mx is not None and mn > mx:
+            raise ValueError(
+                f"min_endpointing_delay_s ({mn}) must be <= max_endpointing_delay_s ({mx})"
+            )
+        return self
 
 
 class AgentConfig(BaseModel):

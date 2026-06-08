@@ -5,6 +5,7 @@ from usan_api.schemas.agent_config import (
     DEFAULT_AGENT_CONFIG,
     AgentConfig,
     PromptsConfig,
+    SpeechAdvancedConfig,
     ToolsConfig,
 )
 
@@ -53,3 +54,15 @@ def test_personalization_template_accepts_allowed_slots():
 def test_tools_rejects_unknown_tool():
     with pytest.raises(ValidationError):
         ToolsConfig(enabled=["log_wellness", "launch_missiles"])
+
+
+def test_personalization_template_rejects_stray_brace():
+    bad = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    bad["inbound_personalization_template"] = "{elder_name} and {"
+    with pytest.raises(ValidationError):
+        PromptsConfig.model_validate(bad)
+
+
+def test_speech_advanced_rejects_inverted_endpointing():
+    with pytest.raises(ValidationError):
+        SpeechAdvancedConfig(min_endpointing_delay_s=5.0, max_endpointing_delay_s=0.1)
