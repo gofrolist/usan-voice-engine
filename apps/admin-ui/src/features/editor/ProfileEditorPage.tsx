@@ -130,6 +130,22 @@ export function ProfileEditorPage() {
       pushToast("Fix validation errors before publishing.");
       return;
     }
+    // Publish freezes the SAVED draft_config server-side (it takes no config body),
+    // so persist any unsaved edits first. Otherwise the diff (form values) would
+    // misrepresent what goes live and unsaved changes would be silently dropped.
+    if (form.formState.isDirty) {
+      try {
+        await saveDraft.mutateAsync({ config: form.getValues() as AgentConfig });
+      } catch (err) {
+        const e = err as ApiError;
+        if (e.status === 422 && mapServerErrors(e.detail)) {
+          pushToast("Some fields were rejected by the server — see the highlighted errors.");
+        } else {
+          pushToast(e.detail);
+        }
+        return;
+      }
+    }
     setPublishOpen(true);
   }
 

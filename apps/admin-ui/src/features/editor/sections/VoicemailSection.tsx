@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Controller, type UseFormReturn } from "react-hook-form";
 import type { AgentConfigForm } from "../../../config/agentConfigSchema";
 import { Textarea } from "../../../components/ui/textarea";
@@ -10,6 +11,40 @@ function linesToPhrases(text: string): string[] {
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
+}
+
+// A textarea backed by a local raw-text buffer so newlines and partially-typed
+// lines survive editing. The parsed string[] is pushed to the form on every change,
+// but the buffer only resyncs FROM the form when the canonical array actually
+// differs (e.g. a profile reset) — never mid-typing. A naive `value={arr.join("\n")}`
+// re-derives the text from the trimmed/filtered array on each keystroke, which strips
+// the trailing newline before a second phrase can ever be entered.
+function TriggerPhrasesField({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [text, setText] = useState(() => value.join("\n"));
+  useEffect(() => {
+    if (JSON.stringify(linesToPhrases(text)) !== JSON.stringify(value)) {
+      setText(value.join("\n"));
+    }
+    // Resync only when the form value changes from outside (not from our own edits).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return (
+    <Textarea
+      id="voicemail_detection.trigger_phrases"
+      rows={4}
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(linesToPhrases(e.target.value));
+      }}
+    />
+  );
 }
 
 export function VoicemailSection({ form }: { form: UseFormReturn<AgentConfigForm> }) {
@@ -36,12 +71,7 @@ export function VoicemailSection({ form }: { form: UseFormReturn<AgentConfigForm
           control={form.control}
           name="voicemail_detection.trigger_phrases"
           render={({ field }) => (
-            <Textarea
-              id="voicemail_detection.trigger_phrases"
-              rows={4}
-              value={field.value.join("\n")}
-              onChange={(e) => field.onChange(linesToPhrases(e.target.value))}
-            />
+            <TriggerPhrasesField value={field.value} onChange={field.onChange} />
           )}
         />
       </Field>

@@ -3,23 +3,18 @@ import { api } from "../../lib/api";
 import type { ApiError } from "../../lib/api";
 import { pushToast } from "../../components/ui/toast";
 import { profileKey } from "../editor/hooks";
-import type { VersionDetail, VersionSummary } from "../../types/api";
+import type { VersionSummary } from "../../types/api";
+
+// The single-version hook lives in editor/hooks (the publish diff uses it); re-export
+// it here so the history page and the publish diff share one query key + one fetch.
+export { useVersion } from "../editor/hooks";
 
 export const versionsKey = (id: string) => ["versions", id] as const;
-export const versionDetailKey = (id: string, v: number) => ["versions", id, v] as const;
 
 export function useVersions(id: string) {
   return useQuery<VersionSummary[]>({
     queryKey: versionsKey(id),
     queryFn: () => api.get<VersionSummary[]>(`/v1/admin/profiles/${id}/versions`),
-  });
-}
-
-export function useVersion(id: string, version: number | null) {
-  return useQuery<VersionDetail>({
-    queryKey: versionDetailKey(id, version ?? -1),
-    queryFn: () => api.get<VersionDetail>(`/v1/admin/profiles/${id}/versions/${version}`),
-    enabled: version !== null && version > 0,
   });
 }
 
