@@ -77,6 +77,7 @@ def client(database_url: str, async_database_url: str, monkeypatch) -> TestClien
     monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
     monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "false")
     get_settings.cache_clear()
 
     test_engine = create_async_engine(async_database_url, poolclass=NullPool)
@@ -102,3 +103,76 @@ def client(database_url: str, async_database_url: str, monkeypatch) -> TestClien
 @pytest.fixture
 def operator_headers() -> dict[str, str]:
     return {"Authorization": "Bearer " + "o" * 32}
+
+
+@pytest.fixture
+def sso_client(database_url: str, async_database_url: str, monkeypatch) -> TestClient:
+    """Like `client`, but with Google SSO configured (for /v1/auth flow tests)."""
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+    monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_TRUNK_ID", "ST_test")
+    monkeypatch.setenv("TELNYX_CALLER_ID", "+15551230000")
+    monkeypatch.setenv("AGENT_NAME", "usan-agent")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+    monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "false")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "cid.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_REDIRECT_URI", "http://testserver/v1/auth/callback")
+    get_settings.cache_clear()
+
+    test_engine = create_async_engine(async_database_url, poolclass=NullPool)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def _override_get_db():
+        async with factory() as session:
+            try:
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
+
+    app = create_app()
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        # follow_redirects off so the login 302 to Google is observable.
+        yield TestClient(app, follow_redirects=False)
+    finally:
+        asyncio.run(_truncate_and_dispose(test_engine))
+        get_settings.cache_clear()
+
+
+async def _seed_admin_user_async(async_database_url: str, email: str, role: str) -> None:
+    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO admin_users (email, role, added_by) "
+                    "VALUES (:email, CAST(:role AS admin_role), 'test') "
+                    "ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role"
+                ),
+                {"email": email.lower(), "role": role},
+            )
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+def admin_session(client: TestClient, async_database_url: str) -> dict[str, str]:
+    """Seed an allow-listed admin and return cookies that authenticate as them.
+
+    Sets the cookie on the shared `client` too, so tests can either rely on the
+    client jar or pass `cookies=admin_session` per request.
+    """
+    from usan_api.admin_session import SESSION_COOKIE_NAME, issue_session
+    from usan_api.db.base import AdminRole
+
+    email = "admin@example.com"
+    asyncio.run(_seed_admin_user_async(async_database_url, email, "admin"))
+    token = issue_session(email, AdminRole.ADMIN, get_settings())
+    client.cookies.set(SESSION_COOKIE_NAME, token)
+    return {SESSION_COOKIE_NAME: token}

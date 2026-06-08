@@ -38,7 +38,7 @@ def _is_operator_route(method: str, path: str) -> bool:
     The internal /v1/calls routes (POST /inbound, POST /{id}/outcome) and every
     /v1/tools/*, /webhooks/*, and /health path fall through unthrottled.
     """
-    if path.startswith("/v1/admin/"):
+    if path.startswith("/v1/admin/") or path.startswith("/v1/auth/"):
         return True
     if path.startswith("/v1/elders") or path.startswith("/v1/dnc"):
         return True

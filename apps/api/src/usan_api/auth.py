@@ -1,10 +1,17 @@
 import hmac
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
 from typing import Any
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from usan_api.admin_session import SESSION_COOKIE_NAME, decode_session
+from usan_api.db.base import AdminRole
+from usan_api.db.session import get_db
+from usan_api.repositories import admin_users as admin_users_repo
 from usan_api.settings import Settings, get_settings
 
 _bearer = HTTPBearer(auto_error=False)
@@ -12,6 +19,21 @@ _bearer = HTTPBearer(auto_error=False)
 # RFC 7235 §3.1: a 401 MUST carry a WWW-Authenticate challenge so standards-compliant
 # clients and gateways know how to authenticate.
 _WWW_AUTH = {"WWW-Authenticate": "Bearer"}
+
+# Cookie-borne token types (admin session, OAuth tx) are signed with the same
+# JWT_SIGNING_KEY as the agent service/worker bearer tokens. The agent-plane verifiers
+# must reject them so an operator's session cookie cannot be lifted from the browser
+# and replayed as a Bearer worker/service token (cross-token-type confusion).
+_COOKIE_TOKEN_TYPES = frozenset({"admin_session", "oauth_tx"})
+
+
+def _reject_cookie_token(claims: dict[str, Any]) -> None:
+    if claims.get("typ") in _COOKIE_TOKEN_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid service token",
+            headers=_WWW_AUTH,
+        )
 
 
 def require_operator_token(
@@ -57,7 +79,7 @@ def require_service_token(
             headers=_WWW_AUTH,
         )
     try:
-        return jwt.decode(
+        claims = jwt.decode(
             credentials.credentials,
             settings.jwt_signing_key.get_secret_value(),
             algorithms=["HS256"],
@@ -69,6 +91,8 @@ def require_service_token(
             detail="invalid service token",
             headers=_WWW_AUTH,
         ) from exc
+    _reject_cookie_token(claims)
+    return claims
 
 
 def require_worker_token(
@@ -90,7 +114,7 @@ def require_worker_token(
             headers=_WWW_AUTH,
         )
     try:
-        return jwt.decode(
+        claims = jwt.decode(
             credentials.credentials,
             settings.jwt_signing_key.get_secret_value(),
             algorithms=["HS256"],
@@ -102,3 +126,66 @@ def require_worker_token(
             detail="invalid service token",
             headers=_WWW_AUTH,
         ) from exc
+    _reject_cookie_token(claims)
+    return claims
+
+
+_COOKIE_AUTH = {"WWW-Authenticate": "Cookie"}
+
+
+@dataclass(frozen=True)
+class AdminPrincipal:
+    """The authenticated admin operator for the current request."""
+
+    email: str
+    role: AdminRole
+
+
+async def require_admin_session(
+    session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AdminPrincipal:
+    """Authenticate an admin operator from the session cookie.
+
+    The cookie proves authentication (Google verified the human); the admin_users
+    row provides current authorization + the live role. A removed/blocked operator
+    is rejected immediately even while their cookie is unexpired. 401 (not 403) on a
+    missing/invalid/expired cookie or a no-longer-allow-listed email.
+    """
+    if not session_cookie:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing session",
+            headers=_COOKIE_AUTH,
+        )
+    try:
+        claims = decode_session(session_cookie, settings)
+    except jwt.PyJWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid session",
+            headers=_COOKIE_AUTH,
+        ) from exc
+    email = str(claims["sub"]).lower()
+    user = await admin_users_repo.get_admin_user(db, email)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="not authorized",
+            headers=_COOKIE_AUTH,
+        )
+    return AdminPrincipal(email=email, role=user.role)
+
+
+def require_admin_role(
+    required: AdminRole,
+) -> Callable[..., Coroutine[Any, Any, AdminPrincipal]]:
+    """Dependency factory: require at least `required` role (admin > viewer)."""
+
+    async def _dep(principal: AdminPrincipal = Depends(require_admin_session)) -> AdminPrincipal:
+        if required is AdminRole.ADMIN and principal.role is not AdminRole.ADMIN:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin role required")
+        return principal
+
+    return _dep

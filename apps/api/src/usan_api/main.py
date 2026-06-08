@@ -3,14 +3,26 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
+from loguru import logger
 from pydantic import BaseModel
 
 from usan_api import background, retention, retry_orchestrator
-from usan_api.db.session import dispose_engine
+from usan_api.db.session import dispose_engine, get_session_factory
 from usan_api.logging_config import configure_logging
 from usan_api.observability.instrumentation import setup_metrics
 from usan_api.ratelimit import OperatorRateLimitMiddleware
-from usan_api.routers import admin_profiles, calls, dnc, elders, runtime, tools, webhooks
+from usan_api.repositories import admin_users as admin_users_repo
+from usan_api.routers import (
+    admin_profiles,
+    admin_users,
+    auth,
+    calls,
+    dnc,
+    elders,
+    runtime,
+    tools,
+    webhooks,
+)
 from usan_api.settings import Settings, get_settings
 
 
@@ -18,9 +30,29 @@ class HealthResponse(BaseModel):
     status: str
 
 
+async def _seed_admin_allowlist(settings: Settings) -> None:
+    """Insert ADMIN_BOOTSTRAP_EMAILS into admin_users on startup (idempotent).
+
+    Best-effort: a transient DB hiccup logs and does not crash the API (health stays
+    up). Without at least one allow-listed email, nobody can log in via SSO.
+    """
+    emails = settings.bootstrap_emails_list
+    if not emails:
+        return
+    try:
+        async with get_session_factory()() as db:
+            n = await admin_users_repo.seed_bootstrap(db, emails)
+            await db.commit()
+        if n:
+            logger.info("Seeded {n} bootstrap admin user(s)", n=n)
+    except Exception:  # noqa: BLE001 - startup must not crash on a seeding failure
+        logger.exception("Failed to seed bootstrap admin allow-list")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    await _seed_admin_allowlist(settings)
     stop = asyncio.Event()
     poller_tasks: list[asyncio.Task[None]] = []
     if settings.retry_poller_enabled:
@@ -81,6 +113,8 @@ def create_app() -> FastAPI:
         return HealthResponse(status="ok")
 
     app.include_router(admin_profiles.router)
+    app.include_router(admin_users.router)
+    app.include_router(auth.router)
     app.include_router(elders.router)
     app.include_router(dnc.router)
     app.include_router(calls.router)
