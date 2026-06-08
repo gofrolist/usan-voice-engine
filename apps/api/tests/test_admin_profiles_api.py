@@ -1,10 +1,28 @@
+import asyncio
 import uuid
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
+from usan_api.db.models import AdminAuditLog
 
 _OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 def _name() -> str:
     return f"profile-{uuid.uuid4().hex}"
+
+
+async def _fetch_audit(async_database_url: str, action: str) -> AdminAuditLog | None:
+    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            result = await db.execute(select(AdminAuditLog).where(AdminAuditLog.action == action))
+            return result.scalars().first()
+    finally:
+        await engine.dispose()
 
 
 def test_create_profile_returns_201(client):
@@ -111,3 +129,36 @@ def test_update_draft_unknown_profile_returns_404(client):
     cfg = client.get(f"/v1/admin/profiles/{pid}", headers=_OP).json()["draft_config"]
     r = client.put(f"/v1/admin/profiles/{uuid.uuid4()}/draft", json={"config": cfg}, headers=_OP)
     assert r.status_code == 404
+
+
+def test_publish_unknown_profile_returns_404(client):
+    r = client.post(f"/v1/admin/profiles/{uuid.uuid4()}/publish", json={"note": "x"}, headers=_OP)
+    assert r.status_code == 404
+
+
+def test_rollback_unknown_version_returns_404(client):
+    pid = client.post("/v1/admin/profiles", json={"name": _name()}, headers=_OP).json()["id"]
+    client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"}, headers=_OP)
+    r = client.post(f"/v1/admin/profiles/{pid}/rollback/999", json={}, headers=_OP)
+    assert r.status_code == 404
+
+
+def test_get_version_returns_config_and_404(client):
+    pid = client.post("/v1/admin/profiles", json={"name": _name()}, headers=_OP).json()["id"]
+    draft = client.get(f"/v1/admin/profiles/{pid}", headers=_OP).json()["draft_config"]
+    client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"}, headers=_OP)
+    r = client.get(f"/v1/admin/profiles/{pid}/versions/1", headers=_OP)
+    assert r.status_code == 200
+    assert r.json()["config"] == draft
+    missing = client.get(f"/v1/admin/profiles/{pid}/versions/999", headers=_OP)
+    assert missing.status_code == 404
+
+
+def test_publish_records_audit_entry(client, async_database_url):
+    pid = client.post("/v1/admin/profiles", json={"name": _name()}, headers=_OP).json()["id"]
+    r = client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"}, headers=_OP)
+    assert r.status_code == 201
+    entry = asyncio.run(_fetch_audit(async_database_url, "profile.publish"))
+    assert entry is not None
+    assert entry.actor_email
+    assert entry.detail == {"version": 1}

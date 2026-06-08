@@ -88,6 +88,45 @@ async def test_set_default_is_exclusive_per_direction(session_factory):
         assert b2.is_default_outbound is True
 
 
+async def test_set_default_cross_direction_isolation(session_factory):
+    async with session_factory() as db:
+        a = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        b = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        await repo.publish(db, a.id, note=None, actor_email="op")
+        await repo.publish(db, b.id, note=None, actor_email="op")
+        await db.commit()
+        aid, bid = a.id, b.id
+
+    async with session_factory() as db:
+        await repo.set_default(db, aid, direction="outbound")
+        await repo.set_default(db, bid, direction="inbound")
+        await db.commit()
+
+    async with session_factory() as db:
+        a2 = await repo.get_profile(db, aid)
+        b2 = await repo.get_profile(db, bid)
+        assert a2 is not None
+        assert b2 is not None
+        # The two partial-unique defaults are independent; each direction holds one.
+        assert a2.is_default_outbound is True
+        assert a2.is_default_inbound is False
+        assert b2.is_default_inbound is True
+        assert b2.is_default_outbound is False
+
+
+async def test_set_default_on_archived_raises(session_factory):
+    async with session_factory() as db:
+        p = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        pid = p.id
+        await repo.publish(db, pid, note=None, actor_email="op")
+        await repo.archive_profile(db, pid)
+        await db.commit()
+
+    async with session_factory() as db:
+        with pytest.raises(ProfileInUseError):
+            await repo.set_default(db, pid, direction="outbound")
+
+
 async def test_archive_blocked_when_default(session_factory):
     async with session_factory() as db:
         p = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
