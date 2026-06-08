@@ -271,12 +271,15 @@ async def _resolved_from_profile(
     try:
         config = AgentConfig.model_validate(version.config)
     except ValidationError:
-        # No PHI: log identity only, then fall through to the next tier.
-        logger.warning(
-            "Published config failed validation; skipping (profile={pid} v{v})",
-            pid=str(profile.id),
-            v=version.version,
-        )
+        # A published, supposedly-live config no longer validates (e.g. a later schema
+        # tightening invalidated an old snapshot). Falling through to the next tier can
+        # silently degrade every call to defaults, so emit a STABLE event key (no PHI:
+        # identity only) that a log-based alert can match — not just free-text.
+        logger.bind(
+            event="agent_config_validation_failed",
+            profile_id=str(profile.id),
+            version=version.version,
+        ).warning("Published agent config failed validation; falling through to next tier")
         return None
     return ResolvedAgentConfig(
         source="resolved", profile_id=profile.id, version=version.version, config=config

@@ -197,7 +197,13 @@ async def fetch_agent_config(
             response.raise_for_status()
             body = response.json()
         return AgentConfig.model_validate(body["config"])
-    except Exception:
-        logger.bind(direction=direction).warning("agent-config fetch failed; using defaults")
+    except Exception as exc:
+        # Log the exception TYPE (no body/PHI) so a persistent parse/schema mismatch
+        # between the two AgentConfig copies is distinguishable from a transient network
+        # blip during triage. Still best-effort: never re-raise (CancelledError is
+        # BaseException and is not caught here).
+        logger.bind(direction=direction, err=type(exc).__name__).warning(
+            "agent-config fetch failed; using defaults"
+        )
         # Return a copy so a caller mutating the result can't corrupt the shared singleton.
         return DEFAULT_AGENT_CONFIG.model_copy(deep=True)
