@@ -129,6 +129,11 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
     session = build_session(settings, cfg)
     agent = build_agent(cfg)
     await session.start(agent=agent, room=ctx.room)
+    # Arm the max-duration guard on this path too (it backstops the cost/safety cap on
+    # every answered call). Hold a reference so the fire-and-forget task is not GC'd.
+    _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
+    _BACKGROUND_TASKS.add(_guard_task)
+    _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
     log.info("Inbound greet-only (no known elder)")
     await greet(session, cfg)
 
@@ -159,14 +164,23 @@ async def _run_detection_window(
 async def _max_duration_guard(ctx: JobContext, max_s: float) -> None:
     """Backstop: shut the job down if a call exceeds its configured max duration.
 
-    A cost/safety cap (also covered API-side for outbound). Cancelled on normal call
-    end, so a completed call never triggers a late shutdown.
+    A cost/safety cap (also covered API-side for outbound). Nothing cancels this task;
+    it is killed by process teardown (process-per-job), so on a normal call the sleep
+    simply never elapses and the guard never fires.
     """
     try:
         await asyncio.sleep(max_s)
     except asyncio.CancelledError:
         return
     logger.bind(room=ctx.room.name).warning("Max call duration reached; ending job")
+    # Hang up the elder's SIP/PSTN leg first: shutdown() disconnects the agent but
+    # leaves the room (and the billable carrier leg) up until empty_timeout. Awaiting
+    # matters — delete_room enqueues work that shutdown would otherwise cancel. Mirrors
+    # check_in._do_end_call / voicemail_action.leave_voicemail (delete_room then shutdown).
+    try:
+        await ctx.delete_room()
+    except Exception:
+        logger.bind(room=ctx.room.name).warning("delete_room failed in max-duration guard")
     ctx.shutdown(reason="max_call_duration")
 
 

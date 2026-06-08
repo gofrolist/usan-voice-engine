@@ -524,11 +524,17 @@ async def test_outbound_fetches_and_applies_config(monkeypatch):
 
 
 async def test_max_duration_guard_shuts_down_after_duration():
+    calls = []
     ctx = MagicMock()
-    ctx.shutdown = MagicMock()
+    ctx.delete_room = AsyncMock(side_effect=lambda: calls.append("delete_room"))
+    ctx.shutdown = MagicMock(side_effect=lambda **k: calls.append("shutdown"))
     await worker._max_duration_guard(ctx, 0.01)  # tiny duration
+    # The PSTN/SIP leg must be hung up (delete_room) before the agent shuts down,
+    # otherwise the carrier leg stays billable until empty_timeout.
+    ctx.delete_room.assert_awaited_once()
     ctx.shutdown.assert_called_once()
     assert ctx.shutdown.call_args.kwargs.get("reason") == "max_call_duration"
+    assert calls == ["delete_room", "shutdown"]
 
 
 async def test_max_duration_guard_noop_when_cancelled():
