@@ -32,21 +32,28 @@ def _reject_braces(value: str) -> str:
 
 
 class PromptsConfig(BaseModel):
-    system_prompt: str = Field(min_length=1, max_length=4000)
+    # system_prompt and checkin_flow_instructions are large free-form behavior fields
+    # that the agent passes verbatim to the LLM as instructions (pipeline.py /
+    # check_in.py) — never to str.format — so they allow braces and a generous cap to
+    # hold migrated prompts full of {{variable}} tokens. Only the inbound
+    # personalization template is str.format-ed (check_in._inbound_instructions).
+    system_prompt: str = Field(min_length=1, max_length=24000)
     greeting: str = Field(min_length=1, max_length=1000)
     recording_disclosure: str = Field(min_length=1, max_length=1000)
     voicemail_message: str = Field(min_length=1, max_length=1000)
-    checkin_flow_instructions: str = Field(min_length=1, max_length=6000)
+    checkin_flow_instructions: str = Field(min_length=1, max_length=24000)
     goodbye_message: str = Field(min_length=1, max_length=1000)
     inbound_opening: str = Field(min_length=1, max_length=1000)
     inbound_personalization_template: str = Field(min_length=1, max_length=6000)
 
+    # Brace rejection applies ONLY to the short, literal fields. system_prompt and
+    # checkin_flow_instructions are intentionally excluded (they carry {{variable}}
+    # tokens and are never str.format-ed). DO NOT route either field through
+    # str.format anywhere — that would reintroduce the injection vector.
     @field_validator(
-        "system_prompt",
         "greeting",
         "recording_disclosure",
         "voicemail_message",
-        "checkin_flow_instructions",
         "goodbye_message",
         "inbound_opening",
     )
