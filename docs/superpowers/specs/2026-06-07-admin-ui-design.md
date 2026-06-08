@@ -131,7 +131,7 @@ The "agent" identity / working copy.
 - `description` TEXT, nullable
 - `status` ENUM(`active`, `archived`), default `active`
 - `draft_config` JSONB, not null — the working copy (validated by Pydantic)
-- `published_version_id` UUID FK → `agent_profile_versions(id)`, nullable
+- `published_version` INTEGER, nullable — the live version number, joined to `agent_profile_versions` on `(id, version)`; NULL = never published. (Implemented as an integer rather than an FK to the version row to avoid a circular FK; see the P1 plan.)
 - `is_default_outbound` BOOL, default false
 - `is_default_inbound` BOOL, default false
 - `created_at`, `updated_at` TIMESTAMPTZ
