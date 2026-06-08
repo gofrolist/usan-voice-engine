@@ -13,7 +13,7 @@ copy; the response JSON's `config` block is parsed straight into AgentConfig.
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PromptsConfig(BaseModel):
@@ -76,6 +76,10 @@ class SpeechAdvancedConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
+    # A resolved config is read-only after construction: callers must never mutate it
+    # (the DEFAULT_AGENT_CONFIG singleton is shared across calls in a worker process).
+    model_config = ConfigDict(frozen=True)
+
     prompts: PromptsConfig
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)

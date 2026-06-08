@@ -6,7 +6,7 @@ to the call being mutated.
 """
 
 import time
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 import jwt
@@ -178,7 +178,7 @@ async def start_inbound_call(
 
 
 async def fetch_agent_config(
-    settings: Settings, *, direction: str, call_id: str | None = None
+    settings: Settings, *, direction: Literal["inbound", "outbound"], call_id: str | None = None
 ) -> AgentConfig:
     """Fetch the resolved agent config; degrade to DEFAULT_AGENT_CONFIG on any failure.
 
@@ -186,12 +186,12 @@ async def fetch_agent_config(
     the worker token (matches the server's require_worker_token) and api_base_url
     (so the plaintext-http fail-closed rule holds).
     """
-    url = f"{settings.api_base_url}/v1/runtime/agent-config"
-    headers = {"Authorization": f"Bearer {_mint_worker_token(settings)}"}
-    params: dict[str, str] = {"direction": direction}
-    if call_id:
-        params["call_id"] = call_id
     try:
+        url = f"{settings.api_base_url}/v1/runtime/agent-config"
+        headers = {"Authorization": f"Bearer {_mint_worker_token(settings)}"}
+        params: dict[str, str] = {"direction": direction}
+        if call_id:
+            params["call_id"] = call_id
         async with httpx.AsyncClient(timeout=_CONFIG_TIMEOUT_S) as client:
             response = await client.get(url, params=params, headers=headers)
             response.raise_for_status()
@@ -199,4 +199,5 @@ async def fetch_agent_config(
         return AgentConfig.model_validate(body["config"])
     except Exception:
         logger.bind(direction=direction).warning("agent-config fetch failed; using defaults")
-        return DEFAULT_AGENT_CONFIG
+        # Return a copy so a caller mutating the result can't corrupt the shared singleton.
+        return DEFAULT_AGENT_CONFIG.model_copy(deep=True)
