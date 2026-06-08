@@ -9,13 +9,27 @@ interface NavItem {
   label: string;
   adminOnly?: boolean;
 }
+interface NavGroup {
+  heading: string;
+  items: NavItem[];
+}
 
-const NAV: NavItem[] = [
-  { to: "/", label: "Profiles" },
-  { to: "/elders", label: "Elders", adminOnly: true },
-  { to: "/defaults", label: "Defaults" },
-  { to: "/audit", label: "Audit" },
-  { to: "/admin-users", label: "Admin Users", adminOnly: true },
+const GROUPS: NavGroup[] = [
+  { heading: "Build", items: [{ to: "/", label: "Profiles" }] },
+  {
+    heading: "Config",
+    items: [
+      { to: "/elders", label: "Elders", adminOnly: true },
+      { to: "/defaults", label: "Defaults" },
+    ],
+  },
+  {
+    heading: "System",
+    items: [
+      { to: "/audit", label: "Audit" },
+      { to: "/admin-users", label: "Admin Users", adminOnly: true },
+    ],
+  },
 ];
 
 async function logout() {
@@ -31,31 +45,51 @@ export function NavSidebar() {
   const isAdmin = useIsAdmin();
 
   return (
-    <aside className="flex w-56 flex-col border-r border-gray-200 bg-white">
-      <div className="px-4 py-4 text-lg font-semibold text-gray-900">USAN Admin</div>
-      <nav className="flex flex-1 flex-col gap-1 px-2">
-        {NAV.filter((n) => !n.adminOnly || isAdmin).map((n) => (
-          <NavLink
-            key={n.to}
-            to={n.to}
-            end={n.to === "/"}
-            className={({ isActive }) =>
-              cn(
-                "rounded px-3 py-2 text-sm",
-                isActive ? "bg-blue-50 font-medium text-blue-700" : "text-gray-700 hover:bg-gray-100",
-              )
-            }
-          >
-            {n.label}
-          </NavLink>
-        ))}
+    <aside className="flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white">
+      <div className="flex items-center gap-2 px-5 py-4">
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-900 text-xs font-bold text-white">
+          U
+        </span>
+        <span className="text-sm font-semibold text-slate-900">USAN Admin</span>
+      </div>
+      <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 py-2">
+        {GROUPS.map((group) => {
+          const items = group.items.filter((n) => !n.adminOnly || isAdmin);
+          if (items.length === 0) return null;
+          return (
+            <div key={group.heading}>
+              <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                {group.heading}
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {items.map((n) => (
+                  <NavLink
+                    key={n.to}
+                    to={n.to}
+                    end={n.to === "/"}
+                    className={({ isActive }) =>
+                      cn(
+                        "rounded-lg px-3 py-2 text-sm",
+                        isActive
+                          ? "bg-indigo-50 font-medium text-indigo-700"
+                          : "text-slate-600 hover:bg-slate-100",
+                      )
+                    }
+                  >
+                    {n.label}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </nav>
-      <div className="border-t border-gray-200 px-4 py-3 text-sm">
-        <div className="truncate text-gray-600" title={me?.email}>
+      <div className="border-t border-slate-200 px-4 py-3 text-sm">
+        <div className="truncate text-slate-700" title={me?.email}>
           {me?.email}
         </div>
-        <div className="text-xs uppercase text-gray-400">{me?.role}</div>
-        <Button variant="ghost" className="mt-2 px-0" onClick={logout}>
+        <div className="text-xs uppercase text-slate-400">{me?.role}</div>
+        <Button variant="ghost" className="mt-1 px-0" onClick={logout}>
           Log out
         </Button>
       </div>
