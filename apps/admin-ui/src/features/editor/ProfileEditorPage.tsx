@@ -1,12 +1,9 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { agentConfigSchema, type AgentConfigForm } from "../../config/agentConfigSchema";
 import { SECTION_LABELS, type SectionKey } from "../../config/fieldMeta";
-import { Tabs } from "../../components/ui/tabs";
-import { Button } from "../../components/ui/button";
-import { Badge } from "../../components/ui/badge";
 import { Spinner } from "../../components/ui/spinner";
 import { useIsAdmin } from "../../auth/useSession";
 import { pushToast } from "../../components/ui/toast";
@@ -14,6 +11,8 @@ import type { ApiError } from "../../lib/api";
 import type { AgentConfig } from "../../types/api";
 import { useProfile, useSaveDraft } from "./hooks";
 import { PublishDialog } from "./PublishDialog";
+import { EditorToolbar } from "./EditorToolbar";
+import { SectionRail } from "./SectionRail";
 import { PromptsSection } from "./sections/PromptsSection";
 import { VoiceSection } from "./sections/VoiceSection";
 import { LLMSection } from "./sections/LLMSection";
@@ -79,14 +78,16 @@ export function ProfileEditorPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 text-gray-600">
+      <div className="flex items-center gap-2 p-8 text-slate-600">
         <Spinner /> Loading profile…
       </div>
     );
   }
   if (isError || !profile) {
     return (
-      <p className="text-sm text-red-700">Failed to load profile: {(error as Error)?.message}</p>
+      <p className="p-8 text-sm text-red-700">
+        Failed to load profile: {(error as Error)?.message}
+      </p>
     );
   }
 
@@ -149,57 +150,59 @@ export function ProfileEditorPage() {
     setPublishOpen(true);
   }
 
-  const tabItems = SECTION_ORDER.map((k) => ({ key: k, label: SECTION_LABELS[k] }));
   const draftValues = form.watch();
+  const summaries: Partial<Record<SectionKey, string>> = {
+    llm: draftValues.llm?.model,
+    voice: draftValues.voice?.cartesia_voice_id ?? "default",
+    tools: `${draftValues.tools?.enabled?.length ?? 0} on`,
+    timing: draftValues.timing ? `${draftValues.timing.answer_timeout_s}s` : undefined,
+  };
 
   return (
-    <div className="space-y-4">
-      <div className="sticky top-0 z-10 -mx-6 -mt-6 mb-2 border-b border-gray-200 bg-white px-6 py-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-semibold">{profile.name}</h1>
-              <Badge tone={profile.status === "active" ? "green" : "gray"}>{profile.status}</Badge>
-              {profile.published_version !== null ? (
-                <Badge tone="blue">live v{profile.published_version}</Badge>
-              ) : (
-                <Badge tone="gray">unpublished</Badge>
-              )}
-              {form.formState.isDirty ? <Badge tone="amber">unsaved changes</Badge> : null}
-            </div>
-            <Link to={`/profiles/${id}/versions`} className="text-xs text-blue-600 hover:underline">
-              Version history
-            </Link>
+    <div className="flex h-full flex-col">
+      <EditorToolbar
+        name={profile.name}
+        status={profile.status}
+        publishedVersion={profile.published_version}
+        dirty={form.formState.isDirty}
+        model={draftValues.llm?.model ?? "—"}
+        voice={draftValues.voice?.cartesia_voice_id ?? "default"}
+        language={draftValues.voice?.language ?? "default"}
+        isAdmin={isAdmin}
+        saving={saveDraft.isPending}
+        profileId={id}
+        onJump={(s) => setSection(s)}
+        onSave={onSave}
+        onPublish={onPublishClick}
+      />
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
+          <div className="mx-auto max-w-3xl">
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
+              {SECTION_LABELS[section]}
+            </h2>
+            <form className="min-w-0" onSubmit={onSave}>
+              <fieldset disabled={!isAdmin} className="min-w-0">
+                {section === "prompts" ? <PromptsSection form={form} /> : null}
+                {section === "voice" ? <VoiceSection form={form} /> : null}
+                {section === "llm" ? <LLMSection form={form} /> : null}
+                {section === "stt" ? <STTSection form={form} /> : null}
+                {section === "speech_advanced" ? <SpeechAdvancedSection form={form} /> : null}
+                {section === "timing" ? <TimingSection form={form} /> : null}
+                {section === "tools" ? <ToolsSection form={form} /> : null}
+                {section === "voicemail_detection" ? <VoicemailSection form={form} /> : null}
+              </fieldset>
+            </form>
           </div>
-          {isAdmin ? (
-            <div className="flex gap-2">
-              <Button variant="secondary" onClick={onSave} disabled={saveDraft.isPending}>
-                {saveDraft.isPending ? "Saving…" : "Save draft"}
-              </Button>
-              <Button onClick={onPublishClick}>Publish</Button>
-            </div>
-          ) : (
-            <span className="text-xs text-gray-500">Read-only (viewer role)</span>
-          )}
         </div>
-      </div>
-
-      <div className="flex gap-6">
-        <div className="w-44 shrink-0">
-          <Tabs items={tabItems} active={section} onSelect={(k) => setSection(k as SectionKey)} />
-        </div>
-        <form className="min-w-0 flex-1" onSubmit={onSave}>
-          <fieldset disabled={!isAdmin} className="min-w-0">
-            {section === "prompts" ? <PromptsSection form={form} /> : null}
-            {section === "voice" ? <VoiceSection form={form} /> : null}
-            {section === "llm" ? <LLMSection form={form} /> : null}
-            {section === "stt" ? <STTSection form={form} /> : null}
-            {section === "speech_advanced" ? <SpeechAdvancedSection form={form} /> : null}
-            {section === "timing" ? <TimingSection form={form} /> : null}
-            {section === "tools" ? <ToolsSection form={form} /> : null}
-            {section === "voicemail_detection" ? <VoicemailSection form={form} /> : null}
-          </fieldset>
-        </form>
+        <aside className="w-64 shrink-0 overflow-y-auto border-l border-slate-200 bg-white px-3 py-4">
+          <SectionRail
+            order={SECTION_ORDER}
+            active={section}
+            summaries={summaries}
+            onSelect={(s) => setSection(s)}
+          />
+        </aside>
       </div>
 
       <PublishDialog
