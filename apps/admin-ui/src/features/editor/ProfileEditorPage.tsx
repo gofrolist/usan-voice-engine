@@ -150,30 +150,37 @@ export function ProfileEditorPage() {
     setPublishOpen(true);
   }
 
-  const draftValues = form.watch();
+  // Subscribe ONLY to the fields shown in the toolbar/rail so editing the 24k-char
+  // system prompt does not re-render the whole editor on every keystroke. The full
+  // config for the publish diff is read on demand via form.getValues() below.
+  const llmModel = form.watch("llm.model");
+  const voiceId = form.watch("voice.cartesia_voice_id");
+  const language = form.watch("voice.language");
+  const toolsEnabled = form.watch("tools.enabled");
+  const answerTimeout = form.watch("timing.answer_timeout_s");
   const summaries: Partial<Record<SectionKey, string>> = {
-    llm: draftValues.llm?.model,
-    voice: draftValues.voice?.cartesia_voice_id ?? "default",
-    tools: `${draftValues.tools?.enabled?.length ?? 0} on`,
-    timing: draftValues.timing ? `${draftValues.timing.answer_timeout_s}s` : undefined,
+    llm: llmModel,
+    voice: voiceId ?? "default",
+    tools: `${toolsEnabled?.length ?? 0} on`,
+    timing: Number.isFinite(answerTimeout) ? `${answerTimeout}s` : undefined,
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <EditorToolbar
         name={profile.name}
         status={profile.status}
         publishedVersion={profile.published_version}
         dirty={form.formState.isDirty}
-        model={draftValues.llm?.model ?? "—"}
-        voice={draftValues.voice?.cartesia_voice_id ?? "default"}
-        language={draftValues.voice?.language ?? "default"}
+        model={llmModel ?? "—"}
+        voice={voiceId ?? "default"}
+        language={language ?? "default"}
         isAdmin={isAdmin}
         saving={saveDraft.isPending}
         profileId={id}
         onJump={(s) => setSection(s)}
-        onSave={onSave}
-        onPublish={onPublishClick}
+        onSave={() => void onSave()}
+        onPublish={() => void onPublishClick()}
       />
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
@@ -209,7 +216,7 @@ export function ProfileEditorPage() {
         open={publishOpen}
         onClose={() => setPublishOpen(false)}
         profileId={id}
-        draftConfig={draftValues as AgentConfig}
+        draftConfig={form.getValues() as AgentConfig}
         publishedVersion={profile.published_version}
         onPublished={() => {
           setPublishOpen(false);

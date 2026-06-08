@@ -1,5 +1,5 @@
 import { Suspense, lazy, useRef } from "react";
-import type { OnChange, OnMount } from "@monaco-editor/react";
+import type { EditorProps, OnChange, OnMount } from "@monaco-editor/react";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { Textarea } from "../../../components/ui/textarea";
 
@@ -22,6 +22,24 @@ interface PromptEditorProps {
 
 type EditorInstance = Parameters<OnMount>[0];
 type MonacoInstance = Parameters<OnMount>[1];
+type DecorationsCollection = ReturnType<EditorInstance["createDecorationsCollection"]>;
+type Decorations = NonNullable<Parameters<EditorInstance["createDecorationsCollection"]>[0]>;
+
+// {{variable}} / {slot} tokens. Both arms use [^{}] so a token can never span an
+// unmatched brace — this also avoids quadratic backtracking on pathological input
+// (e.g. a long run of "{" with no closer).
+const TOKEN_RE = /\{\{[^{}]+\}\}|\{[^{}]+\}/g;
+
+const MONACO_OPTIONS: EditorProps["options"] = {
+  minimap: { enabled: false },
+  lineNumbers: "off",
+  wordWrap: "on",
+  fontSize: 13,
+  scrollBeyondLastLine: false,
+  renderLineHighlight: "none",
+  folding: false,
+  padding: { top: 10, bottom: 10 },
+};
 
 function Fallback({ id, value, onChange, rows = 6 }: PromptEditorProps) {
   return (
@@ -33,21 +51,23 @@ export function PromptEditor(props: PromptEditorProps) {
   const { value, onChange, rows = 6 } = props;
   const editorRef = useRef<EditorInstance | null>(null);
   const monacoRef = useRef<MonacoInstance | null>(null);
-  const decorationsRef = useRef<string[]>([]);
+  const collectionRef = useRef<DecorationsCollection | null>(null);
 
-  // Tint {{variable}} (and bare {slot}) tokens so migrated Retell prompts read well.
-  // Re-run on every change; decoration ids are tracked across passes via the ref.
+  // Tint {{variable}} tokens so migrated Retell prompts read well. The decorations
+  // collection is owned by the editor and torn down with it (@monaco-editor/react
+  // disposes the editor on unmount), so no manual cleanup is required.
   function highlightTokens(): void {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
-    if (!editor || !monaco) return;
+    const collection = collectionRef.current;
+    if (!editor || !monaco || !collection) return;
     const model = editor.getModel();
     if (!model) return;
     const text = model.getValue();
-    const re = /\{\{[^}]+\}\}|\{[^{}]+\}/g;
-    const decorations: Parameters<typeof editor.deltaDecorations>[1] = [];
+    const decorations: Decorations = [];
+    TOKEN_RE.lastIndex = 0; // shared global regex — reset before each scan
     let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
+    while ((m = TOKEN_RE.exec(text)) !== null) {
       const start = model.getPositionAt(m.index);
       const end = model.getPositionAt(m.index + m[0].length);
       decorations.push({
@@ -55,12 +75,13 @@ export function PromptEditor(props: PromptEditorProps) {
         options: { inlineClassName: "prompt-var-token" },
       });
     }
-    decorationsRef.current = editor.deltaDecorations(decorationsRef.current, decorations);
+    collection.set(decorations);
   }
 
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+    collectionRef.current = editor.createDecorationsCollection();
     highlightTokens();
   };
 
@@ -79,16 +100,7 @@ export function PromptEditor(props: PromptEditorProps) {
             value={value}
             onChange={handleChange}
             onMount={handleMount}
-            options={{
-              minimap: { enabled: false },
-              lineNumbers: "off",
-              wordWrap: "on",
-              fontSize: 13,
-              scrollBeyondLastLine: false,
-              renderLineHighlight: "none",
-              folding: false,
-              padding: { top: 10, bottom: 10 },
-            }}
+            options={MONACO_OPTIONS}
           />
         </Suspense>
       </ErrorBoundary>

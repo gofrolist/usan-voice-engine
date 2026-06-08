@@ -10,7 +10,7 @@ export function AppLayout() {
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-900">
       <NavSidebar />
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <Outlet />
       </main>
       <ErrorToast />
