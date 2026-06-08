@@ -33,7 +33,7 @@ export const fieldMeta: Record<string, FieldMeta> = {
   // Prompts
   "prompts.system_prompt": {
     label: "System prompt",
-    help: "Base persona/instructions. No '{' or '}'. Max 4000 chars.",
+    help: "Base persona/instructions. Supports {{variables}}. Up to 24,000 chars.",
   },
   "prompts.greeting": {
     label: "Greeting",
@@ -49,7 +49,7 @@ export const fieldMeta: Record<string, FieldMeta> = {
   },
   "prompts.checkin_flow_instructions": {
     label: "Check-in flow instructions",
-    help: "Step-by-step check-in script. Max 6000 chars.",
+    help: "Step-by-step check-in script. Supports {{variables}}. Up to 24,000 chars.",
   },
   "prompts.goodbye_message": {
     label: "Goodbye message",

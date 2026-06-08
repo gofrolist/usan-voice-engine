@@ -24,12 +24,14 @@ function noBraces(label: string) {
   };
 }
 
-function promptField(maxLength: number, label: string) {
-  return z
+function promptField(maxLength: number, label: string, allowBraces = false) {
+  const base = z
     .string()
     .min(1, `${label} is required`)
-    .max(maxLength, `${label} must be at most ${maxLength} characters`)
-    .superRefine(noBraces(label));
+    .max(maxLength, `${label} must be at most ${maxLength} characters`);
+  // system_prompt and checkin_flow_instructions hold {{variable}} tokens for migrated
+  // prompts and are never str.format-ed on the agent, so they skip the brace check.
+  return allowBraces ? base : base.superRefine(noBraces(label));
 }
 
 // inbound_personalization_template: allow ONLY {elder_name} and {last_check_in_line}.
@@ -61,11 +63,13 @@ const personalizationTemplate = z
   });
 
 export const promptsSchema = z.object({
-  system_prompt: promptField(4000, "System prompt"),
+  // Large free-form behavior fields: braces allowed (hold {{variable}} tokens; never
+  // str.format-ed). Mirrors apps/api PromptsConfig.
+  system_prompt: promptField(24000, "System prompt", true),
   greeting: promptField(1000, "Greeting"),
   recording_disclosure: promptField(1000, "Recording disclosure"),
   voicemail_message: promptField(1000, "Voicemail message"),
-  checkin_flow_instructions: promptField(6000, "Check-in flow instructions"),
+  checkin_flow_instructions: promptField(24000, "Check-in flow instructions", true),
   goodbye_message: promptField(1000, "Goodbye message"),
   inbound_opening: promptField(1000, "Inbound opening"),
   inbound_personalization_template: personalizationTemplate,
