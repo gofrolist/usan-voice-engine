@@ -58,3 +58,24 @@ async def test_leave_voicemail_skips_report_without_call_id(monkeypatch):
 
     assert called == []  # no call_id → nothing to report
     ctx.delete_room.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_leave_voicemail_speaks_configured_message(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from usan_agent import voicemail_action
+
+    monkeypatch.setattr(voicemail_action, "report_voicemail_left", AsyncMock())
+    ctx = MagicMock()
+    ctx.delete_room = AsyncMock()
+    ctx.shutdown = MagicMock()
+    session = MagicMock()
+    session.interrupt = MagicMock()
+    handle = AsyncMock()()
+    session.say = MagicMock(return_value=handle)
+
+    await voicemail_action.leave_voicemail(
+        ctx, session, "call-1", MagicMock(), voicemail_message="CUSTOM VM"
+    )
+    assert session.say.call_args.args[0] == "CUSTOM VM"
