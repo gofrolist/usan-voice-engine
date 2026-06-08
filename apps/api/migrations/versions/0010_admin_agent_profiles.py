@@ -31,7 +31,7 @@ def upgrade() -> None:
             name                TEXT NOT NULL UNIQUE,
             description         TEXT,
             status              profile_status NOT NULL DEFAULT 'active',
-            draft_config        JSONB NOT NULL DEFAULT '{}',
+            draft_config        JSONB NOT NULL,
             published_version   INTEGER,
             is_default_outbound BOOLEAN NOT NULL DEFAULT false,
             is_default_inbound  BOOLEAN NOT NULL DEFAULT false,

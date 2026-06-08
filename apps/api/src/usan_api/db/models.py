@@ -266,9 +266,7 @@ class AgentProfile(Base):
         nullable=False,
         server_default=ProfileStatus.ACTIVE.value,
     )
-    draft_config: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'")
-    )
+    draft_config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     # The live version number (joins agent_profile_versions on (id, version));
     # NULL means the profile has never been published.
     published_version: Mapped[int | None] = mapped_column(Integer)
