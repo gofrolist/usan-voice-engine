@@ -19,6 +19,13 @@ async def session_factory(async_database_url):
             text("TRUNCATE agent_profile_versions, agent_profiles RESTART IDENTITY CASCADE")
         )
     yield async_sessionmaker(engine, expire_on_commit=False)
+    # Teardown truncate too: committed default profiles otherwise leak into other test
+    # files (e.g. test_runtime.py's "nothing configured" assertion), making them pass
+    # only by run-order luck. Clean up on both ends so neither file leaks into the other.
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("TRUNCATE agent_profile_versions, agent_profiles RESTART IDENTITY CASCADE")
+        )
     await engine.dispose()
 
 
@@ -131,3 +138,22 @@ async def test_get_published_config_none_when_unpublished(session_factory):
     async with session_factory() as db:
         profile = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
         assert await repo.get_published_config(db, profile) is None
+
+
+async def test_resolve_degrades_when_default_config_invalid(session_factory):
+    # The _resolved_from_profile `except ValidationError` safety branch: a published
+    # default whose stored JSON no longer validates must fall through (and, with nothing
+    # else resolvable, the walk returns None) rather than raising.
+    async with session_factory() as db:
+        pid = await _published(db, voice_id="default-voice")
+        await repo.set_default(db, pid, direction="outbound")
+        await db.commit()
+    async with session_factory() as db:
+        # Corrupt the stored version config so AgentConfig.model_validate raises.
+        await db.execute(text("UPDATE agent_profile_versions SET config = '{}'::jsonb"))
+        await db.commit()
+    async with session_factory() as db:
+        resolved = await repo.resolve_agent_config(
+            db, profile_override=None, elder_profile_id=None, direction="outbound"
+        )
+        assert resolved is None  # invalid default falls through; nothing else resolves
