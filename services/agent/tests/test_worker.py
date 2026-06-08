@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -519,3 +521,58 @@ async def test_outbound_fetches_and_applies_config(monkeypatch):
     assert seen["direction"] == "outbound"
     assert seen["call_id"] == "call-1"
     assert seen["session_cfg"] is not None
+
+
+async def test_max_duration_guard_shuts_down_after_duration():
+    ctx = MagicMock()
+    ctx.shutdown = MagicMock()
+    await worker._max_duration_guard(ctx, 0.01)  # tiny duration
+    ctx.shutdown.assert_called_once()
+    assert ctx.shutdown.call_args.kwargs.get("reason") == "max_call_duration"
+
+
+async def test_max_duration_guard_noop_when_cancelled():
+    ctx = MagicMock()
+    ctx.shutdown = MagicMock()
+    task = asyncio.create_task(worker._max_duration_guard(ctx, 100.0))
+    await asyncio.sleep(0)  # let it start the sleep
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    ctx.shutdown.assert_not_called()  # cancelled before firing → no shutdown
+
+
+async def test_outbound_arms_duration_guard(monkeypatch):
+    _settings(monkeypatch)
+    created = {}
+
+    def _fake_create_task(coro):
+        created["coro"] = coro
+        coro.close()  # don't actually run the sleep
+        return MagicMock()
+
+    monkeypatch.setattr(worker.asyncio, "create_task", _fake_create_task)
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
+
+    def _fake_build_session(settings, cfg=None, userdata=None):
+        session = MagicMock()
+        session.start = AsyncMock()
+        session.say = AsyncMock()
+        session.on = MagicMock()
+        return session
+
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
+    monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
+    monkeypatch.setattr(worker, "start_call_recording", AsyncMock())
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock()
+    ctx.room.name = "usan-outbound-x"
+    ctx.job.metadata = '{"call_id": "call-1", "direction": "outbound", "dynamic_vars": {}}'
+
+    await worker.entrypoint(ctx)
+    assert "coro" in created  # the guard was armed
