@@ -3,23 +3,25 @@ import { cn } from "../../lib/cn";
 
 export function Table({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className="overflow-x-auto rounded border border-gray-200">
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-card">
       <table className={cn("w-full border-collapse text-sm", className)}>{children}</table>
     </div>
   );
 }
 
 export function Thead({ children }: { children: ReactNode }) {
-  return <thead className="bg-gray-50 text-left text-xs uppercase text-gray-500">{children}</thead>;
+  return (
+    <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">{children}</thead>
+  );
 }
 
 export function Tbody({ children }: { children: ReactNode }) {
-  return <tbody className="divide-y divide-gray-100">{children}</tbody>;
+  return <tbody className="divide-y divide-slate-100">{children}</tbody>;
 }
 
 export function Tr({ className, children, ...props }: HTMLAttributes<HTMLTableRowElement>) {
   return (
-    <tr className={cn("hover:bg-gray-50", className)} {...props}>
+    <tr className={cn("hover:bg-slate-50", className)} {...props}>
       {children}
     </tr>
   );

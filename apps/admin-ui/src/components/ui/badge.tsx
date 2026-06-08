@@ -4,7 +4,7 @@ import { cn } from "../../lib/cn";
 type Tone = "gray" | "green" | "blue" | "red" | "amber";
 
 const TONES: Record<Tone, string> = {
-  gray: "bg-gray-100 text-gray-700",
+  gray: "bg-slate-100 text-slate-600",
   green: "bg-green-100 text-green-800",
   blue: "bg-blue-100 text-blue-800",
   red: "bg-red-100 text-red-800",
