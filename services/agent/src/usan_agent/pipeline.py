@@ -1,7 +1,10 @@
 """Factory for the LiveKit Agents 1.x voice pipeline.
 
-The session can carry per-call check-in state (userdata) so the outbound agent's
-tools can act during the call; inbound stays greet-only.
+The session is built from a resolved AgentConfig (admin-editable), falling back to
+DEFAULT_AGENT_CONFIG (the agent's single source of default truth). Optional knobs are
+passed only when set, so unset values preserve each plugin's own default. The session
+can carry per-call check-in state (userdata) so the outbound agent's tools can act
+during the call; inbound greet-only stays tool-less.
 """
 
 from typing import Any
@@ -10,85 +13,134 @@ from livekit.agents import AgentSession, ChatContext
 from livekit.agents.voice import Agent
 from livekit.plugins import cartesia, google, silero
 from livekit.plugins.turn_detector.english import EnglishModel
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from loguru import logger
 
+from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
 from usan_agent.settings import Settings
 
-SYSTEM_PROMPT = """You are a warm, patient daily check-in assistant from USAN Retirement.
-You are speaking to an elder over the phone. Speak slowly, clearly, and kindly.
-Keep responses short — one or two sentences. Pause to let them respond.
-"""
-
-GREETING = "Hello! This is your daily check-in from USAN. How are you feeling today?"
-
-RECORDING_DISCLOSURE = (
-    "Before we begin, please know that this call is recorded for quality and to support your care."
-)
-
-VOICEMAIL_MESSAGE = (
-    "Hello, this is your daily check-in from USAN Retirement. "
-    "We're sorry we missed you. We'll try again a little later. "
-    "Take care, and have a wonderful day."
-)
-
-STT_MODEL = "ink-whisper"
-# Served on Vertex AI (HIPAA-BAA-covered) via the GLOBAL endpoint — verified: 200 on
-# location=global, 404 on regional us-east1/us-central1. So VERTEX_LOCATION must be
-# "global" for this model (set in settings). See Plan 4e Task A1.
-LLM_MODEL = "gemini-3.1-flash-lite"
+# Back-compat module aliases — the current defaults, sourced from DEFAULT_AGENT_CONFIG
+# so there is a single in-agent source of truth (no drift).
+SYSTEM_PROMPT = DEFAULT_AGENT_CONFIG.prompts.system_prompt
+GREETING = DEFAULT_AGENT_CONFIG.prompts.greeting
+RECORDING_DISCLOSURE = DEFAULT_AGENT_CONFIG.prompts.recording_disclosure
+VOICEMAIL_MESSAGE = DEFAULT_AGENT_CONFIG.prompts.voicemail_message
+STT_MODEL = DEFAULT_AGENT_CONFIG.stt.model
+LLM_MODEL = DEFAULT_AGENT_CONFIG.llm.model
 
 
-def build_session(settings: Settings, userdata: Any = None) -> AgentSession[Any]:
-    """Construct an AgentSession wiring STT, LLM, TTS, VAD, and turn-detector.
+def _build_turn_detection(mode: str | None) -> Any:
+    """Map the config's turn_detection to a LiveKit turn-detector (or the "vad" mode).
 
-    ``userdata`` (a check_in.CheckInData on outbound calls) is exposed to tools via
-    RunContext.userdata; None for greet-only inbound calls.
+    "english"/None preserve today's EnglishModel default.
     """
-    logger.info("Building AgentSession (cartesia STT/TTS, {model})", model=LLM_MODEL)
-    return AgentSession(
-        userdata=userdata,
-        vad=silero.VAD.load(),
-        stt=cartesia.STT(
-            model=STT_MODEL,
-            api_key=settings.cartesia_api_key,
-        ),
-        llm=google.LLM(
-            model=LLM_MODEL,
-            vertexai=True,
-            project=settings.gcp_project,
-            location=settings.vertex_location,
-        ),  # no api_key → ADC via the attached VM service account (Vertex AI, BAA-covered)
-        tts=cartesia.TTS(
-            voice=settings.default_cartesia_voice_id,
-            api_key=settings.cartesia_api_key,
-        ),
-        turn_detection=EnglishModel(),
-    )
+    if mode == "multilingual":
+        return MultilingualModel()
+    if mode == "vad":
+        return "vad"
+    return EnglishModel()
 
 
-def build_agent() -> Agent:
-    """Construct the Agent with system prompt."""
+def build_session(
+    settings: Settings, cfg: AgentConfig | None = None, userdata: Any = None
+) -> AgentSession[Any]:
+    """Construct an AgentSession from a resolved config, wiring STT/LLM/TTS/VAD/turn-detector.
+
+    ``cfg`` defaults to DEFAULT_AGENT_CONFIG. ``userdata`` (a check_in.CheckInData on
+    check-in calls) is exposed to tools via RunContext.userdata; None for greet-only.
+    Optional knobs are passed only when non-None to preserve plugin defaults.
+    """
+    cfg = cfg or DEFAULT_AGENT_CONFIG
+    sa = cfg.speech_advanced
+    logger.info("Building AgentSession ({model})", model=cfg.llm.model)
+
+    vad_kwargs: dict[str, Any] = {}
+    if sa.vad_min_silence_s is not None:
+        vad_kwargs["min_silence_duration"] = sa.vad_min_silence_s
+    if sa.vad_activation_threshold is not None:
+        vad_kwargs["activation_threshold"] = sa.vad_activation_threshold
+
+    stt_kwargs: dict[str, Any] = {"model": cfg.stt.model, "api_key": settings.cartesia_api_key}
+    if cfg.stt.language is not None:
+        stt_kwargs["language"] = cfg.stt.language
+
+    llm_kwargs: dict[str, Any] = {
+        "model": cfg.llm.model,
+        "vertexai": True,
+        "project": settings.gcp_project,
+        "location": settings.vertex_location,
+    }
+    if cfg.llm.temperature is not None:
+        llm_kwargs["temperature"] = cfg.llm.temperature
+
+    tts_kwargs: dict[str, Any] = {
+        "voice": cfg.voice.cartesia_voice_id or settings.default_cartesia_voice_id,
+        "api_key": settings.cartesia_api_key,
+    }
+    if cfg.voice.tts_model is not None:
+        tts_kwargs["model"] = cfg.voice.tts_model
+    if cfg.voice.speed is not None:
+        tts_kwargs["speed"] = cfg.voice.speed
+    if cfg.voice.language is not None:
+        tts_kwargs["language"] = cfg.voice.language
+
+    session_kwargs: dict[str, Any] = {
+        "userdata": userdata,
+        "vad": silero.VAD.load(**vad_kwargs),
+        "stt": cartesia.STT(**stt_kwargs),
+        # no api_key on the LLM → ADC via the attached VM service account (Vertex AI,
+        # BAA-covered). project/location stay in settings (infra/BAA config).
+        "llm": google.LLM(**llm_kwargs),
+        "tts": cartesia.TTS(**tts_kwargs),
+        "turn_detection": _build_turn_detection(sa.turn_detection),
+    }
+    if sa.min_endpointing_delay_s is not None:
+        session_kwargs["min_endpointing_delay"] = sa.min_endpointing_delay_s
+    if sa.max_endpointing_delay_s is not None:
+        session_kwargs["max_endpointing_delay"] = sa.max_endpointing_delay_s
+    if sa.min_interruption_duration_s is not None:
+        session_kwargs["min_interruption_duration"] = sa.min_interruption_duration_s
+    if sa.min_interruption_words is not None:
+        session_kwargs["min_interruption_words"] = sa.min_interruption_words
+
+    return AgentSession(**session_kwargs)
+
+
+def build_agent(cfg: AgentConfig | None = None) -> Agent:
+    """Construct the greet-only Agent with the configured system prompt (no tools)."""
+    cfg = cfg or DEFAULT_AGENT_CONFIG
     return Agent(
-        instructions=SYSTEM_PROMPT,
+        instructions=cfg.prompts.system_prompt,
         chat_ctx=ChatContext(),
     )
 
 
-async def say_recording_disclosure(session: AgentSession[Any]) -> None:
+async def say_recording_disclosure(
+    session: AgentSession[Any], cfg: AgentConfig | None = None
+) -> None:
     """Speak the non-interruptible recording disclosure (spec §10) to completion.
 
     Awaiting this before starting egress guarantees the consent notice is heard
     before any audio is captured.
     """
-    await session.say(RECORDING_DISCLOSURE, allow_interruptions=False, add_to_chat_ctx=False)
+    cfg = cfg or DEFAULT_AGENT_CONFIG
+    await session.say(
+        cfg.prompts.recording_disclosure, allow_interruptions=False, add_to_chat_ctx=False
+    )
 
 
-async def greet(session: AgentSession[Any], *, include_disclosure: bool = True) -> None:
+async def greet(
+    session: AgentSession[Any],
+    cfg: AgentConfig | None = None,
+    *,
+    include_disclosure: bool = True,
+) -> None:
     """Speak the recording disclosure (spec §10), then the opening greeting.
 
     ``include_disclosure=False`` skips the disclosure when the caller has split it
     out to gate egress on consent (outbound), so it is never spoken twice.
     """
+    cfg = cfg or DEFAULT_AGENT_CONFIG
     if include_disclosure:
-        await say_recording_disclosure(session)
-    await session.say(GREETING, allow_interruptions=True)
+        await say_recording_disclosure(session, cfg)
+    await session.say(cfg.prompts.greeting, allow_interruptions=True)

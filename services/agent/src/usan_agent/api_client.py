@@ -6,16 +6,21 @@ to the call being mutated.
 """
 
 import time
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 import jwt
 from loguru import logger
 
+from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
 from usan_agent.ids import validate_call_id as _validate_call_id
 from usan_agent.settings import Settings
 
 _TOKEN_TTL_S = 300
+
+# The config fetch is on the call's critical path (before the agent can speak), so use
+# a tighter timeout than the 10s tool calls — a slow API must not delay answering.
+_CONFIG_TIMEOUT_S = 5.0
 
 
 def _mint_token(call_id: str, settings: Settings) -> str:
@@ -170,3 +175,35 @@ async def start_inbound_call(
     except Exception:
         logger.bind(room=livekit_room).warning("Failed to register inbound call with API")
         return None
+
+
+async def fetch_agent_config(
+    settings: Settings, *, direction: Literal["inbound", "outbound"], call_id: str | None = None
+) -> AgentConfig:
+    """Fetch the resolved agent config; degrade to DEFAULT_AGENT_CONFIG on any failure.
+
+    Best-effort and never raises: a failed config fetch must never crash a call. Uses
+    the worker token (matches the server's require_worker_token) and api_base_url
+    (so the plaintext-http fail-closed rule holds).
+    """
+    try:
+        url = f"{settings.api_base_url}/v1/runtime/agent-config"
+        headers = {"Authorization": f"Bearer {_mint_worker_token(settings)}"}
+        params: dict[str, str] = {"direction": direction}
+        if call_id:
+            params["call_id"] = call_id
+        async with httpx.AsyncClient(timeout=_CONFIG_TIMEOUT_S) as client:
+            response = await client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            body = response.json()
+        return AgentConfig.model_validate(body["config"])
+    except Exception as exc:
+        # Log the exception TYPE (no body/PHI) so a persistent parse/schema mismatch
+        # between the two AgentConfig copies is distinguishable from a transient network
+        # blip during triage. Still best-effort: never re-raise (CancelledError is
+        # BaseException and is not caught here).
+        logger.bind(direction=direction, err=type(exc).__name__).warning(
+            "agent-config fetch failed; using defaults"
+        )
+        # Return a copy so a caller mutating the result can't corrupt the shared singleton.
+        return DEFAULT_AGENT_CONFIG.model_copy(deep=True)

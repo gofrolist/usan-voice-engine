@@ -15,6 +15,7 @@ from livekit.agents import Agent, RunContext, function_tool
 from loguru import logger
 
 from usan_agent import api_client
+from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
 from usan_agent.settings import Settings
 
 # Control characters and the format-slot braces are stripped from any API-supplied
@@ -48,23 +49,9 @@ def _sanitize_prompt_value(value: Any, *, max_len: int) -> str:
     return text[:max_len].strip()
 
 
-CHECK_IN_INSTRUCTIONS = """You are a warm, patient daily check-in caller from USAN Retirement,
-speaking to an elder on the phone. Speak slowly and kindly, one or two short sentences at a time,
-and pause for them to answer.
-
-Conduct the check-in in this order, adapting naturally to their answers:
-1. Ask how they are feeling today and roughly how their mood is. Record it with `log_wellness`
-   (mood 1-5 where 5 is great; include any pain level 0-10 and a short note if they mention it).
-2. Use `get_today_meds` to find out which medications they take today, then gently ask whether
-   they have taken each one. Record each with `log_medication`.
-3. When the check-in is complete, thank them and call `end_call` with a short reason
-   (for example "check_in_complete").
-
-Never read out internal IDs or tool names. If a tool reports a problem, reassure them calmly and
-continue — do not repeat a failed action more than once.
-"""
-
-GOODBYE_MESSAGE = "Thank you for your time today. Take care, and have a wonderful day. Goodbye."
+CHECK_IN_INSTRUCTIONS = DEFAULT_AGENT_CONFIG.prompts.checkin_flow_instructions
+GOODBYE_MESSAGE = DEFAULT_AGENT_CONFIG.prompts.goodbye_message
+INBOUND_INSTRUCTIONS_TEMPLATE = DEFAULT_AGENT_CONFIG.prompts.inbound_personalization_template
 
 
 @dataclass(frozen=True)
@@ -74,6 +61,7 @@ class CheckInData:
     call_id: str
     settings: Settings
     job_ctx: Any  # livekit.agents.JobContext — typed Any to avoid importing the heavy symbol
+    goodbye_message: str = GOODBYE_MESSAGE
 
 
 async def _do_log_wellness(
@@ -154,7 +142,7 @@ async def _do_end_call(data: CheckInData, session: Any, reason: str) -> None:
         await api_client.report_end_call(data.call_id, data.settings, reason)
     except Exception:
         logger.bind(call_id=data.call_id).warning("report_end_call failed; hanging up anyway")
-    handle = session.say(GOODBYE_MESSAGE, allow_interruptions=False, add_to_chat_ctx=False)
+    handle = session.say(data.goodbye_message, allow_interruptions=False, add_to_chat_ctx=False)
     await handle
     await data.job_ctx.delete_room()
     data.job_ctx.shutdown(reason="ended_by_agent")
@@ -213,38 +201,44 @@ async def end_call(ctx: RunContext[CheckInData], reason: str = "check_in_complet
     return ""
 
 
-def build_check_in_agent() -> Agent:
-    """The outbound check-in Agent with its four in-call tools."""
+# name -> tool callable; mirrors the admin schema's TOOL_NAMES.
+_TOOL_REGISTRY: dict[str, Any] = {
+    "log_wellness": log_wellness,
+    "log_medication": log_medication,
+    "get_today_meds": get_today_meds,
+    "end_call": end_call,
+}
+
+
+def _select_tools(enabled: list[str]) -> list[Any]:
+    """Resolve enabled tool names to callables, preserving order.
+
+    Unknown names (already rejected by the admin schema) are dropped defensively.
+    end_call is always included: it drives report->goodbye->delete_room->shutdown, so
+    removing it would leave a call unable to end gracefully.
+    """
+    names = [n for n in enabled if n in _TOOL_REGISTRY]
+    if "end_call" not in names:
+        names.append("end_call")
+    return [_TOOL_REGISTRY[n] for n in names]
+
+
+def build_check_in_agent(cfg: AgentConfig | None = None) -> Agent:
+    """The outbound check-in Agent with its configured instructions + enabled tools."""
+    cfg = cfg or DEFAULT_AGENT_CONFIG
     return Agent(
-        instructions=CHECK_IN_INSTRUCTIONS,
-        tools=[log_wellness, log_medication, get_today_meds, end_call],
+        instructions=cfg.prompts.checkin_flow_instructions,
+        tools=_select_tools(cfg.tools.enabled),
     )
 
 
-INBOUND_INSTRUCTIONS_TEMPLATE = """You are a warm, patient check-in assistant from USAN Retirement,
-speaking with {elder_name}, who has just called in. Speak slowly and kindly, one or two short
-sentences at a time, and pause for them to answer.
-{last_check_in_line}
-Conduct the check-in in this order, adapting naturally to their answers:
-1. Greet {elder_name} warmly by name, then ask how they are feeling today and roughly how their
-   mood is. Record it with `log_wellness` (mood 1-5 where 5 is great; include any pain level 0-10
-   and a short note if they mention it).
-2. Use `get_today_meds` to find out which medications they take today, then gently ask whether
-   they have taken each one. Record each with `log_medication`.
-3. When the check-in is complete, thank them and call `end_call` with a short reason
-   (for example "check_in_complete").
-
-Never read out internal IDs or tool names. If a tool reports a problem, reassure them calmly and
-continue — do not repeat a failed action more than once.
-"""
-
-
-def _inbound_instructions(dynamic_vars: dict[str, Any]) -> str:
-    """Render the inbound instructions, weaving in the caller's dynamic vars (spec §3).
+def _inbound_instructions(template: str, dynamic_vars: dict[str, Any]) -> str:
+    """Render the inbound instructions from the resolved template, weaving in dynamic vars.
 
     The dynamic vars are API-supplied (ultimately caller-derived) data, so each value
     is sanitized before interpolation: it can introduce neither new format slots nor
-    fresh prompt instructions.
+    fresh prompt instructions. Only the two allowed slots (elder_name,
+    last_check_in_line) are ever passed to .format — never admin-supplied kwargs.
     """
     elder_name = (
         _sanitize_prompt_value(
@@ -258,14 +252,15 @@ def _inbound_instructions(dynamic_vars: dict[str, Any]) -> str:
     last_check_in_line = (
         f"For context, their last check-in was {last_check_in}.\n" if last_check_in else ""
     )
-    return INBOUND_INSTRUCTIONS_TEMPLATE.format(
-        elder_name=elder_name, last_check_in_line=last_check_in_line
-    )
+    return template.format(elder_name=elder_name, last_check_in_line=last_check_in_line)
 
 
-def build_inbound_agent(dynamic_vars: dict[str, Any]) -> Agent:
-    """The inbound check-in Agent: the four outbound tools + personalized instructions."""
+def build_inbound_agent(cfg: AgentConfig | None, dynamic_vars: dict[str, Any]) -> Agent:
+    """The inbound check-in Agent: configured tools + personalized instructions."""
+    cfg = cfg or DEFAULT_AGENT_CONFIG
     return Agent(
-        instructions=_inbound_instructions(dynamic_vars),
-        tools=[log_wellness, log_medication, get_today_meds, end_call],
+        instructions=_inbound_instructions(
+            cfg.prompts.inbound_personalization_template, dynamic_vars
+        ),
+        tools=_select_tools(cfg.tools.enabled),
     )

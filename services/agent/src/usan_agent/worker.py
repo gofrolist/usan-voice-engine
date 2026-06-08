@@ -8,28 +8,29 @@ Run with:
 import asyncio
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from livekit.agents import JobContext, WorkerOptions, cli
 from loguru import logger
 
-from usan_agent.api_client import start_inbound_call
+from usan_agent.agent_config import AgentConfig
+from usan_agent.api_client import fetch_agent_config, start_inbound_call
 from usan_agent.check_in import CheckInData, build_check_in_agent, build_inbound_agent
 from usan_agent.ids import validate_call_id
 from usan_agent.logging_config import configure_logging
 from usan_agent.metrics_hooks import register_metrics_flush
-from usan_agent.pipeline import (
-    RECORDING_DISCLOSURE,
-    build_agent,
-    build_session,
-    greet,
-    say_recording_disclosure,
-)
+from usan_agent.pipeline import build_agent, build_session, greet, say_recording_disclosure
 from usan_agent.recording import start_call_recording
 from usan_agent.settings import Settings, get_settings
 from usan_agent.transcript import register_transcript_flush
-from usan_agent.voicemail import VOICEMAIL_WINDOW_S, VoicemailWatcher
+from usan_agent.voicemail import VoicemailWatcher, build_matcher
 from usan_agent.voicemail_action import leave_voicemail
+
+# Strong references to fire-and-forget background tasks (the max-duration guard).
+# asyncio only holds a weak reference to a bare create_task() result, so without
+# this the GC may collect a still-running task and silently cancel it. Each task
+# removes itself via add_done_callback when it finishes.
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 
 @dataclass(frozen=True)
@@ -59,12 +60,6 @@ def parse_metadata(raw: str | None) -> CallMetadata:
     )
 
 
-_INBOUND_OPENING = (
-    "Greet the caller warmly by name if you know it, and ask how they are feeling "
-    "today to begin the daily check-in."
-)
-
-
 def _caller_phone(participant: Any) -> str | None:
     """Read the inbound caller's E.164 number from the SIP participant attributes.
 
@@ -85,13 +80,13 @@ def _mask_phone(phone: str | None) -> str:
     return "***" + phone[-4:]
 
 
-async def _run_inbound(ctx: JobContext, settings: Settings, log: Any) -> None:
+async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, log: Any) -> None:
     """Inbound: wait for the caller, look them up, run a personalized check-in.
 
-    No voicemail detection on inbound (spec §7). A known elder gets the tool-driven
-    check-in with a personalized opening + transcript flush; an unknown number or a
-    failed lookup falls back to a greet-only conversation (no per-elder state, so no
-    orphaned wellness/medication logs).
+    Uses the inbound default config (cfg). No voicemail detection on inbound (spec §7).
+    A known elder gets the tool-driven check-in with a personalized opening + transcript
+    flush; an unknown number or a failed lookup falls back to a greet-only conversation
+    (no per-elder state, so no orphaned wellness/medication logs).
     """
     participant = await ctx.wait_for_participant()
     phone = _caller_phone(participant)
@@ -106,26 +101,41 @@ async def _run_inbound(ctx: JobContext, settings: Settings, log: Any) -> None:
     if info and info.get("elder_known") and info.get("call_id"):
         call_id = str(info["call_id"])
         dynamic_vars = info.get("dynamic_vars") or {}
-        data = CheckInData(call_id=call_id, settings=settings, job_ctx=ctx)
-        session = build_session(settings, userdata=data)
-        agent = build_inbound_agent(dynamic_vars)
+        data = CheckInData(
+            call_id=call_id,
+            settings=settings,
+            job_ctx=ctx,
+            goodbye_message=cfg.prompts.goodbye_message,
+        )
+        session = build_session(settings, cfg, userdata=data)
+        agent = build_inbound_agent(cfg, dynamic_vars)
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
+        # Hold a reference so the guard task is not garbage-collected before it
+        # completes (asyncio keeps only a weak reference to fire-and-forget tasks).
+        _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
+        _BACKGROUND_TASKS.add(_guard_task)
+        _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
         log.info("Inbound check-in started for known elder (call_id={cid})", cid=call_id)
         # Consent before capture: the disclosure must finish playing before egress
         # starts, so no audio is recorded prior to the spoken notice (consent ordering).
-        await session.say(RECORDING_DISCLOSURE, allow_interruptions=False, add_to_chat_ctx=False)
+        await say_recording_disclosure(session, cfg)
         await start_call_recording(ctx, call_id, settings)
-        await session.generate_reply(instructions=_INBOUND_OPENING)
+        await session.generate_reply(instructions=cfg.prompts.inbound_opening)
         return
 
     # Unknown caller or lookup failed: greet-only, no per-elder state.
-    session = build_session(settings)
-    agent = build_agent()
+    session = build_session(settings, cfg)
+    agent = build_agent(cfg)
     await session.start(agent=agent, room=ctx.room)
+    # Arm the max-duration guard on this path too (it backstops the cost/safety cap on
+    # every answered call). Hold a reference so the fire-and-forget task is not GC'd.
+    _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
+    _BACKGROUND_TASKS.add(_guard_task)
+    _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
     log.info("Inbound greet-only (no known elder)")
-    await greet(session)
+    await greet(session, cfg)
 
 
 async def _run_detection_window(
@@ -135,6 +145,7 @@ async def _run_detection_window(
     *,
     call_id: str | None,
     settings: Settings,
+    cfg: AgentConfig,
 ) -> None:
     """Greet, then over the detection window leave a voicemail or fall through."""
     # The watcher is already subscribed to user_input_transcribed (in entrypoint),
@@ -142,10 +153,35 @@ async def _run_detection_window(
     # watcher; wait_until_detected returns immediately if the event is already set.
     # The recording disclosure was already spoken (gating egress on consent) before
     # this window, so the greeting here must not repeat it.
-    await greet(session, include_disclosure=False)
-    if await watcher.wait_until_detected(VOICEMAIL_WINDOW_S):
-        await leave_voicemail(ctx, session, call_id, settings)
+    await greet(session, cfg, include_disclosure=False)
+    if await watcher.wait_until_detected(cfg.voicemail_detection.window_s):
+        await leave_voicemail(
+            ctx, session, call_id, settings, voicemail_message=cfg.prompts.voicemail_message
+        )
     # else: a human answered — the conversation continues (single-turn in Plan 1).
+
+
+async def _max_duration_guard(ctx: JobContext, max_s: float) -> None:
+    """Backstop: shut the job down if a call exceeds its configured max duration.
+
+    A cost/safety cap (also covered API-side for outbound). Nothing cancels this task;
+    it is killed by process teardown (process-per-job), so on a normal call the sleep
+    simply never elapses and the guard never fires.
+    """
+    try:
+        await asyncio.sleep(max_s)
+    except asyncio.CancelledError:
+        return
+    logger.bind(room=ctx.room.name).warning("Max call duration reached; ending job")
+    # Hang up the elder's SIP/PSTN leg first: shutdown() disconnects the agent but
+    # leaves the room (and the billable carrier leg) up until empty_timeout. Awaiting
+    # matters — delete_room enqueues work that shutdown would otherwise cancel. Mirrors
+    # check_in._do_end_call / voicemail_action.leave_voicemail (delete_room then shutdown).
+    try:
+        await ctx.delete_room()
+    except Exception:
+        logger.bind(room=ctx.room.name).warning("delete_room failed in max-duration guard")
+    ctx.shutdown(reason="max_call_duration")
 
 
 async def entrypoint(ctx: JobContext) -> None:
@@ -158,6 +194,14 @@ async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     log.info("Connected to room")
 
+    # Resolve the published agent config once per call (best-effort; never raises).
+    # meta.direction is a free-form str from dispatch metadata; narrow it to the
+    # config endpoint's Literal (anything other than "outbound" is treated as inbound).
+    direction: Literal["inbound", "outbound"] = (
+        "outbound" if meta.direction == "outbound" else "inbound"
+    )
+    cfg = await fetch_agent_config(settings, direction=direction, call_id=meta.call_id)
+
     if meta.direction == "outbound" and meta.call_id:
         # call_id comes from job-dispatch metadata (a less-trusted boundary) and flows
         # into URL paths and the GCS recording key. Validate once here and use the
@@ -168,17 +212,23 @@ async def entrypoint(ctx: JobContext) -> None:
             log.error("Invalid call_id in job metadata; refusing outbound job")
             ctx.shutdown(reason="invalid_metadata")
             return
-        data = CheckInData(call_id=call_id, settings=settings, job_ctx=ctx)
-        session = build_session(settings, userdata=data)
-        agent = build_check_in_agent()
+        data = CheckInData(
+            call_id=call_id,
+            settings=settings,
+            job_ctx=ctx,
+            goodbye_message=cfg.prompts.goodbye_message,
+        )
+        session = build_session(settings, cfg, userdata=data)
+        agent = build_check_in_agent(cfg)
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
         log.info("Session started; waiting for participant")
         try:
-            await asyncio.wait_for(
-                ctx.wait_for_participant(), timeout=settings.outbound_answer_timeout_s
-            )
+            # answer_timeout_s is driven by agent config (cfg.timing.answer_timeout_s);
+            # the former settings.outbound_answer_timeout_s field was removed in favor
+            # of config-driven timing (see agent_config.TimingConfig).
+            await asyncio.wait_for(ctx.wait_for_participant(), timeout=cfg.timing.answer_timeout_s)
         except TimeoutError:
             # asyncio.TimeoutError is an alias of builtin TimeoutError on 3.11+.
             # The API's dial task classifies/cleans up no-answer; this is the
@@ -186,18 +236,28 @@ async def entrypoint(ctx: JobContext) -> None:
             log.info("No participant within answer timeout; ending job")
             ctx.shutdown(reason="no_answer_timeout")
             return
+        # Participant confirmed present: arm the max-duration guard now (not during the
+        # answer-wait) so its clock starts on a live call and never fires on a job that
+        # already shut down via the no-answer path. Hold a reference so the task is not
+        # garbage-collected before completion (asyncio does not keep its own ref).
+        _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
+        _BACKGROUND_TASKS.add(_guard_task)
+        _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
         # Consent before capture: speak the disclosure to completion, then start
         # egress, so no audio is recorded before the spoken notice (consent ordering).
-        await say_recording_disclosure(session)
+        await say_recording_disclosure(session, cfg)
         await start_call_recording(ctx, call_id, settings)
-        watcher = VoicemailWatcher()
+        # Honour admin-configured voicemail phrases; empty -> built-in §7 patterns.
+        watcher = VoicemailWatcher(matcher=build_matcher(cfg.voicemail_detection.trigger_phrases))
         session.on("user_input_transcribed", lambda ev: watcher.feed(ev.transcript))
         log.info("Participant present; running voicemail detection window")
-        await _run_detection_window(ctx, session, watcher, call_id=call_id, settings=settings)
+        await _run_detection_window(
+            ctx, session, watcher, call_id=call_id, settings=settings, cfg=cfg
+        )
         return
 
     # Inbound: caller already dialed in; no voicemail detection (spec §7).
-    await _run_inbound(ctx, settings, log)
+    await _run_inbound(ctx, settings, cfg, log)
 
 
 def main() -> None:

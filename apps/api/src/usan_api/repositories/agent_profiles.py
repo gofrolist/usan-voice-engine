@@ -1,12 +1,14 @@
 import uuid
 from typing import Any, Literal
 
+from loguru import logger
+from pydantic import ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.base import ProfileStatus
 from usan_api.db.models import AgentProfile, AgentProfileVersion, Elder
-from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG
+from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig, ResolvedAgentConfig
 
 
 class ProfileInUseError(Exception):
@@ -236,3 +238,86 @@ async def has_unpublished_draft(db: AsyncSession, profile: AgentProfile) -> bool
     if live is None:
         return True
     return bool(live.config != profile.draft_config)
+
+
+async def get_default_profile(
+    db: AsyncSession, direction: Literal["inbound", "outbound"]
+) -> AgentProfile | None:
+    """The single ACTIVE profile marked default for this direction, or None.
+
+    The partial-unique index guarantees at most one true per direction, so
+    scalar_one_or_none() is safe.
+    """
+    column = (
+        AgentProfile.is_default_inbound
+        if direction == "inbound"
+        else AgentProfile.is_default_outbound
+    )
+    result = await db.execute(
+        select(AgentProfile).where(column.is_(True), AgentProfile.status == ProfileStatus.ACTIVE)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_published_config(
+    db: AsyncSession, profile: AgentProfile
+) -> AgentProfileVersion | None:
+    """The live published version row for a profile, or None if never published."""
+    if profile.published_version is None:
+        return None
+    return await get_version(db, profile.id, profile.published_version)
+
+
+async def _resolved_from_profile(
+    db: AsyncSession, profile: AgentProfile | None
+) -> ResolvedAgentConfig | None:
+    """Resolve a single profile to a published, valid config — or None to fall through.
+
+    Returns None (so the caller tries the next precedence tier) when the profile is
+    missing, archived, unpublished, or its stored JSON fails validation. Never raises.
+    """
+    if profile is None or profile.status != ProfileStatus.ACTIVE:
+        return None
+    version = await get_published_config(db, profile)
+    if version is None:
+        return None
+    try:
+        config = AgentConfig.model_validate(version.config)
+    except ValidationError:
+        # A published, supposedly-live config no longer validates (e.g. a later schema
+        # tightening invalidated an old snapshot). Falling through to the next tier can
+        # silently degrade every call to defaults, so emit a STABLE event key (no PHI:
+        # identity only) that a log-based alert can match — not just free-text.
+        logger.bind(
+            event="agent_config_validation_failed",
+            profile_id=str(profile.id),
+            version=version.version,
+        ).warning("Published agent config failed validation; falling through to next tier")
+        return None
+    return ResolvedAgentConfig(
+        source="resolved", profile_id=profile.id, version=version.version, config=config
+    )
+
+
+async def resolve_agent_config(
+    db: AsyncSession,
+    *,
+    profile_override: uuid.UUID | None,
+    elder_profile_id: uuid.UUID | None,
+    direction: Literal["inbound", "outbound"],
+) -> ResolvedAgentConfig | None:
+    """Resolve the published config by precedence: override -> elder -> direction default.
+
+    Each candidate must be ACTIVE and have a published, valid version; otherwise the
+    walk falls through. Returns None when nothing resolves (the router then returns
+    DEFAULT_AGENT_CONFIG).
+    """
+    for candidate_id in (profile_override, elder_profile_id):
+        if candidate_id is None:
+            continue
+        profile = await get_profile(db, candidate_id)
+        resolved = await _resolved_from_profile(db, profile)
+        if resolved is not None:
+            return resolved
+    default_profile = await get_default_profile(db, direction)
+    return await _resolved_from_profile(db, default_profile)

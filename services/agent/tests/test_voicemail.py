@@ -2,7 +2,12 @@ import asyncio
 
 import pytest
 
-from usan_agent.voicemail import VOICEMAIL_WINDOW_S, VoicemailWatcher, is_voicemail
+from usan_agent.voicemail import (
+    VOICEMAIL_WINDOW_S,
+    VoicemailWatcher,
+    build_matcher,
+    is_voicemail,
+)
 
 
 @pytest.mark.parametrize(
@@ -54,3 +59,40 @@ async def test_watcher_wait_times_out_for_human():
     w = VoicemailWatcher()
     w.feed("hello who is this")
     assert await w.wait_until_detected(window_s=0.05) is False
+
+
+def test_build_matcher_empty_uses_builtin():
+    from usan_agent.voicemail import _PATTERN
+
+    assert build_matcher([]) is _PATTERN
+
+
+def test_build_matcher_custom_phrases_literal_and_case_insensitive():
+    matcher = build_matcher(["please record your message"])
+    assert matcher.search("PLEASE RECORD YOUR MESSAGE now")
+    assert not matcher.search("you've reached the Smiths")  # built-in phrase NOT included
+
+
+def test_build_matcher_escapes_regex_metachars():
+    # A phrase with regex metachars must match literally, not as a pattern.
+    matcher = build_matcher(["press 1 (now)"])
+    assert matcher.search("please press 1 (now) to continue")
+
+
+def test_build_matcher_blank_phrases_fall_back_to_builtin():
+    from usan_agent.voicemail import _PATTERN
+
+    assert build_matcher(["   ", ""]) is _PATTERN
+
+
+def test_watcher_uses_injected_matcher():
+    matcher = build_matcher(["custom greeting marker"])
+    w = VoicemailWatcher(matcher=matcher)
+    w.feed("this is a custom greeting marker hello")
+    assert w.detected
+
+
+def test_watcher_default_matcher_unchanged():
+    w = VoicemailWatcher()
+    w.feed("you've reached the Smiths, leave a message")
+    assert w.detected
