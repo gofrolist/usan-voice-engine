@@ -1,7 +1,6 @@
 import { Controller, type UseFormReturn } from "react-hook-form";
 import type { AgentConfigForm } from "../../../config/agentConfigSchema";
 import { TOOL_NAMES, type ToolName } from "../../../config/agentConfigSchema";
-import { fieldMeta } from "../../../config/fieldMeta";
 
 const TOOL_HELP: Record<ToolName, string> = {
   log_wellness: "Record the elder's wellness response.",
@@ -10,15 +9,13 @@ const TOOL_HELP: Record<ToolName, string> = {
   end_call: "Let the agent end the call when the check-in is complete.",
 };
 
+// Retell-style "Functions" list: each enabled tool is a function the agent can call
+// mid-call. The set is fixed in Phase 1 (the registry is data-driven in a later phase).
 export function ToolsSection({ form }: { form: UseFormReturn<AgentConfigForm> }) {
-  const meta = fieldMeta["tools.enabled"];
   const error = form.formState.errors.tools?.enabled?.message;
   return (
     <div className="space-y-3">
-      <div>
-        <p className="text-sm font-medium text-gray-700">{meta?.label}</p>
-        {meta?.help ? <p className="text-xs text-gray-500">{meta.help}</p> : null}
-      </div>
+      <p className="text-sm text-slate-500">Functions the agent can call during a call.</p>
       <Controller
         control={form.control}
         name="tools.enabled"
@@ -34,18 +31,21 @@ export function ToolsSection({ form }: { form: UseFormReturn<AgentConfigForm> })
           return (
             <ul className="space-y-2">
               {TOOL_NAMES.map((tool) => (
-                <li key={tool} className="flex items-start gap-2">
+                <li
+                  key={tool}
+                  className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-card"
+                >
+                  <label htmlFor={`tool-${tool}`} className="min-w-0">
+                    <span className="font-mono text-sm text-slate-900">{tool}</span>
+                    <span className="mt-0.5 block text-xs text-slate-500">{TOOL_HELP[tool]}</span>
+                  </label>
                   <input
                     id={`tool-${tool}`}
                     type="checkbox"
-                    className="mt-0.5"
+                    className="mt-1 h-4 w-4 accent-indigo-600"
                     checked={enabled.has(tool)}
                     onChange={(e) => toggle(tool, e.target.checked)}
                   />
-                  <label htmlFor={`tool-${tool}`} className="text-sm">
-                    <span className="font-mono">{tool}</span>
-                    <span className="ml-2 text-gray-500">{TOOL_HELP[tool]}</span>
-                  </label>
                 </li>
               ))}
             </ul>

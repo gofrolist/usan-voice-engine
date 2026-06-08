@@ -17,11 +17,13 @@ const PROMPT_ORDER: PromptKey[] = [
   "inbound_personalization_template",
 ];
 
-const LARGE: ReadonlySet<PromptKey> = new Set([
-  "system_prompt",
-  "checkin_flow_instructions",
-  "inbound_personalization_template",
-]);
+// The system prompt is the editor's hero field; the long flow/template fields get
+// generous height too. Everything else is a compact few-line editor.
+function rowsFor(key: PromptKey): number {
+  if (key === "system_prompt") return 18;
+  if (key === "checkin_flow_instructions" || key === "inbound_personalization_template") return 12;
+  return 4;
+}
 
 export function PromptsSection({ form }: { form: UseFormReturn<AgentConfigForm> }) {
   const errors = form.formState.errors.prompts;
@@ -41,15 +43,15 @@ export function PromptsSection({ form }: { form: UseFormReturn<AgentConfigForm> 
                   id={path}
                   value={field.value}
                   onChange={field.onChange}
-                  rows={LARGE.has(key) ? 10 : 4}
+                  rows={rowsFor(key)}
                 />
               )}
             />
             {isTemplate ? (
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-slate-500">
                 Allowed slots:{" "}
                 {ALLOWED_TEMPLATE_SLOTS.map((s) => (
-                  <code key={s} className="mr-1 rounded bg-gray-100 px-1 py-0.5 font-mono">
+                  <code key={s} className="mr-1 rounded bg-slate-100 px-1 py-0.5 font-mono">
                     {`{${s}}`}
                   </code>
                 ))}
