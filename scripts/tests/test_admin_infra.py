@@ -105,13 +105,35 @@ def test_build_workflow_builds_and_ships_admin_ui():
     assert text.count("docker-compose.admin.yml") >= 2  # SCP source + -f chain
 
 
+def _job_runs(doc: dict, job: str) -> str:
+    """All `run:` script text for a workflow job, joined — for asserting commands."""
+    steps = doc.get("jobs", {}).get(job, {}).get("steps", []) or []
+    return "\n".join(s.get("run", "") for s in steps if isinstance(s, dict))
+
+
+def _job_workdirs(doc: dict, job: str) -> set[str]:
+    steps = doc.get("jobs", {}).get(job, {}).get("steps", []) or []
+    return {s.get("working-directory") for s in steps if isinstance(s, dict)}
+
+
 def test_frontend_ci_jobs_exist():
-    test_yml = (ROOT / ".github/workflows/test.yml").read_text()
-    lint_yml = (ROOT / ".github/workflows/lint.yml").read_text()
-    assert "apps/admin-ui" in test_yml and "npm" in test_yml
-    assert "apps/admin-ui" in lint_yml and "npm run lint" in lint_yml
-    # The scripts job needs pyyaml for this very test.
-    assert "pyyaml" in test_yml
+    # Assert the actual job STRUCTURE (working-directory + invoked npm scripts), not
+    # just substring presence — a misconfigured job (wrong dir / wrong script) must fail.
+    test_yml = _load_yaml(".github/workflows/test.yml")
+    lint_yml = _load_yaml(".github/workflows/lint.yml")
+
+    vitest = _job_runs(test_yml, "vitest-admin-ui")
+    assert "npm ci" in vitest
+    assert "npm test" in vitest
+    assert "apps/admin-ui" in _job_workdirs(test_yml, "vitest-admin-ui")
+
+    lint = _job_runs(lint_yml, "lint-admin-ui")
+    assert "npm run lint" in lint
+    assert "npm run typecheck" in lint
+    assert "apps/admin-ui" in _job_workdirs(lint_yml, "lint-admin-ui")
+
+    # The scripts job installs pyyaml (this very test module imports yaml).
+    assert "pyyaml" in _job_runs(test_yml, "pytest-scripts")
 
 
 def test_terraform_has_admin_dns_record():

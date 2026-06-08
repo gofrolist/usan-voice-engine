@@ -15,8 +15,10 @@
 	try_files {path} /index.html
 	file_server
 	# Fingerprinted build assets are immutable; the HTML shell must never cache so
-	# a new deploy is picked up immediately.
+	# a new deploy is picked up immediately. Match BOTH the bare "/" (served as the
+	# directory index, never rewritten to /index.html) and /index.html itself.
 	@assets path /assets/*
 	header @assets Cache-Control "public, max-age=31536000, immutable"
-	header /index.html Cache-Control "no-cache"
+	@html path / /index.html
+	header @html Cache-Control "no-cache"
 }

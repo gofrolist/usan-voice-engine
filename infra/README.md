@@ -423,6 +423,13 @@ One-time setup before the first deploy that includes the admin overlay:
    must already be on `/opt/usan/infra/.env`. Reboot the VM (startup.sh re-fetches
    the secret) **or** IAP-SSH in and refresh the file by hand, *then* cut the tag.
    (IAP SSH works even if your IP isn't in `operator_ssh_cidr`.)
+
+   > ⚠️ **A missing admin key aborts the ENTIRE stack deploy, not just the console.**
+   > The deploy layers all overlays in one `docker compose up`, and the admin overlay
+   > uses `${ADMIN_ALLOWED_CIDR:?…}` (+ a non-empty `ADMIN_DOMAIN`). If either is unset
+   > when the tag deploys, compose interpolation fails and `api`/`agent`/`livekit`/
+   > `grafana` all fail to come up too. Mirrors the pre-existing `GRAFANA_ALLOWED_CIDR:?`
+   > behavior — seed these keys first.
 5. Cut a `v*` tag → the deploy builds/pushes `usan-admin-ui`, ships
    `docker-compose.admin.yml`, and brings up the `admin-ui` service behind Caddy.
 

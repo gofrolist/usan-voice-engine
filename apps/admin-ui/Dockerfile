@@ -12,12 +12,11 @@ RUN npm run build
 # this), non-root, on an unprivileged port. Mirrors the stack's Caddy usage.
 FROM caddy:2-alpine AS serve
 # Writable XDG dirs so a non-root Caddy starts cleanly (it never writes certs here
-# with auto_https/persist_config off, but the dirs must exist + be owned).
+# with auto_https/persist_config off, but the dirs must exist + be owned). Run as the
+# numeric UID 1001 directly — no named account is needed and creating one risks a
+# GID collision with the base image; chown by numeric id works regardless.
 ENV XDG_CONFIG_HOME=/config XDG_DATA_HOME=/data
-RUN mkdir -p /srv /config /data \
- && addgroup -g 1001 appuser \
- && adduser -D -u 1001 -G appuser appuser \
- && chown -R 1001:1001 /srv /config /data
+RUN mkdir -p /srv /config /data && chown -R 1001:1001 /srv /config /data
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /app/dist /srv
 USER 1001
