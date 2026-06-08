@@ -92,7 +92,6 @@ def test_api_callback_settings_load(monkeypatch):
 
     assert s.api_base_url == "http://api:8000"
     assert s.jwt_signing_key == "s" * 32
-    assert s.outbound_answer_timeout_s == 50
 
 
 def _base_env(monkeypatch):

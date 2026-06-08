@@ -26,6 +26,12 @@ from usan_agent.transcript import register_transcript_flush
 from usan_agent.voicemail import VoicemailWatcher, build_matcher
 from usan_agent.voicemail_action import leave_voicemail
 
+# Strong references to fire-and-forget background tasks (the max-duration guard).
+# asyncio only holds a weak reference to a bare create_task() result, so without
+# this the GC may collect a still-running task and silently cancel it. Each task
+# removes itself via add_done_callback when it finishes.
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+
 
 @dataclass(frozen=True)
 class CallMetadata:
@@ -106,7 +112,11 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
-        asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
+        # Hold a reference so the guard task is not garbage-collected before it
+        # completes (asyncio keeps only a weak reference to fire-and-forget tasks).
+        _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
+        _BACKGROUND_TASKS.add(_guard_task)
+        _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
         log.info("Inbound check-in started for known elder (call_id={cid})", cid=call_id)
         # Consent before capture: the disclosure must finish playing before egress
         # starts, so no audio is recorded prior to the spoken notice (consent ordering).
@@ -199,9 +209,11 @@ async def entrypoint(ctx: JobContext) -> None:
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
-        asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
         log.info("Session started; waiting for participant")
         try:
+            # answer_timeout_s is driven by agent config (cfg.timing.answer_timeout_s);
+            # the former settings.outbound_answer_timeout_s field was removed in favor
+            # of config-driven timing (see agent_config.TimingConfig).
             await asyncio.wait_for(ctx.wait_for_participant(), timeout=cfg.timing.answer_timeout_s)
         except TimeoutError:
             # asyncio.TimeoutError is an alias of builtin TimeoutError on 3.11+.
@@ -210,6 +222,13 @@ async def entrypoint(ctx: JobContext) -> None:
             log.info("No participant within answer timeout; ending job")
             ctx.shutdown(reason="no_answer_timeout")
             return
+        # Participant confirmed present: arm the max-duration guard now (not during the
+        # answer-wait) so its clock starts on a live call and never fires on a job that
+        # already shut down via the no-answer path. Hold a reference so the task is not
+        # garbage-collected before completion (asyncio does not keep its own ref).
+        _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
+        _BACKGROUND_TASKS.add(_guard_task)
+        _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
         # Consent before capture: speak the disclosure to completion, then start
         # egress, so no audio is recorded before the spoken notice (consent ordering).
         await say_recording_disclosure(session, cfg)
