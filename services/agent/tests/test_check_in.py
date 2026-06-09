@@ -544,3 +544,17 @@ async def test_do_send_sms_handles_api_failure(monkeypatch):
 
 def test_send_sms_registered_in_registry():
     assert check_in._TOOL_REGISTRY.get("send_sms") is check_in.send_sms
+
+
+def test_tool_registry_has_exactly_the_seven_phase3_tools():
+    from usan_agent import check_in
+
+    assert set(check_in._TOOL_REGISTRY) == {
+        "log_wellness",
+        "log_medication",
+        "get_today_meds",
+        "flag_for_followup",
+        "schedule_callback",
+        "send_sms",
+        "end_call",
+    }
