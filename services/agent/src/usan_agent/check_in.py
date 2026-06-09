@@ -7,7 +7,6 @@ failure never crashes the call. end_call mirrors leave_voicemail: report → say
 goodbye → delete_room → shutdown.
 """
 
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -18,20 +17,13 @@ from loguru import logger
 from usan_agent import api_client
 from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
 from usan_agent.prompt_vars import build_vars, substitute
+from usan_agent.sanitize import sanitize_prompt_value
 from usan_agent.settings import Settings
 
 # Control characters and the format-slot braces are stripped from any API-supplied
 # string before it reaches an LLM prompt (design spec §3 dynamic vars are caller
 # data, not trusted instructions). Removing "{"/"}" closes both a prompt-injection
 # vector and an str.format KeyError/IndexError on attacker-controlled slots.
-_PROMPT_UNSAFE = re.compile(
-    # format-slot braces; ASCII control chars; the Unicode line/paragraph separators
-    # NEL (U+0085), LS (U+2028), PS (U+2029); and invisible/directional chars
-    # (zero-width, bidi overrides) that could smuggle instructions or new lines past
-    # the LLM. Separators are listed explicitly so the regex alone suffices and does
-    # not silently rely on the later str.split() to drop them.
-    r"[{}\x00-\x1f\x7f\x85\u00ad\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\ufeff]"
-)
 _NAME_MAX_LEN = 100
 _CONTEXT_MAX_LEN = 300
 _MED_NAME_MAX_LEN = 80
@@ -40,15 +32,13 @@ _MED_TIME_MAX_LEN = 20
 
 
 def _sanitize_prompt_value(value: Any, *, max_len: int) -> str:
-    """Neutralize an API-supplied string for safe interpolation into LLM instructions.
+    """Backward-compat alias — delegates to ``sanitize.sanitize_prompt_value``.
 
-    Strips format-slot braces and control characters (including newlines), collapses
-    surrounding whitespace, and caps the length so a hostile value can neither inject
-    new instructions nor introduce ``str.format`` slots.
+    New code should import ``sanitize_prompt_value`` from ``usan_agent.sanitize``
+    directly.  This alias is kept so existing tests and internal helpers that
+    reference the private name continue to work without a flag-day rename.
     """
-    text = _PROMPT_UNSAFE.sub(" ", str(value))
-    text = " ".join(text.split())
-    return text[:max_len].strip()
+    return sanitize_prompt_value(value, max_len=max_len)
 
 
 CHECK_IN_INSTRUCTIONS = DEFAULT_AGENT_CONFIG.prompts.checkin_flow_instructions
@@ -275,22 +265,6 @@ def _inbound_instructions(template: str, dynamic_vars: dict[str, Any]) -> str:
     return template.format(elder_name=elder_name, last_check_in_line=last_check_in_line)
 
 
-def _with_legacy_inbound_slots(values: dict[str, str]) -> dict[str, str]:
-    """Backfill the two legacy single-brace slots from the resolved built-ins.
-
-    Old `inbound_personalization_template` snapshots use `{elder_name}` and
-    `{last_check_in_line}`. elder_name already maps 1:1; last_check_in_line is the
-    pre-formatted sentence, derived here from last_check_in when not provided.
-    """
-    out = dict(values)
-    if not out.get("last_check_in_line"):
-        last = out.get("last_check_in") or ""
-        out["last_check_in_line"] = (
-            f"For context, their last check-in was {last}.\n" if last else ""
-        )
-    return out
-
-
 def build_inbound_agent(
     cfg: AgentConfig | None,
     *,
@@ -301,10 +275,13 @@ def build_inbound_agent(
 ) -> Agent:
     """The inbound check-in Agent: configured tools + personalized instructions.
 
-    Substitutes `{{tokens}}` AND the two legacy single-brace slots ({elder_name},
-    {last_check_in_line}) across the inbound personalization template, so both new
-    and already-published templates render. All injected values (resolved built-in
-    + custom) are sanitized inside build_vars before substitution.
+    Substitutes ``{{tokens}}`` AND the two legacy single-brace slots
+    (``{elder_name}``, ``{last_check_in_line}``) across the inbound
+    personalization template, so both new and already-published templates render.
+    All injected values (resolved built-in + custom) are sanitized inside
+    ``build_vars`` before substitution.  ``last_check_in_line`` is derived from
+    ``last_check_in`` inside ``build_vars`` when not already present, so the
+    logic is shared with the outbound path.
     """
     cfg = cfg or DEFAULT_AGENT_CONFIG
     values = build_vars(
@@ -313,7 +290,6 @@ def build_inbound_agent(
         timezone=timezone,
         now=now or datetime.now(UTC),
     )
-    values = _with_legacy_inbound_slots(values)
     return Agent(
         instructions=substitute(cfg.prompts.inbound_personalization_template, values),
         tools=_select_tools(cfg.tools.enabled),

@@ -57,7 +57,7 @@ async def test_outbound_disclosure_precedes_recording(monkeypatch):
         return session
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
-    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None, **kw: MagicMock())
     monkeypatch.setattr(worker, "fetch_agent_config", AsyncMock(return_value=DEFAULT_AGENT_CONFIG))
     monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
     monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
@@ -87,7 +87,7 @@ async def test_inbound_disclosure_precedes_recording(monkeypatch):
         return {"call_id": "inb-1", "elder_known": True, "dynamic_vars": {"elder_name": "Ada"}}
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
-    monkeypatch.setattr(worker, "build_inbound_agent", lambda cfg, dv: MagicMock())
+    monkeypatch.setattr(worker, "build_inbound_agent", lambda cfg, **kw: MagicMock())
 
     def _fake_build_session(settings, cfg=None, userdata=None):
         session = MagicMock()

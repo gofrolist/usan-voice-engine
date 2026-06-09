@@ -17,6 +17,8 @@ from collections.abc import Mapping
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from usan_agent.sanitize import sanitize_prompt_value
+
 # Mirror of apps/api schemas.variable_catalog.BUILTIN_NAMES / BUILTIN_DEFAULTS.
 # Order is documentation-only here; the agent only needs membership + defaults.
 BUILTIN_DEFAULTS: dict[str, str] = {
@@ -94,17 +96,13 @@ def build_vars(
     from ``timezone``. Any name whose final value is empty falls back to its catalog
     default (so e.g. a blank first_name speaks "there").
     """
-    # Import here to avoid circular import: prompt_vars imports from check_in,
-    # and check_in imports from prompt_vars.
-    from usan_agent.check_in import _sanitize_prompt_value  # noqa: PLC0415
-
     merged: dict[str, str] = dict(BUILTIN_DEFAULTS)
 
     # Custom (caller-derived) values: only names that are NOT built-ins, sanitized.
     for name, value in custom.items():
         if name in BUILTIN_NAMES:
             continue
-        merged[name] = _sanitize_prompt_value(value, max_len=_INJECTED_VALUE_MAX_LEN)
+        merged[name] = sanitize_prompt_value(value, max_len=_INJECTED_VALUE_MAX_LEN)
 
     # Resolved built-ins win over custom/defaults. They are STILL injected values
     # derived from elder/call data (e.g. last_check_in embeds WellnessLog.notes —
@@ -112,11 +110,20 @@ def build_vars(
     # woven into the prompt (design spec §4.5). The agent is the trust boundary
     # nearest the LLM; sanitizing here is defense-in-depth regardless of the API.
     for name, value in resolved.items():
-        merged[name] = _sanitize_prompt_value(value, max_len=_INJECTED_VALUE_MAX_LEN)
+        merged[name] = sanitize_prompt_value(value, max_len=_INJECTED_VALUE_MAX_LEN)
 
     current_time, current_date = _clock(timezone, now)
     merged["current_time"] = current_time
     merged["current_date"] = current_date
+
+    # Derive last_check_in_line from last_check_in when not already supplied.
+    # This keeps the single-source logic here (owned by the defaults table / catalog)
+    # so it applies for both outbound and inbound calls, not just the inbound builder.
+    if not merged.get("last_check_in_line"):
+        last = merged.get("last_check_in") or ""
+        merged["last_check_in_line"] = (
+            f"For context, their last check-in was {last}.\n" if last else ""
+        )
 
     # Empty/None falls back to the catalog default for that name.
     for name, default in BUILTIN_DEFAULTS.items():
