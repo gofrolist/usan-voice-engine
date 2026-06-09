@@ -10,7 +10,15 @@ def test_default_is_complete_and_branded():
     assert cfg.stt.model == "ink-whisper"
     assert cfg.timing.answer_timeout_s == 50.0
     assert cfg.timing.max_call_duration_s == 1800
-    assert cfg.tools.enabled == ["log_wellness", "log_medication", "get_today_meds", "end_call"]
+    assert cfg.tools.enabled == [
+        "log_wellness",
+        "log_medication",
+        "get_today_meds",
+        "flag_for_followup",
+        "schedule_callback",
+        "send_sms",
+        "end_call",
+    ]
     assert cfg.voicemail_detection.window_s == 3.0
     assert cfg.voicemail_detection.trigger_phrases == []
 
