@@ -288,10 +288,10 @@ async def end_call(ctx: RunContext[CheckInData], reason: str = "check_in_complet
     return ""
 
 
-# name -> tool callable. A SUBSET of the admin schema's TOOL_NAMES during rollout:
-# flag_for_followup / schedule_callback / send_sms are valid catalog names (so they
-# validate + render in the editor) but their @function_tool callables land in Parts
-# B/C/D. Until then _select_tools drops them, so enabling one saves but is a no-op.
+# name -> tool callable. Full parity with the admin schema's TOOL_NAMES: every catalog
+# tool (including flag_for_followup / schedule_callback / send_sms) has a landed
+# @function_tool callable here. send_sms is still gated by the template guard in
+# _select_tools (it is dropped unless an SMS template is configured).
 _TOOL_REGISTRY: dict[str, Any] = {
     "log_wellness": log_wellness,
     "log_medication": log_medication,
@@ -329,12 +329,11 @@ def _select_tools(tools: _ToolsConfigLike) -> list[Any]:
     dropped unless ``tools`` carries an ``sms`` config with templates. The ``sms`` field
     is read via ``getattr`` because Part A's concrete ``ToolsConfig`` has no ``sms`` field
     yet (Part D adds it) and the ``_ToolsConfigLike`` Protocol does not declare it; the
-    guard must stay safe until then. The drop is currently
-    belt-and-braces (send_sms is not yet in _TOOL_REGISTRY, so the registry filter above
-    already removes it) -- TODO(Part B/C/D): once send_sms lands in _TOOL_REGISTRY this
-    guard becomes the sole gate; verify the template branches then. end_call is always
-    included: it drives report->goodbye->delete_room->shutdown, so removing it would
-    leave a call unable to end gracefully.
+    guard must stay safe until then. send_sms is now in _TOOL_REGISTRY, so the registry
+    filter above no longer removes it -- this template guard is the active, sole gate on
+    send_sms (covered by the template-branch tests). end_call is always included: it
+    drives report->goodbye->delete_room->shutdown, so removing it would leave a call
+    unable to end gracefully.
     """
     names = [n for n in tools.enabled if n in _TOOL_REGISTRY]  # preserve enabled order
     sms_cfg = getattr(tools, "sms", None)
