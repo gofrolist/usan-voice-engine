@@ -35,3 +35,19 @@ class CallbackRequestSummary(BaseModel):
     notes: str | None
     status: str
     created_at: datetime
+
+
+class SmsMessageSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    call_id: uuid.UUID
+    elder_id: uuid.UUID
+    to_number: str
+    template_key: str
+    status: str
+    telnyx_message_id: str | None = None
+    sent_at: datetime | None = None
+    created_at: datetime
+    # NOTE: the rendered `body` is intentionally OMITTED — it may carry the elder's
+    # name / contextual content (design §9); summaries stay lean and lower-PHI.

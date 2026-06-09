@@ -17,7 +17,12 @@ from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
 from usan_api.repositories import callback_requests as callback_requests_repo
 from usan_api.repositories import follow_up_flags as follow_up_flags_repo
-from usan_api.schemas.admin_tools import CallbackRequestSummary, FollowupFlagSummary
+from usan_api.repositories import sms_messages as sms_repo
+from usan_api.schemas.admin_tools import (
+    CallbackRequestSummary,
+    FollowupFlagSummary,
+    SmsMessageSummary,
+)
 
 router = APIRouter(
     prefix="/v1/admin",
@@ -86,3 +91,16 @@ async def list_callback_requests(
         await db.rollback()
         raise
     return [CallbackRequestSummary.model_validate(r) for r in rows]
+
+
+@router.get("/sms-messages", response_model=list[SmsMessageSummary])
+async def list_sms_messages(
+    status: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+) -> list[SmsMessageSummary]:
+    # The router-level Depends(require_admin_session) already gates this route.
+    # No admin_audit.record here: the summary omits `body`, so no PHI is returned
+    # (unlike follow-up-flags which expose `reason`).
+    rows = await sms_repo.list_messages(db, status=status, limit=limit)
+    return [SmsMessageSummary.model_validate(r) for r in rows]
