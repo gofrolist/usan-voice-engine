@@ -6,12 +6,13 @@ from sqlalchemy.pool import NullPool
 
 from usan_api import sms_outbox, telnyx_messaging
 from usan_api.db.base import CallDirection, CallStatus
+from usan_api.db.models import SmsMessage
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import sms_messages as sms_repo
 
 
-def _patch_factory(monkeypatch, url):
+def _patch_factory(request, monkeypatch, url: str) -> None:
     # flush_pending_sms() opens its own session via the module-global cached engine,
     # which uses a pooled (non-NullPool) connection. The test drives it across several
     # independent asyncio.run() loops, and a pooled connection bound to a closed loop
@@ -19,6 +20,9 @@ def _patch_factory(monkeypatch, url):
     # site (the same pattern conftest's `client` fixture and test_retry_orchestrator use)
     # so every run gets a fresh connection.
     engine = create_async_engine(url, poolclass=NullPool)
+    # Dispose at test teardown so the pool is released (no ResourceWarning under
+    # strict warning filters). dispose() is async, so run it in its own loop.
+    request.addfinalizer(lambda: asyncio.run(engine.dispose()))
     monkeypatch.setattr(
         sms_outbox,
         "get_session_factory",
@@ -26,7 +30,7 @@ def _patch_factory(monkeypatch, url):
     )
 
 
-async def _seed_pending(url):
+async def _seed_pending(url: str) -> uuid.UUID:
     engine = create_async_engine(url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
@@ -53,7 +57,7 @@ async def _seed_pending(url):
         await engine.dispose()
 
 
-async def _status_of(url, call_id):
+async def _status_of(url: str, call_id: uuid.UUID) -> list[SmsMessage]:
     engine = create_async_engine(url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -64,18 +68,26 @@ async def _status_of(url, call_id):
         await engine.dispose()
 
 
-def test_flush_marks_failed_when_messaging_disabled(client, async_database_url, monkeypatch):
+def test_flush_marks_failed_when_messaging_disabled(
+    client, async_database_url, monkeypatch, request
+):
     # client fixture sets env; messaging is disabled by default (no TELNYX_MESSAGING_ENABLED).
-    _patch_factory(monkeypatch, async_database_url)
+    # Clear any Settings cached by a sibling test that monkeypatched
+    # TELNYX_MESSAGING_ENABLED=true, so this assertion can't depend on test ordering.
+    from usan_api.settings import get_settings
+
+    get_settings.cache_clear()
+    _patch_factory(request, monkeypatch, async_database_url)
     call_id = asyncio.run(_seed_pending(async_database_url))
     asyncio.run(sms_outbox.flush_pending_sms(call_id))
     rows = asyncio.run(_status_of(async_database_url, call_id))
     assert len(rows) == 1
     assert rows[0].status == "failed"
     assert rows[0].error == {"reason": "messaging_disabled"}
+    get_settings.cache_clear()
 
 
-def test_flush_sends_and_marks_sent(client, async_database_url, monkeypatch):
+def test_flush_sends_and_marks_sent(client, async_database_url, monkeypatch, request):
     monkeypatch.setenv("TELNYX_MESSAGING_ENABLED", "true")
     monkeypatch.setenv("TELNYX_MESSAGING_API_KEY", "KEY")
     monkeypatch.setenv("TELNYX_MESSAGING_PROFILE_ID", "mp1")
@@ -88,7 +100,7 @@ def test_flush_sends_and_marks_sent(client, async_database_url, monkeypatch):
         return "msg-xyz"
 
     monkeypatch.setattr(telnyx_messaging, "send_sms", _fake_send)
-    _patch_factory(monkeypatch, async_database_url)
+    _patch_factory(request, monkeypatch, async_database_url)
 
     call_id = asyncio.run(_seed_pending(async_database_url))
     asyncio.run(sms_outbox.flush_pending_sms(call_id))
@@ -103,7 +115,7 @@ def test_flush_sends_and_marks_sent(client, async_database_url, monkeypatch):
     get_settings.cache_clear()
 
 
-def test_flush_marks_failed_on_send_error(client, async_database_url, monkeypatch):
+def test_flush_marks_failed_on_send_error(client, async_database_url, monkeypatch, request):
     monkeypatch.setenv("TELNYX_MESSAGING_ENABLED", "true")
     monkeypatch.setenv("TELNYX_MESSAGING_API_KEY", "KEY")
     monkeypatch.setenv("TELNYX_MESSAGING_PROFILE_ID", "mp1")
@@ -116,7 +128,7 @@ def test_flush_marks_failed_on_send_error(client, async_database_url, monkeypatc
         raise telnyx_messaging.TelnyxMessagingError("nope")
 
     monkeypatch.setattr(telnyx_messaging, "send_sms", _boom)
-    _patch_factory(monkeypatch, async_database_url)
+    _patch_factory(request, monkeypatch, async_database_url)
     call_id = asyncio.run(_seed_pending(async_database_url))
     asyncio.run(sms_outbox.flush_pending_sms(call_id))
     rows = asyncio.run(_status_of(async_database_url, call_id))
