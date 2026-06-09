@@ -229,7 +229,7 @@ async def send_sms(
     )
     resolved = await profiles_repo.resolve_agent_config(
         db,
-        profile_override=None,
+        profile_override=call.profile_override,
         elder_profile_id=elder.agent_profile_id,
         direction=direction,
     )

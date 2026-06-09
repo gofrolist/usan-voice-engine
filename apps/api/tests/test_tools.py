@@ -456,11 +456,17 @@ def _publish_sms_profile(async_database_url, *, body="Hello {{first_name}} from 
                 )
                 draft = dict(profile.draft_config)
                 tools = dict(draft.get("tools") or {})
-                tools["enabled"] = list(tools.get("enabled") or [])
-                if "send_sms" not in tools["enabled"]:
-                    tools["enabled"].append("send_sms")
-                tools["sms"] = {"templates": [{"key": "greet", "label": "Greet", "body": body}]}
-                draft["tools"] = tools
+                existing_enabled = list(tools.get("enabled") or [])
+                enabled = (
+                    existing_enabled
+                    if "send_sms" in existing_enabled
+                    else [*existing_enabled, "send_sms"]
+                )
+                draft["tools"] = {
+                    **tools,
+                    "enabled": enabled,
+                    "sms": {"templates": [{"key": "greet", "label": "Greet", "body": body}]},
+                }
                 await profiles_repo.update_draft(
                     db, profile.id, config=draft, description=None, actor_email="op@x.io"
                 )
@@ -497,6 +503,19 @@ def test_send_sms_unknown_template_404(client, mock_dispatch, async_database_url
     r = client.post(
         "/v1/tools/send_sms",
         json={"call_id": call_id, "template_key": "nope"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 404
+
+
+def test_send_sms_no_sms_config_404(client, mock_dispatch):
+    # Fresh-deployment path: no default-outbound profile configures send_sms, so
+    # resolution falls back to DEFAULT_AGENT_CONFIG where tools.sms is None.
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
         headers=_auth(call_id),
     )
     assert r.status_code == 404
