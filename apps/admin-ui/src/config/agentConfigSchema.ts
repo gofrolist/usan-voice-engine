@@ -10,62 +10,52 @@ export type ToolName = (typeof TOOL_NAMES)[number];
 // Personalization slots allowed in the inbound template (ALLOWED_TEMPLATE_SLOTS).
 export const ALLOWED_TEMPLATE_SLOTS = ["elder_name", "last_check_in_line"] as const;
 
-const SLOT_RE = /\{([^{}]*)\}/g;
+// {{name}} tokens (with optional inner whitespace) are the unified substitution
+// syntax. Mirrors apps/api TOKEN_RE / the agent's prompt_vars.TOKEN_RE.
+const DOUBLE_TOKEN_RE = /\{\{\s*[a-zA-Z0-9_]+\s*\}\}/g;
+// Legacy single-brace slots kept only for back-compat in the personalization template.
+const LEGACY_SLOT_RE = /\{(elder_name|last_check_in_line)\}/g;
 
-// Reject raw format-slot braces on every prompt except the personalization template.
-function noBraces(label: string) {
+// Field-tiered brace rule (mirrors apps/api schemas/agent_config.py, spec §5.1):
+// strip the allowed {{tokens}} (and, for the template, the legacy {slots}) and if any
+// lone '{' or '}' remains it is a typo -> reject. Unknown {{var}} NAMES are never
+// rejected here (warn-only, surfaced in the editor from the fetched catalog).
+function rejectStrayBraces(label: string, allowLegacySlots = false) {
   return (v: string, ctx: z.RefinementCtx) => {
-    if (v.includes("{") || v.includes("}")) {
+    let stripped = v.replace(DOUBLE_TOKEN_RE, "");
+    if (allowLegacySlots) stripped = stripped.replace(LEGACY_SLOT_RE, "");
+    if (stripped.includes("{") || stripped.includes("}")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `${label} must not contain '{' or '}'`,
+        message: `${label} has a stray '{' or '}' (use {{variable}} tokens)`,
       });
     }
   };
 }
 
+// allowBraces=true: permissive big fields (system_prompt, checkin_flow_instructions) —
+// any braces allowed, unchanged from Phase 1, since substitution is token-scoped.
 function promptField(maxLength: number, label: string, allowBraces = false) {
   const base = z
     .string()
     .min(1, `${label} is required`)
     .max(maxLength, `${label} must be at most ${maxLength} characters`);
-  // system_prompt and checkin_flow_instructions hold {{variable}} tokens for migrated
-  // prompts and are never str.format-ed on the agent, so they skip the brace check.
-  return allowBraces ? base : base.superRefine(noBraces(label));
+  return allowBraces ? base : base.superRefine(rejectStrayBraces(label));
 }
 
-// inbound_personalization_template: allow ONLY {elder_name} and {last_check_in_line}.
+// inbound_personalization_template: allow {{tokens}} PLUS the two legacy single-brace
+// slots; reject any other stray brace.
 const personalizationTemplate = z
   .string()
   .min(1, "Personalization template is required")
   .max(6000, "Personalization template must be at most 6000 characters")
-  .superRefine((v, ctx) => {
-    const slots: string[] = [];
-    for (const m of v.matchAll(SLOT_RE)) {
-      if (m[1] !== undefined) slots.push(m[1]);
-    }
-    const allowed: readonly string[] = ALLOWED_TEMPLATE_SLOTS;
-    const bad = [...new Set(slots.filter((s) => !allowed.includes(s)))].sort();
-    if (bad.length > 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `unknown template slot(s): ${bad.join(", ")}; allowed: ${[...ALLOWED_TEMPLATE_SLOTS].join(", ")}`,
-      });
-    }
-    // Reject stray braces not part of a recognized slot.
-    const stripped = v.replace(SLOT_RE, "");
-    if (stripped.includes("{") || stripped.includes("}")) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "contains an unmatched '{' or '}'",
-      });
-    }
-  });
+  .superRefine(rejectStrayBraces("Personalization template", true));
 
 export const promptsSchema = z.object({
-  // Large free-form behavior fields: braces allowed (hold {{variable}} tokens; never
-  // str.format-ed). Mirrors apps/api PromptsConfig.
+  // Permissive big fields: any braces allowed (hold {{variable}} tokens + arbitrary
+  // pasted braces; never str.format-ed). Mirrors apps/api PromptsConfig.
   system_prompt: promptField(24000, "System prompt", true),
+  // Short fields: allow {{tokens}}, reject a lone stray brace.
   greeting: promptField(1000, "Greeting"),
   recording_disclosure: promptField(1000, "Recording disclosure"),
   voicemail_message: promptField(1000, "Voicemail message"),

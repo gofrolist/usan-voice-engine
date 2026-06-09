@@ -91,4 +91,55 @@ describe("agentConfigSchema", () => {
     cfg.prompts.system_prompt = "x".repeat(24001);
     expect(agentConfigSchema.safeParse(cfg).success).toBe(false);
   });
+
+  it("accepts a {{token}} in the greeting (short field)", () => {
+    const cfg = validConfig();
+    cfg.prompts.greeting = "Hello {{first_name}}, how are you?";
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
+  });
+
+  it("accepts an UNKNOWN {{token}} in the greeting (warn, never block)", () => {
+    const cfg = validConfig();
+    cfg.prompts.greeting = "Hello {{totally_made_up}}, welcome.";
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
+  });
+
+  it("rejects a stray single brace in the greeting", () => {
+    const cfg = validConfig();
+    cfg.prompts.greeting = "Hello {first_name}, how are you?";
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(false);
+  });
+
+  it("rejects a lone unmatched brace in the voicemail_message", () => {
+    const cfg = validConfig();
+    cfg.prompts.voicemail_message = "Sorry we missed you }";
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(false);
+  });
+
+  it("accepts {{tokens}} in the personalization template", () => {
+    const cfg = validConfig();
+    cfg.prompts.inbound_personalization_template =
+      "Speaking with {{elder_name}}. {{last_check_in_line}} Begin.";
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
+  });
+
+  it("still accepts the two legacy single-brace slots in the template", () => {
+    const cfg = validConfig();
+    cfg.prompts.inbound_personalization_template =
+      "Speaking with {elder_name}. {last_check_in_line} Begin.";
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
+  });
+
+  it("rejects an unknown legacy single-brace slot in the template", () => {
+    const cfg = validConfig();
+    cfg.prompts.inbound_personalization_template = "Hello {first_name}, welcome.";
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(false);
+  });
+
+  it("accepts an unknown {{token}} in the template (warn, never block)", () => {
+    const cfg = validConfig();
+    cfg.prompts.inbound_personalization_template =
+      "Speaking with {{elder_name}}. {{made_up_var}} Begin.";
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
+  });
 });
