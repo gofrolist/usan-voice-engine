@@ -1,3 +1,10 @@
+"""Tool catalog schema tests (Admin-UI Phase 3 design §4.1).
+
+Locks the closed 7-tool inventory: catalog order, per-tool category/gating flags,
+``TOOL_NAMES`` as a frozenset of the catalog names, ``ToolSpec`` defaults, and the
+``ToolCatalogResponse`` envelope the admin-ui fetches at runtime.
+"""
+
 from usan_api.schemas.tool_catalog import (
     TOOL_CATALOG,
     TOOL_NAMES,

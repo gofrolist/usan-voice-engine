@@ -10,6 +10,8 @@ catalog is a GLOBAL constant, NOT a per-version snapshot, so it never participat
 in the agent_profile_versions forward-compat invariant.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -19,7 +21,7 @@ class ToolSpec(BaseModel):
     name: str  # registry key, e.g. "flag_for_followup"
     label: str  # human label for the UI
     description: str  # what it does (shown in the editor)
-    category: str  # "logging" | "lifecycle" | "safety" | "messaging"
+    category: Literal["logging", "lifecycle", "safety", "messaging"]
     # end_call is locked on (cannot be disabled): it drives the only graceful
     # report->goodbye->delete_room->shutdown path.
     always_on: bool = False

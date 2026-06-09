@@ -14,10 +14,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from usan_api.schemas.tool_catalog import TOOL_NAMES
 from usan_api.schemas.variable_catalog import BUILTIN_NAMES, PHI_BUILTIN_NAMES
 
-# Tool names the agent can register; mirrors check_in.build_check_in_agent().
-TOOL_NAMES = frozenset({"log_wellness", "log_medication", "get_today_meds", "end_call"})
 # Personalization slots allowed in the inbound template (check_in.py rendering).
 # Kept for any external code that may import it; no longer used by the validators.
 ALLOWED_TEMPLATE_SLOTS = frozenset({"elder_name", "last_check_in_line"})
