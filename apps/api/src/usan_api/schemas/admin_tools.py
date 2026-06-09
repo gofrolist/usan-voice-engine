@@ -1,0 +1,24 @@
+"""Admin read-model summaries for the Phase-3 tool tables (design §5/§6).
+
+`from_attributes=True` lets these validate directly from the ORM rows the
+repositories return. FollowupFlagSummary intentionally exposes `reason` (PHI):
+the admin endpoint is session-gated and audited (see routers/admin_tools.py).
+"""
+
+import uuid
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict
+
+
+class FollowupFlagSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    call_id: uuid.UUID
+    elder_id: uuid.UUID
+    severity: str
+    category: str
+    reason: str | None
+    status: str
+    created_at: datetime
