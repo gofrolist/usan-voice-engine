@@ -1,4 +1,5 @@
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
@@ -7,6 +8,11 @@ from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig, PromptsCo
 from usan_agent.settings import Settings
 
 _NOW = datetime(2026, 6, 8, 13, 15, 0, tzinfo=ZoneInfo("UTC"))  # a Monday
+
+
+def _tools(enabled, sms=None):
+    # _select_tools takes a ToolsConfig-like object (.enabled + optional .sms).
+    return SimpleNamespace(enabled=list(enabled), sms=sms)
 
 
 def _cfg_with_prompts(**overrides) -> AgentConfig:
@@ -207,14 +213,14 @@ async def test_do_get_today_meds_sanitizes_med_fields(monkeypatch):
 
 
 def test_select_tools_filters_and_preserves_order():
-    tools = check_in._select_tools(["get_today_meds", "log_wellness"])
+    tools = check_in._select_tools(_tools(["get_today_meds", "log_wellness"]))
     ids = [t.id for t in tools]
     # order preserved, end_call force-appended for call-termination safety
     assert ids == ["get_today_meds", "log_wellness", "end_call"]
 
 
 def test_select_tools_ignores_unknown_names():
-    tools = check_in._select_tools(["log_wellness", "nonexistent"])
+    tools = check_in._select_tools(_tools(["log_wellness", "nonexistent"]))
     ids = {t.id for t in tools}
     assert "nonexistent" not in ids
     assert "log_wellness" in ids
@@ -227,6 +233,23 @@ def test_build_check_in_agent_respects_enabled():
     )
     agent = check_in.build_check_in_agent(cfg)
     assert {t.id for t in agent.tools} == {"log_wellness", "end_call"}
+
+
+def test_select_tools_drops_send_sms_without_templates():
+    # send_sms is enabled but has no templates -> not offered (dead tool guard).
+    # send_sms is not in _TOOL_REGISTRY in Part A, so this also exercises the
+    # registry filter; either way send_sms must be absent.
+    sms_cfg = SimpleNamespace(templates=[])
+    tools = check_in._select_tools(_tools(["log_wellness", "send_sms"], sms=sms_cfg))
+    ids = {t.id for t in tools}
+    assert "send_sms" not in ids
+    assert ids == {"log_wellness", "end_call"}
+
+
+def test_select_tools_safe_when_tools_has_no_sms_attr():
+    # ToolsConfig in Part A has no `sms` field; the getattr guard must not raise.
+    tools = check_in._select_tools(_tools(["log_wellness"]))
+    assert {t.id for t in tools} == {"log_wellness", "end_call"}
 
 
 def test_build_check_in_agent_uses_configured_instructions():

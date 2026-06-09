@@ -15,7 +15,7 @@ from livekit.agents import Agent, RunContext, function_tool
 from loguru import logger
 
 from usan_agent import api_client
-from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
+from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig, ToolsConfig
 from usan_agent.prompt_vars import build_vars, substitute
 from usan_agent.sanitize import sanitize_prompt_value
 from usan_agent.settings import Settings
@@ -203,17 +203,23 @@ _TOOL_REGISTRY: dict[str, Any] = {
 }
 
 
-def _select_tools(enabled: list[str]) -> list[Any]:
+def _select_tools(tools: ToolsConfig) -> list[Any]:
     """Resolve enabled tool names to callables, preserving order.
 
     Any enabled name absent from _TOOL_REGISTRY is silently dropped. That covers both
     unknown names (already rejected upstream by the admin schema) and catalog tools
     whose agent-side callable has not landed yet (see _TOOL_REGISTRY note) -- enabling
     such a tool is accepted by the API but is a no-op here until the registry catches up.
-    end_call is always included: it drives report->goodbye->delete_room->shutdown, so
-    removing it would leave a call unable to end gracefully.
+    send_sms is a dead tool until at least one SMS template is configured, so it is
+    dropped unless ``tools.sms`` carries templates (the field may not exist yet, hence
+    the getattr guard). end_call is always included: it drives
+    report->goodbye->delete_room->shutdown, so removing it would leave a call unable to
+    end gracefully.
     """
-    names = [n for n in enabled if n in _TOOL_REGISTRY]
+    names = [n for n in tools.enabled if n in _TOOL_REGISTRY]  # preserve enabled order
+    sms_cfg = getattr(tools, "sms", None)
+    if not (sms_cfg and getattr(sms_cfg, "templates", None)):
+        names = [n for n in names if n != "send_sms"]
     if "end_call" not in names:
         names.append("end_call")
     return [_TOOL_REGISTRY[n] for n in names]
@@ -242,7 +248,7 @@ def build_check_in_agent(
     )
     return Agent(
         instructions=substitute(cfg.prompts.checkin_flow_instructions, values),
-        tools=_select_tools(cfg.tools.enabled),
+        tools=_select_tools(cfg.tools),
     )
 
 
@@ -273,5 +279,5 @@ def build_inbound_agent(
     )
     return Agent(
         instructions=substitute(cfg.prompts.inbound_personalization_template, values),
-        tools=_select_tools(cfg.tools.enabled),
+        tools=_select_tools(cfg.tools),
     )
