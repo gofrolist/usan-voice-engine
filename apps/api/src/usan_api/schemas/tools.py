@@ -119,3 +119,13 @@ class LogMetricsRequest(BaseModel):
 class MetricsAcceptedResponse(BaseModel):
     call_id: uuid.UUID
     cost_total_usd: Decimal
+
+
+class SendSmsRequest(ToolCallRequest):
+    # The LLM selects a template KEY only; it never authors free text (design §6.1).
+    template_key: str = Field(min_length=1, max_length=64)
+
+
+class SmsQueuedResponse(BaseModel):
+    id: uuid.UUID
+    status: str

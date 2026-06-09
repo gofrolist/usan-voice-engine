@@ -4,7 +4,12 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from usan_api.schemas.tools import CallbackScheduledResponse, ScheduleCallbackRequest
+from usan_api.schemas.tools import (
+    CallbackScheduledResponse,
+    ScheduleCallbackRequest,
+    SendSmsRequest,
+    SmsQueuedResponse,
+)
 
 _CID = uuid.uuid4()
 
@@ -46,3 +51,20 @@ def test_schedule_callback_request_caps_notes_length():
 def test_callback_scheduled_response_shape():
     resp = CallbackScheduledResponse(id=42)
     assert resp.id == 42
+
+
+def test_send_sms_request_valid():
+    req = SendSmsRequest(call_id=uuid.uuid4(), template_key="med_reminder")
+    assert req.template_key == "med_reminder"
+
+
+def test_send_sms_request_template_key_required():
+    with pytest.raises(ValidationError):
+        SendSmsRequest(call_id=uuid.uuid4(), template_key="")
+
+
+def test_sms_queued_response_shape():
+    sid = uuid.uuid4()
+    resp = SmsQueuedResponse(id=sid, status="pending")
+    assert resp.id == sid
+    assert resp.status == "pending"
