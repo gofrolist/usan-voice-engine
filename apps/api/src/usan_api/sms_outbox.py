@@ -28,12 +28,19 @@ async def flush_pending_sms(call_id: uuid.UUID) -> None:
             return
 
         if not settings.telnyx_messaging_enabled:
+            disabled = 0
             for row in pending:
-                await sms_repo.mark_failed(db, row.id, error={"reason": "messaging_disabled"})
+                claimed = await sms_repo.mark_failed(
+                    db, row.id, error={"reason": "messaging_disabled"}
+                )
+                # Skip the count when a concurrent flush already claimed the row, so the
+                # SMS_MESSAGES_TOTAL counter can't double-increment in a completion race.
+                if claimed is not None:
+                    disabled += 1
             await db.commit()
-            for _ in pending:
+            for _ in range(disabled):
                 SMS_MESSAGES_TOTAL.labels(status="failed").inc()
-            logger.bind(call_id=str(call_id), n=len(pending)).info(
+            logger.bind(call_id=str(call_id), n=disabled).info(
                 "SMS flush skipped: messaging disabled"
             )
             return
@@ -49,15 +56,20 @@ async def flush_pending_sms(call_id: uuid.UUID) -> None:
                 # PHI-adjacent (tied to elder phone numbers) and an httpx error string
                 # can leak URL query strings or response-body fragments. PHI-free, like
                 # the SMS_MESSAGES_TOTAL counter (custom_metrics.py).
-                await sms_repo.mark_failed(
+                claimed = await sms_repo.mark_failed(
                     db,
                     row.id,
                     error={"reason": "send_failed", "detail": type(exc).__name__},
                 )
-                results.append("failed")
+                # Only count when THIS flush claimed the row; a None means a concurrent
+                # flush (end_call + room_finished race) already transitioned it, so
+                # counting here would double-increment SMS_MESSAGES_TOTAL.
+                if claimed is not None:
+                    results.append("failed")
                 continue
-            await sms_repo.mark_sent(db, row.id, telnyx_message_id=message_id)
-            results.append("sent")
+            claimed = await sms_repo.mark_sent(db, row.id, telnyx_message_id=message_id)
+            if claimed is not None:
+                results.append("sent")
         await db.commit()
         for outcome in results:
             SMS_MESSAGES_TOTAL.labels(status=outcome).inc()

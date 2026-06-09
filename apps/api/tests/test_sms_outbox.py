@@ -1,9 +1,11 @@
 import asyncio
 import uuid
 
+import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import counter_value as _counter_value
 from usan_api import sms_outbox, telnyx_messaging
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import SmsMessage
@@ -12,7 +14,7 @@ from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import sms_messages as sms_repo
 
 
-def _patch_factory(request, monkeypatch, url: str) -> None:
+def _patch_factory(request: pytest.FixtureRequest, monkeypatch, url: str) -> None:
     # flush_pending_sms() opens its own session via the module-global cached engine,
     # which uses a pooled (non-NullPool) connection. The test drives it across several
     # independent asyncio.run() loops, and a pooled connection bound to a closed loop
@@ -102,16 +104,23 @@ def test_flush_sends_and_marks_sent(client, async_database_url, monkeypatch, req
     monkeypatch.setattr(telnyx_messaging, "send_sms", _fake_send)
     _patch_factory(request, monkeypatch, async_database_url)
 
+    from usan_api.observability.custom_metrics import SMS_MESSAGES_TOTAL
+
+    before = _counter_value(SMS_MESSAGES_TOTAL, status="sent")
     call_id = asyncio.run(_seed_pending(async_database_url))
     asyncio.run(sms_outbox.flush_pending_sms(call_id))
     rows = asyncio.run(_status_of(async_database_url, call_id))
     assert rows[0].status == "sent"
     assert rows[0].telnyx_message_id == "msg-xyz"
+    # The counter is the sole observability signal for SMS delivery.
+    assert _counter_value(SMS_MESSAGES_TOTAL, status="sent") == before + 1
 
-    # Idempotent: a second flush re-sends nothing (row no longer pending).
+    # Idempotent: a second flush re-sends nothing (row no longer pending) and must NOT
+    # double-count the metric (the end_call + room_finished completion race).
     asyncio.run(sms_outbox.flush_pending_sms(call_id))
     rows2 = asyncio.run(_status_of(async_database_url, call_id))
     assert rows2[0].status == "sent"
+    assert _counter_value(SMS_MESSAGES_TOTAL, status="sent") == before + 1
     get_settings.cache_clear()
 
 
