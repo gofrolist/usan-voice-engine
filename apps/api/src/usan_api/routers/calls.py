@@ -70,8 +70,12 @@ async def _create_and_dispatch(
             raise HTTPException(status_code=409, detail="idempotency_key conflict") from exc
         return _idempotent_replay(existing, body, response)
 
+    last = await wellness_repo.get_latest_for_elder(db, elder.id)
+    resolved_vars, timezone = resolve_builtin_vars(elder, last, direction="outbound")
     try:
-        await livekit_dispatch.dispatch_agent(call, settings=settings)
+        await livekit_dispatch.dispatch_agent(
+            call, settings=settings, resolved_vars=resolved_vars, timezone=timezone
+        )
     except livekit_dispatch.OutboundDispatchError as exc:
         await calls_repo.set_status(db, call.id, CallStatus.FAILED, error={"reason": str(exc)})
         await db.commit()

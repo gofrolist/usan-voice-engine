@@ -132,18 +132,34 @@ async def resolve_outbound_trunk_id(settings: Settings) -> str:
         return created_id
 
 
-def _outbound_metadata(call: Call) -> str:
+def _outbound_metadata(call: Call, *, resolved_vars: dict[str, str] | None, timezone: str) -> str:
+    # dynamic_vars stays the persisted operator/idempotency payload; the server-
+    # resolved built-ins + timezone ride alongside it out-of-band (design §4.3),
+    # matching the agent's CallMetadata parsing (resolved_vars, timezone).
     return json.dumps(
         {
             "call_id": str(call.id),
             "direction": "outbound",
             "dynamic_vars": call.dynamic_vars,
+            "resolved_vars": resolved_vars or {},
+            "timezone": timezone,
         }
     )
 
 
-async def dispatch_agent(call: Call, *, settings: Settings) -> None:
-    """Dispatch the named agent worker into the call's room (fast, synchronous)."""
+async def dispatch_agent(
+    call: Call,
+    *,
+    settings: Settings,
+    resolved_vars: dict[str, str] | None = None,
+    timezone: str = "",
+) -> None:
+    """Dispatch the named agent worker into the call's room (fast, synchronous).
+
+    ``resolved_vars``/``timezone`` carry the server-resolved built-ins to the agent
+    via the dispatch metadata without persisting them (contract C, §4.3). They
+    default to empty so callers that don't resolve built-ins still work.
+    """
     if not outbound_configured(settings):
         raise OutboundDispatchError(
             "outbound calling not configured: set TELNYX_CALLER_ID plus Telnyx "
@@ -158,7 +174,7 @@ async def dispatch_agent(call: Call, *, settings: Settings) -> None:
             api.CreateAgentDispatchRequest(
                 agent_name=settings.agent_name,
                 room=call.livekit_room,
-                metadata=_outbound_metadata(call),
+                metadata=_outbound_metadata(call, resolved_vars=resolved_vars, timezone=timezone),
             )
         )
     logger.bind(call_id=str(call.id), room=call.livekit_room).info("Agent dispatched")

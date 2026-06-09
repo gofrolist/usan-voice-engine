@@ -465,3 +465,47 @@ async def test_dial_outbound_dispatch_error_fails_without_retry(monkeypatch, ses
     assert call.end_reason == "not_configured"
     assert await _count_children(session_factory, call_id) == 0  # permanent -> no retry
     fake.room.delete_room.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_agent_metadata_carries_resolved_vars_and_timezone(monkeypatch):
+    import json
+
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    call = Call(
+        id=uuid.uuid4(),
+        direction=CallDirection.OUTBOUND,
+        livekit_room="usan-outbound-meta",
+        dynamic_vars={"promo": "spring"},
+    )
+    await livekit_dispatch.dispatch_agent(
+        call,
+        settings=_settings(),
+        resolved_vars={"first_name": "Margaret", "call_direction": "outbound"},
+        timezone="US/Eastern",
+    )
+    req = fake.agent_dispatch.create_dispatch.await_args.args[0]
+    meta = json.loads(req.metadata)
+    assert meta["direction"] == "outbound"
+    assert meta["dynamic_vars"] == {"promo": "spring"}  # idempotency payload untouched
+    assert meta["resolved_vars"]["first_name"] == "Margaret"
+    assert meta["timezone"] == "US/Eastern"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_agent_metadata_defaults_when_no_builtins(monkeypatch):
+    import json
+
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    call = Call(
+        id=uuid.uuid4(),
+        direction=CallDirection.OUTBOUND,
+        livekit_room="usan-outbound-meta2",
+        dynamic_vars={},
+    )
+    await livekit_dispatch.dispatch_agent(call, settings=_settings())
+    meta = json.loads(fake.agent_dispatch.create_dispatch.await_args.args[0].metadata)
+    assert meta["resolved_vars"] == {}
+    assert meta["timezone"] == ""
