@@ -445,6 +445,7 @@ def _publish_sms_profile(async_database_url, *, body="Hello {{first_name}} from 
     from sqlalchemy.pool import NullPool
 
     from usan_api.repositories import agent_profiles as profiles_repo
+    from usan_api.schemas.agent_config import AgentConfig, SmsTemplate, SmsToolConfig
 
     async def _do():
         engine = create_async_engine(async_database_url, poolclass=NullPool)
@@ -454,19 +455,21 @@ def _publish_sms_profile(async_database_url, *, body="Hello {{first_name}} from 
                 profile = await profiles_repo.create_profile(
                     db, name=f"sms-{uuid.uuid4()}", description=None, actor_email="op@x.io"
                 )
-                draft = dict(profile.draft_config)
-                tools = dict(draft.get("tools") or {})
-                existing_enabled = list(tools.get("enabled") or [])
-                enabled = (
-                    existing_enabled
-                    if "send_sms" in existing_enabled
-                    else [*existing_enabled, "send_sms"]
+                # Build the draft through the real Pydantic schema (immutable copy) rather
+                # than spreading raw JSONB dicts, mirroring the codebase's no-mutation rule.
+                base = AgentConfig.model_validate(profile.draft_config)
+                enabled = base.tools.enabled
+                if "send_sms" not in enabled:
+                    enabled = [*enabled, "send_sms"]
+                tools = base.tools.model_copy(
+                    update={
+                        "enabled": enabled,
+                        "sms": SmsToolConfig(
+                            templates=[SmsTemplate(key="greet", label="Greet", body=body)]
+                        ),
+                    }
                 )
-                draft["tools"] = {
-                    **tools,
-                    "enabled": enabled,
-                    "sms": {"templates": [{"key": "greet", "label": "Greet", "body": body}]},
-                }
+                draft = base.model_copy(update={"tools": tools}).model_dump()
                 await profiles_repo.update_draft(
                     db, profile.id, config=draft, description=None, actor_email="op@x.io"
                 )
@@ -526,3 +529,113 @@ def test_send_sms_requires_token(client, mock_dispatch):
     call_id = _enqueue(client, elder_id)
     r = client.post("/v1/tools/send_sms", json={"call_id": call_id, "template_key": "greet"})
     assert r.status_code == 401
+
+
+def test_send_sms_mismatch_403(client, mock_dispatch, async_database_url):
+    # Service token bound to a different call_id must be rejected by _authorize_call.
+    _publish_sms_profile(async_database_url)
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
+        headers=_auth(str(uuid.uuid4())),
+    )
+    assert r.status_code == 403
+
+
+def _publish_override_profile(async_database_url, *, template_key, body="Hi from override."):
+    """Publish a profile enabling send_sms with one template under `template_key`, and
+    return its id. NOT marked default — used as a per-call profile_override."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import agent_profiles as profiles_repo
+    from usan_api.schemas.agent_config import AgentConfig, SmsTemplate, SmsToolConfig
+
+    async def _do():
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as db:
+                profile = await profiles_repo.create_profile(
+                    db, name=f"ovr-{uuid.uuid4()}", description=None, actor_email="op@x.io"
+                )
+                base = AgentConfig.model_validate(profile.draft_config)
+                enabled = base.tools.enabled
+                if "send_sms" not in enabled:
+                    enabled = [*enabled, "send_sms"]
+                tools = base.tools.model_copy(
+                    update={
+                        "enabled": enabled,
+                        "sms": SmsToolConfig(
+                            templates=[SmsTemplate(key=template_key, label="Ovr", body=body)]
+                        ),
+                    }
+                )
+                draft = base.model_copy(update={"tools": tools}).model_dump()
+                await profiles_repo.update_draft(
+                    db, profile.id, config=draft, description=None, actor_email="op@x.io"
+                )
+                await profiles_repo.publish(db, profile.id, note=None, actor_email="op@x.io")
+                await db.commit()
+                return profile.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_do())
+
+
+def _set_call_override(async_database_url, call_id, profile_id):
+    """Point a call's profile_override at `profile_id` via a direct write."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import calls as calls_repo
+
+    async def _do():
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as db:
+                call = await calls_repo.get_call(db, uuid.UUID(call_id))
+                call.profile_override = profile_id
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_do())
+
+
+def test_send_sms_resolves_profile_override_over_direction_default(
+    client, mock_dispatch, async_database_url
+):
+    # The direction-default profile offers only "greet"; the call's profile_override
+    # offers only "ovr_greet". The override is top of the precedence walk, so the
+    # override's template resolves and the direction-default's "greet" does NOT.
+    _publish_sms_profile(async_database_url)  # default-outbound, template "greet"
+    override_id = _publish_override_profile(async_database_url, template_key="ovr_greet")
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    _set_call_override(async_database_url, call_id, override_id)
+
+    # Override-only template succeeds (override tier won).
+    ok = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "ovr_greet"},
+        headers=_auth(call_id),
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["status"] == "pending"
+
+    # The direction-default's "greet" is invisible once the override resolves -> 404.
+    miss = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
+        headers=_auth(call_id),
+    )
+    assert miss.status_code == 404

@@ -1,5 +1,5 @@
 import uuid
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import cost, sms_render
 from usan_api.auth import require_service_token
-from usan_api.db.base import CallDirection
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
 from usan_api.observability.custom_metrics import (
@@ -224,14 +223,11 @@ async def send_sms(
     if elder is None:
         raise HTTPException(status_code=409, detail="elder record not found")
 
-    direction: Literal["inbound", "outbound"] = (
-        "inbound" if call.direction is CallDirection.INBOUND else "outbound"
-    )
     resolved = await profiles_repo.resolve_agent_config(
         db,
         profile_override=call.profile_override,
         elder_profile_id=elder.agent_profile_id,
-        direction=direction,
+        direction=call.direction.value,
     )
     cfg = resolved.config if resolved is not None else DEFAULT_AGENT_CONFIG
     sms_cfg = cfg.tools.sms
@@ -253,7 +249,7 @@ async def send_sms(
     )
     await db.commit()
     # Does NOT send synchronously: flush_pending_sms delivers post-call (design §6.3).
-    logger.bind(call_id=str(call.id)).info("Queued send_sms")
+    logger.bind(call_id=str(call.id), elder_id=str(elder_id)).info("Queued send_sms")
     return SmsQueuedResponse(id=row.id, status=row.status)
 
 
