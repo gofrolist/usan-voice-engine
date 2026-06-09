@@ -9,6 +9,19 @@ from usan_api import livekit_dispatch
 _OP = {"Authorization": "Bearer " + "o" * 32}
 
 
+def _counter_value(counter, **labels) -> float:
+    """Read a Counter's cumulative value via the public collect() API.
+
+    Avoids the private `._value.get()` internal. The `_total` sample carries the
+    cumulative count; `labels` filters labeled counters (empty for unlabeled ones).
+    """
+    for metric in counter.collect():
+        for sample in metric.samples:
+            if sample.name.endswith("_total") and sample.labels == labels:
+                return sample.value
+    return 0.0
+
+
 @pytest.fixture
 def mock_dispatch(monkeypatch):
     from unittest.mock import AsyncMock
@@ -131,7 +144,7 @@ def test_schedule_callback_empty_time_text_422(client, mock_dispatch):
 def test_schedule_callback_increments_metric(client, mock_dispatch):
     from usan_api.observability.custom_metrics import CALLBACK_REQUESTS_TOTAL
 
-    before = CALLBACK_REQUESTS_TOTAL._value.get()
+    before = _counter_value(CALLBACK_REQUESTS_TOTAL)
     elder_id = _create_elder(client)
     call_id = _enqueue(client, elder_id)
     r = client.post(
@@ -140,4 +153,4 @@ def test_schedule_callback_increments_metric(client, mock_dispatch):
         headers=_auth(call_id),
     )
     assert r.status_code == 200
-    assert CALLBACK_REQUESTS_TOTAL._value.get() == before + 1
+    assert _counter_value(CALLBACK_REQUESTS_TOTAL) == before + 1

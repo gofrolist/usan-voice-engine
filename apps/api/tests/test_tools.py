@@ -10,6 +10,19 @@ from usan_api import livekit_dispatch
 _OP = {"Authorization": "Bearer " + "o" * 32}
 
 
+def _counter_value(counter, **labels) -> float:
+    """Read a Counter's cumulative value via the public collect() API.
+
+    Avoids the private `._value.get()` internal. The `_total` sample carries the
+    cumulative count; `labels` filters labeled counters (empty for unlabeled ones).
+    """
+    for metric in counter.collect():
+        for sample in metric.samples:
+            if sample.name.endswith("_total") and sample.labels == labels:
+                return sample.value
+    return 0.0
+
+
 @pytest.fixture
 def mock_dispatch(monkeypatch):
     from unittest.mock import AsyncMock
@@ -421,7 +434,7 @@ def test_flag_for_followup_bad_enum_422(client, mock_dispatch):
 def test_flag_for_followup_increments_metric(client, mock_dispatch):
     from usan_api.observability.custom_metrics import FOLLOWUP_FLAGS_TOTAL
 
-    before = FOLLOWUP_FLAGS_TOTAL.labels(severity="urgent", category="safety")._value.get()
+    before = _counter_value(FOLLOWUP_FLAGS_TOTAL, severity="urgent", category="safety")
     elder_id = _create_elder(client)
     call_id = _enqueue(client, elder_id)
     r = client.post(
@@ -430,5 +443,5 @@ def test_flag_for_followup_increments_metric(client, mock_dispatch):
         headers=_auth(call_id),
     )
     assert r.status_code == 200
-    after = FOLLOWUP_FLAGS_TOTAL.labels(severity="urgent", category="safety")._value.get()
+    after = _counter_value(FOLLOWUP_FLAGS_TOTAL, severity="urgent", category="safety")
     assert after == before + 1

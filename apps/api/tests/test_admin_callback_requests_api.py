@@ -7,7 +7,11 @@ from sqlalchemy.pool import NullPool
 
 
 async def _seed_callback(
-    async_database_url: str, *, requested_time_text: str, status: str = "open"
+    async_database_url: str,
+    *,
+    requested_time_text: str,
+    status: str = "open",
+    notes: str | None = None,
 ) -> tuple[str, str]:
     elder_id = str(uuid.uuid4())
     call_id = str(uuid.uuid4())
@@ -31,10 +35,16 @@ async def _seed_callback(
             await conn.execute(
                 text(
                     "INSERT INTO callback_requests "
-                    "(call_id, elder_id, requested_time_text, status) "
-                    "VALUES (CAST(:cid AS uuid), CAST(:eid AS uuid), :t, :s)"
+                    "(call_id, elder_id, requested_time_text, status, notes) "
+                    "VALUES (CAST(:cid AS uuid), CAST(:eid AS uuid), :t, :s, :n)"
                 ),
-                {"cid": call_id, "eid": elder_id, "t": requested_time_text, "s": status},
+                {
+                    "cid": call_id,
+                    "eid": elder_id,
+                    "t": requested_time_text,
+                    "s": status,
+                    "n": notes,
+                },
             )
     finally:
         await engine.dispose()
@@ -77,3 +87,22 @@ def test_list_callback_requests_filters_by_status(client, admin_session, async_d
 
 def test_list_callback_requests_over_cap_limit_422(client, admin_session):
     assert client.get("/v1/admin/callback-requests?limit=100000").status_code == 422
+
+
+def test_callback_requests_read_is_audited_phi_free(client, admin_session, async_database_url):
+    # Callback notes are PHI; the admin read must be audited, but the audit entry
+    # itself must carry NO PHI (no notes text). Mirrors the follow-up-flags audit test.
+    asyncio.run(
+        _seed_callback(
+            async_database_url,
+            requested_time_text="tomorrow at 3",
+            notes="secret callback note",
+        )
+    )
+    client.get("/v1/admin/callback-requests")
+    rows = client.get("/v1/admin/audit?action=callback_requests.list").json()
+    assert rows, "callback-requests read must write an audit entry"
+    entry = rows[0]
+    blob = (str(entry["detail"]) + str(entry["entity_type"]) + str(entry["entity_id"])).lower()
+    assert "secret" not in blob
+    assert "callback note" not in blob
