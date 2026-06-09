@@ -55,6 +55,9 @@ def upgrade() -> None:
         """
     )
     op.execute(
+        "CREATE INDEX idx_callback_requests_elder ON callback_requests(elder_id, created_at DESC)"
+    )
+    op.execute(
         "CREATE INDEX idx_callback_requests_status ON callback_requests(status, created_at DESC)"
     )
 
@@ -78,7 +81,7 @@ def upgrade() -> None:
         """
     )
     op.execute("CREATE INDEX idx_sms_messages_call ON sms_messages(call_id, status)")
-    op.execute("CREATE INDEX idx_sms_messages_status ON sms_messages(status, created_at)")
+    op.execute("CREATE INDEX idx_sms_messages_status ON sms_messages(status, created_at DESC)")
 
 
 def downgrade() -> None:

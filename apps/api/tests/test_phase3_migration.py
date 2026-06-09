@@ -19,7 +19,8 @@ async def _columns(async_database_url: str, table: str) -> dict[str, str]:
             rows = await conn.execute(
                 text(
                     "SELECT column_name, data_type FROM information_schema.columns "
-                    "WHERE table_name = :t ORDER BY ordinal_position"
+                    "WHERE table_name = :t AND table_schema = 'public' "
+                    "ORDER BY ordinal_position"
                 ),
                 {"t": table},
             )
@@ -67,6 +68,7 @@ def test_callback_requests_table_shape(async_database_url):
     assert cols["status"] == "text"
     assert cols["created_at"] == "timestamp with time zone"
     idx = asyncio.run(_indexes(async_database_url, "callback_requests"))
+    assert "idx_callback_requests_elder" in idx
     assert "idx_callback_requests_status" in idx
 
 
@@ -89,11 +91,9 @@ def test_sms_messages_table_shape(async_database_url):
     assert "idx_sms_messages_status" in idx
 
 
-def test_follow_up_flags_cascades_call_not_elder(async_database_url):
-    # CASCADE to calls(id), NO cascade to elders(id): the FK delete rules must differ.
+async def _delete_rules(async_database_url: str, table: str) -> dict[str, str]:
     engine = create_async_engine(async_database_url, poolclass=NullPool)
-
-    async def _rules() -> dict[str, str]:
+    try:
         async with engine.begin() as conn:
             rows = await conn.execute(
                 text(
@@ -103,14 +103,31 @@ def test_follow_up_flags_cascades_call_not_elder(async_database_url):
                     "  ON ccu.constraint_name = rc.constraint_name "
                     "JOIN information_schema.table_constraints tc "
                     "  ON tc.constraint_name = rc.constraint_name "
-                    "WHERE tc.table_name = 'follow_up_flags'"
-                )
+                    "WHERE tc.table_name = :t AND tc.table_schema = 'public'"
+                ),
+                {"t": table},
             )
             return {r[0]: r[1] for r in rows}
-
-    try:
-        rules = asyncio.run(_rules())
     finally:
-        asyncio.run(engine.dispose())
+        await engine.dispose()
+
+
+def test_follow_up_flags_cascades_call_not_elder(async_database_url):
+    # CASCADE to calls(id), NO cascade to elders(id): the FK delete rules must differ.
+    rules = asyncio.run(_delete_rules(async_database_url, "follow_up_flags"))
+    assert rules["calls"] == "CASCADE"
+    assert rules["elders"] == "NO ACTION"
+
+
+def test_callback_requests_cascades(async_database_url):
+    # Same FK rules as follow_up_flags: CASCADE to calls, NO ACTION to elders.
+    rules = asyncio.run(_delete_rules(async_database_url, "callback_requests"))
+    assert rules["calls"] == "CASCADE"
+    assert rules["elders"] == "NO ACTION"
+
+
+def test_sms_messages_cascades(async_database_url):
+    # Same FK rules as follow_up_flags: CASCADE to calls, NO ACTION to elders.
+    rules = asyncio.run(_delete_rules(async_database_url, "sms_messages"))
     assert rules["calls"] == "CASCADE"
     assert rules["elders"] == "NO ACTION"
