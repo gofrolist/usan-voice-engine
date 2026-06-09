@@ -111,6 +111,52 @@ def test_inbound_requires_worker_token(client):
     assert r.status_code == 401
 
 
+def test_inbound_known_elder_returns_resolved_vars_and_timezone(client):
+    phone = _phone()
+    # Create an elder with a med schedule via metadata so today_meds populates.
+    r = client.post(
+        "/v1/elders",
+        json={
+            "name": "Margaret Doe",
+            "phone_e164": phone,
+            "timezone": "US/Eastern",
+            "metadata": {"medication_schedule": [{"name": "Lisinopril"}]},
+        },
+        headers=_OP,
+    )
+    assert r.status_code == 201
+    resp = client.post(
+        "/v1/calls/inbound",
+        json={"phone_e164": phone, "livekit_room": "usan-inbound-rv"},
+        headers=_worker_auth(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["timezone"] == "US/Eastern"
+    rv = data["resolved_vars"]
+    assert rv["first_name"] == "Margaret"
+    assert rv["elder_name"] == "Margaret Doe"
+    assert rv["call_direction"] == "inbound"
+    assert rv["today_meds"] == "Lisinopril"
+    # current_time/current_date are agent-side — never in resolved_vars.
+    assert "current_time" not in rv
+    # The persisted idempotency-payload dynamic_vars is untouched by built-ins.
+    assert "first_name" not in data["dynamic_vars"]
+
+
+def test_inbound_unknown_caller_returns_empty_resolved_vars(client):
+    resp = client.post(
+        "/v1/calls/inbound",
+        json={"phone_e164": "+19990001111", "livekit_room": "usan-inbound-rv2"},
+        headers=_worker_auth(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["resolved_vars"]["call_direction"] == "inbound"
+    assert data["resolved_vars"]["first_name"] == ""
+    assert data["timezone"] == ""
+
+
 def test_inbound_surfaces_last_check_in_and_call_id_works_with_tools(client):
     phone = _phone()
     _create_elder(client, phone)

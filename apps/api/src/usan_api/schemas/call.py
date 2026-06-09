@@ -100,3 +100,8 @@ class InboundCallResponse(BaseModel):
     call_id: uuid.UUID
     elder_known: bool
     dynamic_vars: dict[str, Any]
+    # Phase 2 (contract C): the 8 server-resolved data built-ins + the elder's IANA
+    # timezone, passed to the agent out-of-band. Additive with defaults so older
+    # agent builds that ignore them keep working.
+    resolved_vars: dict[str, str] = Field(default_factory=dict)
+    timezone: str = ""
