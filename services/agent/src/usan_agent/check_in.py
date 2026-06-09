@@ -97,6 +97,27 @@ async def _do_flag_for_followup(
     return "Thank you. I've flagged this so someone can follow up with you."
 
 
+async def _do_schedule_callback(
+    data: CheckInData,
+    *,
+    requested_time_text: str,
+    requested_at: str | None = None,
+    notes: str | None = None,
+) -> str:
+    try:
+        await api_client.schedule_callback(
+            data.call_id,
+            data.settings,
+            requested_time_text=requested_time_text,
+            requested_at=requested_at,
+            notes=notes,
+        )
+    except Exception:
+        logger.bind(call_id=data.call_id).warning("schedule_callback tool failed")
+        return "I had trouble noting that callback time, but we can still continue."
+    return "Of course, I've noted that you'd like a call back then."
+
+
 async def _do_get_today_meds(data: CheckInData) -> str:
     try:
         meds = await api_client.get_today_meds(data.call_id, data.settings)
@@ -213,6 +234,30 @@ async def flag_for_followup(
 
 
 @function_tool
+async def schedule_callback(
+    ctx: RunContext[CheckInData],
+    requested_time_text: str,
+    requested_at: str | None = None,
+    notes: str | None = None,
+) -> str:
+    """Record that the elder would like a call back at a particular time.
+
+    This does not place a call; it stores a request for a human to action.
+
+    Args:
+        requested_time_text: The elder's own words for when they'd like the call back.
+        requested_at: Optional best-effort ISO-8601 timestamp; omit if you can't resolve one.
+        notes: Optional short free-text note about the request.
+    """
+    return await _do_schedule_callback(
+        ctx.userdata,
+        requested_time_text=requested_time_text,
+        requested_at=requested_at,
+        notes=notes,
+    )
+
+
+@function_tool
 async def end_call(ctx: RunContext[CheckInData], reason: str = "check_in_complete") -> str:
     """End the call once the check-in is complete.
 
@@ -232,6 +277,7 @@ _TOOL_REGISTRY: dict[str, Any] = {
     "log_medication": log_medication,
     "get_today_meds": get_today_meds,
     "flag_for_followup": flag_for_followup,
+    "schedule_callback": schedule_callback,
     "end_call": end_call,
 }
 

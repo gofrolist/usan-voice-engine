@@ -473,3 +473,49 @@ def test_flag_for_followup_in_tool_registry():
     assert "flag_for_followup" in check_in._TOOL_REGISTRY
     keys = list(check_in._TOOL_REGISTRY)
     assert keys.index("flag_for_followup") < keys.index("end_call")
+
+
+async def test_do_schedule_callback_calls_api_and_acks(monkeypatch):
+    spy = AsyncMock()
+    monkeypatch.setattr(check_in.api_client, "schedule_callback", spy)
+    result = await check_in._do_schedule_callback(
+        _data(),
+        requested_time_text="tomorrow afternoon",
+        requested_at="2026-06-10T15:00:00Z",
+        notes="prefers afternoons",
+    )
+    spy.assert_awaited_once()
+    kwargs = spy.await_args.kwargs
+    assert kwargs == {
+        "requested_time_text": "tomorrow afternoon",
+        "requested_at": "2026-06-10T15:00:00Z",
+        "notes": "prefers afternoons",
+    }
+    assert spy.await_args.args[0] == "call-1"
+    assert isinstance(result, str)
+    assert result  # a spoken acknowledgement
+
+
+async def test_do_schedule_callback_handles_api_failure(monkeypatch):
+    async def _boom(*a, **k):
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr(check_in.api_client, "schedule_callback", _boom)
+    result = await check_in._do_schedule_callback(
+        _data(), requested_time_text="soon", requested_at=None, notes=None
+    )
+    assert isinstance(result, str)
+    assert result  # graceful string, no exception
+
+
+def test_schedule_callback_in_tool_registry():
+    assert "schedule_callback" in check_in._TOOL_REGISTRY
+
+
+def test_select_tools_includes_schedule_callback_when_enabled():
+    from usan_agent.agent_config import ToolsConfig
+
+    tools = check_in._select_tools(ToolsConfig(enabled=["schedule_callback", "end_call"]))
+    ids = {t.id for t in tools}
+    assert "schedule_callback" in ids
+    assert "end_call" in ids  # always force-included

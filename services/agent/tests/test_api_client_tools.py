@@ -92,3 +92,36 @@ async def test_tool_client_raises_on_http_error(fake_http):
     _FakeClient.status = 500
     with pytest.raises(httpx.HTTPStatusError):
         await api_client.log_wellness("call-1", _settings(), mood=3, pain_level=None, notes=None)
+
+
+async def test_schedule_callback_posts_scoped_request(fake_http):
+    _FakeClient.json_data = {"id": 11}
+    await api_client.schedule_callback(
+        "call-1",
+        _settings(),
+        requested_time_text="tomorrow afternoon",
+        requested_at="2026-06-10T15:00:00Z",
+        notes="prefers afternoons",
+    )
+    cap = fake_http.captured
+    assert cap["url"] == "http://api:8000/v1/tools/schedule_callback"
+    assert cap["json"] == {
+        "call_id": "call-1",
+        "requested_time_text": "tomorrow afternoon",
+        "requested_at": "2026-06-10T15:00:00Z",
+        "notes": "prefers afternoons",
+    }
+    assert cap["headers"]["Authorization"].startswith("Bearer ")
+
+
+async def test_schedule_callback_passes_null_optionals(fake_http):
+    _FakeClient.json_data = {"id": 12}
+    await api_client.schedule_callback(
+        "call-1", _settings(), requested_time_text="soon", requested_at=None, notes=None
+    )
+    assert fake_http.captured["json"] == {
+        "call_id": "call-1",
+        "requested_time_text": "soon",
+        "requested_at": None,
+        "notes": None,
+    }

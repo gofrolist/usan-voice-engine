@@ -111,6 +111,26 @@ async def log_medication(
     )
 
 
+async def schedule_callback(
+    call_id: str,
+    settings: Settings,
+    *,
+    requested_time_text: str,
+    requested_at: str | None,
+    notes: str | None,
+) -> None:
+    await _post_tool(
+        "schedule_callback",
+        call_id,
+        settings,
+        {
+            "requested_time_text": requested_time_text,
+            "requested_at": requested_at,
+            "notes": notes,
+        },
+    )
+
+
 async def get_today_meds(call_id: str, settings: Settings) -> list[dict[str, Any]]:
     data = await _post_tool("get_today_meds", call_id, settings, {})
     meds = data.get("medications", [])
