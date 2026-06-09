@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,16 @@ class LogWellnessRequest(ToolCallRequest):
 
 
 class LoggedResponse(BaseModel):
+    id: int
+
+
+class FlagForFollowupRequest(ToolCallRequest):
+    severity: Literal["routine", "urgent"]
+    category: Literal["medical", "emotional", "medication", "safety", "other"]
+    reason: str = Field(max_length=2000)
+
+
+class FollowupFlaggedResponse(BaseModel):
     id: int
 
 

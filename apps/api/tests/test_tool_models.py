@@ -88,3 +88,55 @@ async def test_transcript_round_trip(session_factory):
     assert got.content == "hello"
     assert got.tool_name is None
     assert got.created_at is not None
+
+
+def test_flag_for_followup_request_valid():
+    import uuid
+
+    from usan_api.schemas.tools import FlagForFollowupRequest
+
+    cid = uuid.uuid4()
+    req = FlagForFollowupRequest(
+        call_id=cid, severity="urgent", category="medical", reason="chest pain"
+    )
+    assert req.call_id == cid
+    assert req.severity == "urgent"
+    assert req.category == "medical"
+
+
+def test_flag_for_followup_rejects_bad_enums():
+    import uuid
+
+    import pytest
+    from pydantic import ValidationError
+
+    from usan_api.schemas.tools import FlagForFollowupRequest
+
+    with pytest.raises(ValidationError):
+        FlagForFollowupRequest(
+            call_id=uuid.uuid4(), severity="emergency", category="medical", reason="x"
+        )
+    with pytest.raises(ValidationError):
+        FlagForFollowupRequest(
+            call_id=uuid.uuid4(), severity="urgent", category="weather", reason="x"
+        )
+
+
+def test_flag_for_followup_reason_max_length():
+    import uuid
+
+    import pytest
+    from pydantic import ValidationError
+
+    from usan_api.schemas.tools import FlagForFollowupRequest
+
+    with pytest.raises(ValidationError):
+        FlagForFollowupRequest(
+            call_id=uuid.uuid4(), severity="routine", category="other", reason="x" * 2001
+        )
+
+
+def test_followup_flagged_response_shape():
+    from usan_api.schemas.tools import FollowupFlaggedResponse
+
+    assert FollowupFlaggedResponse(id=7).id == 7
