@@ -3,31 +3,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
-from livekit.agents import RunContext, function_tool
-
 from usan_agent import check_in
 from usan_agent.agent_config import (
     DEFAULT_AGENT_CONFIG,
     AgentConfig,
     PromptsConfig,
-    SmsConfig,
-    ToolsConfig,
 )
 from usan_agent.settings import Settings
 
 _NOW = datetime(2026, 6, 8, 13, 15, 0, tzinfo=ZoneInfo("UTC"))  # a Monday
-
-
-@function_tool
-async def send_sms(ctx: RunContext[check_in.CheckInData]) -> str:
-    """Stub send_sms whose FunctionTool.id is "send_sms" (its function name).
-
-    Naming the function ``send_sms`` makes @function_tool derive ``.id == "send_sms"``
-    from the function name, so the guard tests can register a real send_sms in
-    _TOOL_REGISTRY ahead of Parts B/C/D without mutating any livekit-agents internals.
-    That way the template guard -- not the Part A registry filter -- is what's exercised.
-    """
-    return ""
 
 
 def _tools(enabled, sms=None) -> SimpleNamespace:
@@ -266,9 +250,10 @@ def test_build_check_in_agent_respects_enabled():
     assert {t.id for t in agent.tools} == {"log_wellness", "end_call"}
 
 
-def test_select_tools_drops_send_sms_via_registry_filter_in_part_a():
-    # In Part A send_sms is not in _TOOL_REGISTRY, so the registry filter removes it
-    # before the template guard ever runs (this is the vacuous-by-design Part A path).
+def test_select_tools_drops_send_sms_without_templates() -> None:
+    # send_sms is enabled but has no templates -> not offered (dead tool guard).
+    # send_sms is not in _TOOL_REGISTRY in Part A, so this also exercises the
+    # registry filter; either way send_sms must be absent.
     sms_cfg = SimpleNamespace(templates=[])
     tools = check_in._select_tools(_tools(["log_wellness", "send_sms"], sms=sms_cfg))
     ids = {t.id for t in tools}
@@ -276,39 +261,8 @@ def test_select_tools_drops_send_sms_via_registry_filter_in_part_a():
     assert ids == {"log_wellness", "end_call"}
 
 
-def test_select_tools_drops_send_sms_when_in_registry_but_no_templates(monkeypatch):
-    # Real guard coverage: with send_sms IN _TOOL_REGISTRY (simulating Parts B/C/D) the
-    # registry filter no longer hides it, so the template guard alone must drop it when
-    # tools.sms has no templates.
-    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", send_sms)
-    cfg = ToolsConfig(enabled=["log_wellness", "send_sms"], sms=SmsConfig(templates=[]))
-    ids = {t.id for t in check_in._select_tools(cfg)}
-    assert "send_sms" not in ids
-    assert ids == {"log_wellness", "end_call"}
-
-
-def test_select_tools_drops_send_sms_when_in_registry_but_sms_unset(monkeypatch):
-    # Same guard, sms entirely unset (None) -> still dropped even though it's registered.
-    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", send_sms)
-    cfg = ToolsConfig(enabled=["log_wellness", "send_sms"], sms=None)
-    ids = {t.id for t in check_in._select_tools(cfg)}
-    assert "send_sms" not in ids
-    assert ids == {"log_wellness", "end_call"}
-
-
-def test_select_tools_keeps_send_sms_when_in_registry_with_templates(monkeypatch):
-    # Affirmative branch: send_sms registered AND tools.sms carries templates -> retained.
-    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", send_sms)
-    cfg = ToolsConfig(
-        enabled=["log_wellness", "send_sms"], sms=SmsConfig(templates=["You have a message."])
-    )
-    ids = {t.id for t in check_in._select_tools(cfg)}
-    assert "send_sms" in ids
-    assert ids == {"log_wellness", "send_sms", "end_call"}
-
-
-def test_select_tools_safe_when_sms_is_none():
-    # ToolsConfig.sms defaults to None; the guard must not raise on the None path.
+def test_select_tools_safe_when_tools_has_no_sms_attr() -> None:
+    # ToolsConfig in Part A has no `sms` field; the getattr guard must not raise.
     tools = check_in._select_tools(_tools(["log_wellness"]))
     assert {t.id for t in tools} == {"log_wellness", "end_call"}
 
@@ -370,7 +324,7 @@ def test_build_check_in_agent_substitutes_double_brace_tokens():
     assert "{{" not in agent.instructions
 
 
-def test_build_check_in_agent_unknown_token_renders_empty():
+def test_build_check_in_agent_unknown_token_renders_empty() -> None:
     cfg = _cfg_with_prompts(checkin_flow_instructions="Hi {{mystery}}!")
     agent = check_in.build_check_in_agent(
         cfg, resolved_vars={}, custom_vars={}, timezone="", now=_NOW
@@ -378,7 +332,7 @@ def test_build_check_in_agent_unknown_token_renders_empty():
     assert agent.instructions == "Hi !"
 
 
-def test_build_check_in_agent_custom_var_renders():
+def test_build_check_in_agent_custom_var_renders() -> None:
     cfg = _cfg_with_prompts(checkin_flow_instructions="From {{company}}.")
     agent = check_in.build_check_in_agent(
         cfg, resolved_vars={}, custom_vars={"company": "USAN"}, timezone="", now=_NOW
@@ -386,13 +340,13 @@ def test_build_check_in_agent_custom_var_renders():
     assert agent.instructions == "From USAN."
 
 
-def test_build_check_in_agent_defaults_when_no_vars():
+def test_build_check_in_agent_defaults_when_no_vars() -> None:
     # Backward-compat: the default flow template has no tokens, so it is unchanged.
     agent = check_in.build_check_in_agent()
     assert agent.instructions == check_in.CHECK_IN_INSTRUCTIONS
 
 
-def test_build_inbound_agent_substitutes_double_brace_first_name():
+def test_build_inbound_agent_substitutes_double_brace_first_name() -> None:
     cfg = _cfg_with_prompts(inbound_personalization_template="Hello {{first_name}}!")
     agent = check_in.build_inbound_agent(
         cfg, resolved_vars={"first_name": "Ada"}, custom_vars={}, timezone="", now=_NOW
@@ -400,7 +354,7 @@ def test_build_inbound_agent_substitutes_double_brace_first_name():
     assert agent.instructions == "Hello Ada!"
 
 
-def test_build_inbound_agent_legacy_single_brace_still_renders():
+def test_build_inbound_agent_legacy_single_brace_still_renders() -> None:
     # An already-published template using {elder_name} must still render.
     agent = check_in.build_inbound_agent(
         None, resolved_vars={"elder_name": "Ada"}, custom_vars={}, timezone="", now=_NOW
@@ -409,7 +363,7 @@ def test_build_inbound_agent_legacy_single_brace_still_renders():
     assert "{elder_name}" not in agent.instructions
 
 
-def test_build_inbound_agent_unknown_token_renders_empty():
+def test_build_inbound_agent_unknown_token_renders_empty() -> None:
     cfg = _cfg_with_prompts(inbound_personalization_template="Hi {{mystery}}.")
     agent = check_in.build_inbound_agent(
         cfg, resolved_vars={}, custom_vars={}, timezone="", now=_NOW
@@ -417,7 +371,7 @@ def test_build_inbound_agent_unknown_token_renders_empty():
     assert agent.instructions == "Hi ."
 
 
-def test_build_inbound_agent_last_check_in_appears_in_instructions():
+def test_build_inbound_agent_last_check_in_appears_in_instructions() -> None:
     # Ported from test_inbound_instructions_includes_last_check_in: passing
     # last_check_in via resolved_vars must cause it to appear in the rendered
     # instructions (build_vars derives last_check_in_line from it).
@@ -432,7 +386,7 @@ def test_build_inbound_agent_last_check_in_appears_in_instructions():
     assert "on 2026-05-30, mood 4/5" in agent.instructions
 
 
-def test_build_inbound_agent_caps_injected_value_length():
+def test_build_inbound_agent_caps_injected_value_length() -> None:
     # Ported from test_inbound_instructions_caps_name_length: a very long resolved
     # value must not dominate the prompt.  build_vars caps at _INJECTED_VALUE_MAX_LEN
     # (300), so a 500-char name is truncated before reaching the LLM instructions.

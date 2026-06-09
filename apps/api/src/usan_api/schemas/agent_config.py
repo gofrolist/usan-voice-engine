@@ -182,12 +182,11 @@ class ToolsConfig(BaseModel):
             "end_call",
         ]
     )
-    # DELIBERATE SYNC LAG: the agent copy already carries `sms: SmsConfig | None = None`
-    # (services/agent agent_config.ToolsConfig) so send_sms can be template-gated on the
-    # read path. The write-side `sms` block + SmsConfig (with the PHI hard-block) land
-    # here in Parts B/C/D. Until then this field is intentionally absent; because the
-    # agent copy keeps it Optional+default, configs published without it deserialize
-    # cleanly on both sides. Add `sms: SmsConfig | None = None` here when Part D lands.
+    # No `sms` field in Part A (on either copy). Part D adds `sms: SmsConfig | None = None`
+    # here AND on the agent copy (services/agent agent_config.ToolsConfig), together with
+    # the write-side `sms` block + SmsConfig (with the PHI hard-block). The agent's
+    # _select_tools reads `sms` defensively via getattr so it stays safe until Part D
+    # lands; configs published without an `sms` block deserialize cleanly on both sides.
 
     @field_validator("enabled")
     @classmethod
