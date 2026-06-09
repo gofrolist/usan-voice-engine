@@ -64,6 +64,16 @@ class CallEndedResponse(BaseModel):
     status: str
 
 
+class ScheduleCallbackRequest(ToolCallRequest):
+    requested_time_text: str = Field(min_length=1, max_length=200)
+    requested_at: datetime | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class CallbackScheduledResponse(BaseModel):
+    id: int
+
+
 class TranscriptSegmentIn(BaseModel):
     role: str = Field(min_length=1, max_length=32)
     content: str = Field(min_length=1)
