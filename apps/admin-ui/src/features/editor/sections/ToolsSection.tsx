@@ -86,8 +86,6 @@ export function ToolsSection({ form }: { form: UseFormReturn<AgentConfigForm> })
                     // above guarantees they are also present in the submitted value.
                     checked={spec.always_on ? true : enabled.has(name)}
                     disabled={spec.always_on}
-                    // TODO(Part D): when spec.requires_config (send_sms) is enabled but
-                    // has no templates yet, show a "needs a template" hint and gate save.
                     onChange={(e) => toggle(name, e.target.checked)}
                   />
                 </li>

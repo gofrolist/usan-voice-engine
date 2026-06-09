@@ -4,9 +4,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useForm, type UseFormReturn } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import type { ReactNode } from "react";
 import { ToolsSection } from "../features/editor/sections/ToolsSection";
-import type { AgentConfigForm } from "../config/agentConfigSchema";
+import { agentConfigSchema, type AgentConfigForm } from "../config/agentConfigSchema";
 import type { ToolSpec } from "../config/toolCatalog";
 
 const getMock = vi.fn();
@@ -51,6 +52,22 @@ function Harness({ enabled }: { enabled: string[] }) {
     defaultValues: { tools: { enabled } } as AgentConfigForm,
   });
   formRef = form;
+  return <ToolsSection form={form} />;
+}
+
+// The SMS hint derives from form.watch state (synchronously available) and does not
+// depend on the tool catalog fetch, so these tests assert synchronously with no
+// mocked catalog response (the query is left pending). The QueryClientProvider is
+// still needed only because ToolsSection unconditionally calls useToolCatalog. The
+// resolver + sms:null default wire the Zod schema in so the PHI-body validation path
+// is exercised through the real agentConfigSchema, per Task D14 Step 1.
+function SmsHarness({ enabled }: { enabled: string[] }) {
+  const form = useForm<AgentConfigForm>({
+    resolver: zodResolver(agentConfigSchema),
+    defaultValues: {
+      tools: { enabled, sms: null },
+    } as unknown as AgentConfigForm,
+  });
   return <ToolsSection form={form} />;
 }
 
@@ -146,18 +163,15 @@ describe("ToolsSection", () => {
 });
 
 describe("ToolsSection SMS", () => {
-  it("shows a needs-templates hint when send_sms is enabled but no templates exist", async () => {
-    getMock.mockResolvedValue({ tools: CATALOG });
-    render(wrapper(<Harness enabled={["send_sms", "end_call"]} />));
+  it("shows a needs-templates hint when send_sms is enabled but no templates exist", () => {
+    render(wrapper(<SmsHarness enabled={["send_sms", "end_call"]} />));
 
-    expect(await screen.findByText(/needs templates/i)).toBeInTheDocument();
+    expect(screen.getByText(/needs templates/i)).toBeInTheDocument();
   });
 
-  it("does not show the hint when send_sms is not enabled", async () => {
-    getMock.mockResolvedValue({ tools: CATALOG });
-    render(wrapper(<Harness enabled={["log_wellness", "end_call"]} />));
+  it("does not show the hint when send_sms is not enabled", () => {
+    render(wrapper(<SmsHarness enabled={["log_wellness", "end_call"]} />));
 
-    await screen.findByText("Record the elder's wellness.");
     expect(screen.queryByText(/needs templates/i)).not.toBeInTheDocument();
   });
 });
