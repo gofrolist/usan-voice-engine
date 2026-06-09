@@ -17,6 +17,8 @@ This is a deliberate rollout property -- the two sides converge per the design's
 catalog<->registry sync test once every tool's callable lands (Parts B/C/D).
 """
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -26,7 +28,10 @@ class ToolSpec(BaseModel):
     name: str  # registry key, e.g. "flag_for_followup"
     label: str  # human label for the UI
     description: str  # what it does (shown in the editor)
-    category: str  # "logging" | "lifecycle" | "safety" | "messaging"
+    # Closed set, enforced at instantiation: "logging" writes/reads call data;
+    # "lifecycle"/"safety"/"messaging" gate call termination, human escalation,
+    # and outbound SMS. A typo or undocumented value fails model construction.
+    category: Literal["logging", "lifecycle", "safety", "messaging"]
     # end_call is locked on (cannot be disabled): it drives the only graceful
     # report->goodbye->delete_room->shutdown path.
     always_on: bool = False
