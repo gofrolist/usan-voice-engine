@@ -12,7 +12,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     return (
       <div className="flex h-screen items-center justify-center">
         <Spinner />
-        <span className="ml-3 text-gray-600">Loading…</span>
+        <span className="ml-3 text-slate-600">Loading…</span>
       </div>
     );
   }
@@ -20,9 +20,9 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   if (isError) {
     return (
       <div className="flex h-screen items-center justify-center">
-        <div className="text-center text-gray-700">
+        <div className="text-center text-slate-700">
           <p className="font-medium">Could not load your session.</p>
-          <p className="mt-1 text-sm text-gray-500">{(error as Error)?.message}</p>
+          <p className="mt-1 text-sm text-slate-500">{(error as Error)?.message}</p>
         </div>
       </div>
     );

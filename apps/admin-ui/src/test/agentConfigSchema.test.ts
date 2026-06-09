@@ -73,4 +73,22 @@ describe("agentConfigSchema", () => {
     cfg.tools.enabled = ["log_wellness", "do_a_barrel_roll"];
     expect(agentConfigSchema.safeParse(cfg).success).toBe(false);
   });
+
+  it("accepts a long system_prompt containing {{braces}}", () => {
+    const cfg = validConfig();
+    cfg.prompts.system_prompt = "You are Clara. Greet {{first_name}}.\n".repeat(300).slice(0, 12000);
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
+  });
+
+  it("accepts braces in checkin_flow_instructions", () => {
+    const cfg = validConfig();
+    cfg.prompts.checkin_flow_instructions = "Ask about {{med_name}} at {{time}}.";
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
+  });
+
+  it("rejects a system_prompt over 24000 chars", () => {
+    const cfg = validConfig();
+    cfg.prompts.system_prompt = "x".repeat(24001);
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(false);
+  });
 });

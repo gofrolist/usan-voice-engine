@@ -18,12 +18,12 @@ interface DefaultRowProps {
 
 function DefaultRow({ direction, label, help, current, eligible, disabled, onChange }: DefaultRowProps) {
   return (
-    <div className="rounded border border-gray-200 bg-white p-4">
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-card">
       <div className="flex items-center gap-2">
         <h2 className="text-sm font-semibold">{label}</h2>
         {current ? <Badge tone="blue">{current.name}</Badge> : <Badge tone="gray">none</Badge>}
       </div>
-      <p className="mt-1 text-xs text-gray-500">{help}</p>
+      <p className="mt-1 text-xs text-slate-500">{help}</p>
       <div className="mt-3 max-w-sm">
         <Select
           aria-label={`Default ${direction} profile`}
@@ -54,7 +54,7 @@ export function DefaultsPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 text-gray-600">
+      <div className="flex items-center gap-2 text-slate-600">
         <Spinner /> Loading…
       </div>
     );
@@ -77,7 +77,7 @@ export function DefaultsPage() {
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Default profiles</h1>
       {!isAdmin ? (
-        <p className="text-sm text-gray-500">Read-only (viewer role). Only admins can change defaults.</p>
+        <p className="text-sm text-slate-500">Read-only (viewer role). Only admins can change defaults.</p>
       ) : null}
       <DefaultRow
         direction="inbound"

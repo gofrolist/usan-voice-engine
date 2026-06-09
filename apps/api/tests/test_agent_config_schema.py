@@ -89,3 +89,26 @@ def test_personalization_template_rejects_stray_brace():
 def test_speech_advanced_rejects_inverted_endpointing():
     with pytest.raises(ValidationError):
         SpeechAdvancedConfig(min_endpointing_delay_s=5.0, max_endpointing_delay_s=0.1)
+
+
+def test_system_prompt_accepts_long_text_with_braces():
+    # A real migrated agent prompt (~12k chars, full of {{vars}}) must save.
+    # system_prompt is passed straight to the LLM (pipeline.py:113), never
+    # str.format-ed, so braces are safe there.
+    cfg = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    cfg["system_prompt"] = ("You are Clara. Greet {{first_name}} in {{state}}.\n" * 300)[:12000]
+    parsed = PromptsConfig.model_validate(cfg)
+    assert "{{first_name}}" in parsed.system_prompt
+
+
+def test_checkin_flow_accepts_braces():
+    cfg = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    cfg["checkin_flow_instructions"] = "Ask about {{med_name}} at {{time}}."
+    assert PromptsConfig.model_validate(cfg)
+
+
+def test_system_prompt_rejects_over_cap():
+    cfg = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    cfg["system_prompt"] = "x" * 24001
+    with pytest.raises(ValidationError):
+        PromptsConfig.model_validate(cfg)

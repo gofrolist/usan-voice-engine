@@ -29,7 +29,7 @@ export function ProfilesListPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 text-gray-600">
+      <div className="flex items-center gap-2 text-slate-600">
         <Spinner /> Loading profiles…
       </div>
     );
@@ -64,7 +64,7 @@ export function ProfilesListPage() {
         <Tbody>
           {list.length === 0 ? (
             <Tr>
-              <Td className="text-gray-500" colSpan={7}>
+              <Td className="text-slate-500" colSpan={7}>
                 No profiles yet.
               </Td>
             </Tr>
@@ -75,10 +75,10 @@ export function ProfilesListPage() {
               className="cursor-pointer"
               onClick={() => navigate(`/profiles/${p.id}`)}
             >
-              <Td className="font-medium text-gray-900">
+              <Td className="font-medium text-slate-900">
                 {p.name}
                 {p.description ? (
-                  <div className="text-xs font-normal text-gray-500">{p.description}</div>
+                  <div className="text-xs font-normal text-slate-500">{p.description}</div>
                 ) : null}
               </Td>
               <Td>
@@ -89,18 +89,18 @@ export function ProfilesListPage() {
                   {p.is_default_inbound ? <Badge tone="blue">in</Badge> : null}
                   {p.is_default_outbound ? <Badge tone="blue">out</Badge> : null}
                   {!p.is_default_inbound && !p.is_default_outbound ? (
-                    <span className="text-gray-400">—</span>
+                    <span className="text-slate-400">—</span>
                   ) : null}
                 </div>
               </Td>
-              <Td>{p.published_version ?? <span className="text-gray-400">none</span>}</Td>
+              <Td>{p.published_version ?? <span className="text-slate-400">none</span>}</Td>
               <Td>
                 {p.has_unpublished_draft ? (
                   <span title="Unpublished draft changes">
                     <Badge tone="amber">unpublished</Badge>
                   </span>
                 ) : (
-                  <span className="text-gray-400">—</span>
+                  <span className="text-slate-400">—</span>
                 )}
               </Td>
               <Td>{p.assigned_elder_count}</Td>

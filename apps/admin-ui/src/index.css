@@ -1,3 +1,21 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-slate-50 text-slate-900;
+  }
+}
+
+/* {{variable}} / {slot} token highlight inside Monaco prompt editors. */
+.prompt-var-token {
+  color: #4f46e5;
+  background: #eef2ff;
+  border-radius: 3px;
+}

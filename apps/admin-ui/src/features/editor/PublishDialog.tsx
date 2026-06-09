@@ -56,17 +56,17 @@ export function PublishDialog({
     <Dialog open={open} onClose={handleClose} title="Publish draft">
       <div className="space-y-4">
         {isFirstPublish ? (
-          <p className="text-sm text-gray-700">
+          <p className="text-sm text-slate-700">
             This is the <strong>first publish</strong> for this profile. The draft below becomes
             version 1 and goes live.
           </p>
         ) : (
           <div>
-            <p className="mb-2 text-sm text-gray-700">
+            <p className="mb-2 text-sm text-slate-700">
               Changes from live version {publishedVersion} → new version:
             </p>
             {liveQuery.isLoading ? (
-              <div className="flex items-center gap-2 text-sm text-gray-500">
+              <div className="flex items-center gap-2 text-sm text-slate-500">
                 <Spinner /> Loading live version…
               </div>
             ) : liveQuery.isError ? (
@@ -80,8 +80,8 @@ export function PublishDialog({
         )}
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700" htmlFor="publish-note">
-            Note <span className="text-gray-400">(optional)</span>
+          <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="publish-note">
+            Note <span className="text-slate-400">(optional)</span>
           </label>
           <Input
             id="publish-note"

@@ -67,7 +67,7 @@ export function NewProfileDialog({
     <Dialog open={open} onClose={handleClose} title="New profile">
       <form onSubmit={handleSubmit} className="space-y-3">
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700" htmlFor="np-name">
+          <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="np-name">
             Name
           </label>
           <Input
@@ -79,8 +79,8 @@ export function NewProfileDialog({
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700" htmlFor="np-desc">
-            Description <span className="text-gray-400">(optional)</span>
+          <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="np-desc">
+            Description <span className="text-slate-400">(optional)</span>
           </label>
           <Textarea
             id="np-desc"
@@ -90,8 +90,8 @@ export function NewProfileDialog({
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700" htmlFor="np-clone">
-            Clone from <span className="text-gray-400">(optional)</span>
+          <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="np-clone">
+            Clone from <span className="text-slate-400">(optional)</span>
           </label>
           <Select id="np-clone" value={cloneFrom} onChange={(e) => setCloneFrom(e.target.value)}>
             <option value="">— Start from defaults —</option>

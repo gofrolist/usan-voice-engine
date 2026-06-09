@@ -23,7 +23,7 @@ export function ErrorToast() {
             <span>{t.message}</span>
             <button
               aria-label="dismiss"
-              className="text-gray-400 hover:text-gray-600"
+              className="text-slate-400 hover:text-slate-600"
               onClick={() => dismissToast(t.id)}
             >
               ×

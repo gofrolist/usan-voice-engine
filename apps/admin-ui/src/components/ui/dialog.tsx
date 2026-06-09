@@ -24,7 +24,7 @@ export function Dialog({
       role="presentation"
     >
       <div
-        className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl"
+        className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
