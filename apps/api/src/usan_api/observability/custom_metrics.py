@@ -63,6 +63,14 @@ CALLBACK_REQUESTS_TOTAL = Counter(
     "Callback requests created.",
 )
 
+# status: sent|failed — the terminal outcome of a queued SMS row (incremented
+# in flush_pending_sms AFTER the DB transition commits). PHI-free: no number/id.
+SMS_MESSAGES_TOTAL = Counter(
+    "usan_sms_messages",
+    "SMS messages by terminal status.",
+    labelnames=("status",),
+)
+
 
 def track_tool(tool: str) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
     """Decorate a tool route handler to record usan_tool_calls_total{tool,outcome}.
