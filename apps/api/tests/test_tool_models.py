@@ -1,6 +1,7 @@
 import uuid
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -8,6 +9,7 @@ from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import MedicationLog, Transcript, WellnessLog
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
+from usan_api.schemas.tools import FlagForFollowupRequest, FollowupFlaggedResponse
 
 
 @pytest.fixture
@@ -91,10 +93,6 @@ async def test_transcript_round_trip(session_factory):
 
 
 def test_flag_for_followup_request_valid():
-    import uuid
-
-    from usan_api.schemas.tools import FlagForFollowupRequest
-
     cid = uuid.uuid4()
     req = FlagForFollowupRequest(
         call_id=cid, severity="urgent", category="medical", reason="chest pain"
@@ -105,13 +103,6 @@ def test_flag_for_followup_request_valid():
 
 
 def test_flag_for_followup_rejects_bad_enums():
-    import uuid
-
-    import pytest
-    from pydantic import ValidationError
-
-    from usan_api.schemas.tools import FlagForFollowupRequest
-
     with pytest.raises(ValidationError):
         FlagForFollowupRequest(
             call_id=uuid.uuid4(), severity="emergency", category="medical", reason="x"
@@ -123,20 +114,18 @@ def test_flag_for_followup_rejects_bad_enums():
 
 
 def test_flag_for_followup_reason_max_length():
-    import uuid
-
-    import pytest
-    from pydantic import ValidationError
-
-    from usan_api.schemas.tools import FlagForFollowupRequest
-
     with pytest.raises(ValidationError):
         FlagForFollowupRequest(
             call_id=uuid.uuid4(), severity="routine", category="other", reason="x" * 2001
         )
 
 
-def test_followup_flagged_response_shape():
-    from usan_api.schemas.tools import FollowupFlaggedResponse
+def test_flag_for_followup_reason_rejects_empty():
+    with pytest.raises(ValidationError):
+        FlagForFollowupRequest(
+            call_id=uuid.uuid4(), severity="routine", category="other", reason=""
+        )
 
+
+def test_followup_flagged_response_shape():
     assert FollowupFlaggedResponse(id=7).id == 7

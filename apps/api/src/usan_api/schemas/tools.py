@@ -29,7 +29,7 @@ class LoggedResponse(BaseModel):
 class FlagForFollowupRequest(ToolCallRequest):
     severity: Literal["routine", "urgent"]
     category: Literal["medical", "emotional", "medication", "safety", "other"]
-    reason: str = Field(max_length=2000)
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class FollowupFlaggedResponse(BaseModel):
