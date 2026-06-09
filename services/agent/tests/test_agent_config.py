@@ -55,3 +55,33 @@ def test_parse_ignores_unknown_fields():
 def test_roundtrip_dump_then_validate():
     cfg = AgentConfig.model_validate(DEFAULT_AGENT_CONFIG.model_dump())
     assert cfg == DEFAULT_AGENT_CONFIG
+
+
+def test_agent_sms_config_parses_without_validators():
+    # Agent mirror is parse-only: it accepts ANY body (even a PHI token) because the
+    # API already validated on the write path. No validator may reject here.
+    from usan_agent.agent_config import SmsTemplate, SmsToolConfig, ToolsConfig
+
+    cfg = ToolsConfig(
+        enabled=list(DEFAULT_AGENT_CONFIG.tools.enabled),
+        sms=SmsToolConfig(templates=[SmsTemplate(key="x", label="X", body="Status {{last_mood}}")]),
+    )
+    assert cfg.sms is not None
+    assert cfg.sms.templates[0].key == "x"
+
+
+def test_agent_sms_default_is_none():
+    from usan_agent.agent_config import ToolsConfig
+
+    assert ToolsConfig().sms is None
+
+
+def test_agent_config_roundtrips_sms_block():
+    base = DEFAULT_AGENT_CONFIG.model_dump()
+    base["tools"] = {
+        "enabled": list(DEFAULT_AGENT_CONFIG.tools.enabled),
+        "sms": {"templates": [{"key": "a", "label": "A", "body": "Hi {{first_name}}"}]},
+    }
+    cfg = AgentConfig.model_validate(base)
+    assert cfg.tools.sms is not None
+    assert cfg.tools.sms.templates[0].key == "a"
