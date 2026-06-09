@@ -2,6 +2,7 @@ from usan_api.schemas.variable_catalog import (
     BUILTIN_DEFAULTS,
     BUILTIN_NAMES,
     BUILTIN_VARIABLES,
+    PHI_BUILTIN_NAMES,
     VariableSpec,
 )
 
@@ -79,3 +80,13 @@ def test_non_phi_builtins_have_phi_false():
 def test_every_builtin_has_phi_field():
     for v in BUILTIN_VARIABLES:
         assert isinstance(v.phi, bool), f"{v.name}.phi must be bool"
+
+
+# --- PHI_BUILTIN_NAMES constant ---
+
+
+def test_phi_builtin_names_is_exactly_the_health_data_frozenset():
+    expected = frozenset(
+        {"last_check_in", "last_check_in_line", "last_mood", "last_pain", "today_meds"}
+    )
+    assert expected == PHI_BUILTIN_NAMES

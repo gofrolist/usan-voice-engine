@@ -172,3 +172,55 @@ def test_unknown_tokens_respects_extra_known_names():
     # A declared custom var is "known" once passed in — not reported.
     text = "Hi {{first_name}}, special offer: {{promo}}."
     assert unknown_tokens(text, known_names=frozenset({"promo"})) == []
+
+
+# --- phi_tokens_in_sensitive_fields ---
+
+
+def _prompts_with(**overrides: str) -> PromptsConfig:
+    """Build a PromptsConfig from DEFAULT_AGENT_CONFIG with targeted field overrides."""
+    data = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    data.update(overrides)
+    return PromptsConfig.model_validate(data)
+
+
+def test_phi_var_in_voicemail_message_returns_one_warning():
+    from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields
+
+    prompts = _prompts_with(voicemail_message="Sorry we missed you, {{today_meds}} note.")
+    warnings = phi_tokens_in_sensitive_fields(prompts)
+    assert len(warnings) == 1
+    assert "{{today_meds}}" in warnings[0]
+    assert "voicemail_message" in warnings[0]
+
+
+def test_non_phi_var_in_voicemail_message_returns_no_warnings():
+    from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields
+
+    prompts = _prompts_with(voicemail_message="Hello {{first_name}}, sorry we missed you.")
+    warnings = phi_tokens_in_sensitive_fields(prompts)
+    assert warnings == []
+
+
+def test_phi_var_in_non_sensitive_field_returns_no_warnings():
+    from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields
+
+    # system_prompt is NOT in SENSITIVE_PROMPT_FIELDS — PHI there is fine.
+    cfg = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    cfg["system_prompt"] = cfg["system_prompt"] + " Context: {{last_check_in}}"
+    prompts = PromptsConfig.model_validate(cfg)
+    warnings = phi_tokens_in_sensitive_fields(prompts)
+    assert warnings == []
+
+
+def test_phi_var_in_two_sensitive_fields_returns_two_distinct_warnings():
+    from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields
+
+    prompts = _prompts_with(
+        greeting="Hi {{last_check_in}}, how are you?",
+        voicemail_message="We noted {{last_check_in}} last time.",
+    )
+    warnings = phi_tokens_in_sensitive_fields(prompts)
+    assert len(warnings) == 2
+    fields_mentioned = [w for w in warnings if "greeting" in w or "voicemail_message" in w]
+    assert len(fields_mentioned) == 2

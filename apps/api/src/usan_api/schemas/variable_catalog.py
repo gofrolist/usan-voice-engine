@@ -111,3 +111,7 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
 
 BUILTIN_NAMES: frozenset[str] = frozenset(v.name for v in BUILTIN_VARIABLES)
 BUILTIN_DEFAULTS: dict[str, str] = {v.name: v.default for v in BUILTIN_VARIABLES}
+
+# Built-ins carrying protected health information — used to warn when they appear
+# in a prompt field spoken before identity confirmation or to voicemail.
+PHI_BUILTIN_NAMES: frozenset[str] = frozenset(v.name for v in BUILTIN_VARIABLES if v.phi)

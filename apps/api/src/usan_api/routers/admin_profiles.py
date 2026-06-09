@@ -11,7 +11,7 @@ from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
 from usan_api.repositories.agent_profiles import CloneSourceNotFoundError, ProfileInUseError
-from usan_api.schemas.agent_config import unknown_tokens
+from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields, unknown_tokens
 from usan_api.schemas.agent_profile import (
     DraftUpdate,
     ProfileCreate,
@@ -124,6 +124,7 @@ async def update_draft(
         for name in unknown_tokens(text):
             if name not in seen:
                 seen.append(name)
+    warnings = seen + phi_tokens_in_sensitive_fields(prompts)
     await admin_audit.record(
         db,
         actor_email=actor,
@@ -133,7 +134,7 @@ async def update_draft(
     )
     await db.commit()
     await db.refresh(profile)
-    return ProfileDetail.from_model(profile, warnings=seen)
+    return ProfileDetail.from_model(profile, warnings=warnings)
 
 
 @router.post(

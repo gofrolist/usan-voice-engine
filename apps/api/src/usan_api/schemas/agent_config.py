@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from usan_api.schemas.variable_catalog import BUILTIN_NAMES
+from usan_api.schemas.variable_catalog import BUILTIN_NAMES, PHI_BUILTIN_NAMES
 
 # Tool names the agent can register; mirrors check_in.build_check_in_agent().
 TOOL_NAMES = frozenset({"log_wellness", "log_medication", "get_today_meds", "end_call"})
@@ -102,6 +102,38 @@ class PromptsConfig(BaseModel):
     @classmethod
     def _tokens_plus_legacy_slots(cls, v: str) -> str:
         return _reject_stray_braces_after_tokens(v, allow_legacy_slots=True)
+
+
+# Prompt fields spoken before the caller's identity is confirmed or to voicemail.
+# A PHI variable here risks disclosing health info to an unintended listener.
+# Mirrors apps/admin-ui .../phiTokens.ts SENSITIVE_PROMPT_FIELDS.
+SENSITIVE_PROMPT_FIELDS: tuple[str, ...] = (
+    "greeting",
+    "inbound_opening",
+    "recording_disclosure",
+    "voicemail_message",
+)
+
+
+def phi_tokens_in_sensitive_fields(prompts: PromptsConfig) -> list[str]:
+    """Advisory warnings for PHI variables used in pre-identity / voicemail fields.
+
+    Non-fatal (warn-don't-block). One message per distinct (field, PHI token), in
+    field-then-first-seen order, so the warning list reads deterministically.
+    """
+    warnings: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for field in SENSITIVE_PROMPT_FIELDS:
+        text: str = getattr(prompts, field)
+        for name in _TOKEN_RE.findall(text):
+            if name in PHI_BUILTIN_NAMES and (field, name) not in seen:
+                seen.add((field, name))
+                token = "{{" + name + "}}"
+                warnings.append(
+                    f"{token} in '{field}' may disclose protected health information "
+                    f"before the caller's identity is confirmed (or to voicemail)."
+                )
+    return warnings
 
 
 class VoiceConfig(BaseModel):

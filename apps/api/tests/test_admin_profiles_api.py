@@ -218,3 +218,23 @@ def test_get_profile_detail_warnings_defaults_empty(client, admin_session):
     r = client.get(f"/v1/admin/profiles/{pid}")
     assert r.status_code == 200
     assert r.json()["warnings"] == []
+
+
+def test_draft_save_returns_both_unknown_token_and_phi_warnings(client, admin_session):
+    # PUT /draft with greeting={{last_check_in}} (PHI in sensitive field) AND an
+    # unknown {{var}} — both warning types must appear, unknown-token names first.
+    pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
+    cfg = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
+    cfg["prompts"]["greeting"] = "Hello {{last_check_in}}, {{unknownvar}} here."
+    r = client.put(f"/v1/admin/profiles/{pid}/draft", json={"config": cfg})
+    assert r.status_code == 200
+    warnings = r.json()["warnings"]
+    # Unknown token name comes first (existing behavior preserved).
+    assert "unknownvar" in warnings
+    # PHI advisory sentence must also be present.
+    phi_warnings = [w for w in warnings if "{{last_check_in}}" in w and "greeting" in w]
+    assert len(phi_warnings) == 1
+    # Unknown-var entry precedes PHI advisory in the list.
+    unknown_idx = next(i for i, w in enumerate(warnings) if w == "unknownvar")
+    phi_idx = next(i for i, w in enumerate(warnings) if "{{last_check_in}}" in w)
+    assert unknown_idx < phi_idx
