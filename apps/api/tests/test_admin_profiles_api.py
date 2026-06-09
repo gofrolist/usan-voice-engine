@@ -188,3 +188,33 @@ def test_set_default_unknown_profile_returns_404(client, admin_session):
 def test_archive_unknown_profile_returns_404(client, admin_session):
     r = client.post(f"/v1/admin/profiles/{uuid.uuid4()}/archive", json={})
     assert r.status_code == 404
+
+
+def test_draft_save_returns_unknown_token_warnings(client, admin_session):
+    pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
+    cfg = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
+    # Known built-in + two unknown tokens across two fields.
+    cfg["prompts"]["greeting"] = "Hello {{first_name}}, special {{promo}}!"
+    cfg["prompts"]["system_prompt"] = cfg["prompts"]["system_prompt"] + "\nTone: {{mood_hint}}"
+    r = client.put(f"/v1/admin/profiles/{pid}/draft", json={"config": cfg})
+    assert r.status_code == 200
+    body = r.json()
+    # Additive field: present, lists the unknown names, never the known built-in.
+    assert set(body["warnings"]) == {"promo", "mood_hint"}
+
+
+def test_draft_save_clean_config_has_empty_warnings(client, admin_session):
+    pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
+    cfg = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
+    cfg["prompts"]["greeting"] = "Hello {{first_name}}, this is your check-in."
+    r = client.put(f"/v1/admin/profiles/{pid}/draft", json={"config": cfg})
+    assert r.status_code == 200
+    assert r.json()["warnings"] == []
+
+
+def test_get_profile_detail_warnings_defaults_empty(client, admin_session):
+    # The additive field defaults to [] on GET (no warning computation there).
+    pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
+    r = client.get(f"/v1/admin/profiles/{pid}")
+    assert r.status_code == 200
+    assert r.json()["warnings"] == []

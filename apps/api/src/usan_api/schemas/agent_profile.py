@@ -79,9 +79,14 @@ class ProfileDetail(BaseModel):
     updated_by: str | None
     created_at: datetime
     updated_at: datetime
+    # Additive (design §5.1): non-fatal unknown-{{var}} names found in the saved
+    # prompts. Defaults to [] so GET responses and older clients are unaffected.
+    warnings: list[str] = Field(default_factory=list)
 
     @classmethod
-    def from_model(cls, profile: AgentProfile) -> ProfileDetail:
+    def from_model(
+        cls, profile: AgentProfile, *, warnings: list[str] | None = None
+    ) -> ProfileDetail:
         return cls(
             id=profile.id,
             name=profile.name,
@@ -95,6 +100,7 @@ class ProfileDetail(BaseModel):
             updated_by=profile.updated_by,
             created_at=profile.created_at,
             updated_at=profile.updated_at,
+            warnings=warnings or [],
         )
 
 
