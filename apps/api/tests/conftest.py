@@ -82,6 +82,8 @@ def async_database_url(database_url: str) -> str:
 async def _truncate_and_dispose(engine: AsyncEngine) -> None:
     # Reset table state then dispose, run from the client teardown — so pure-unit
     # tests that never request `client` don't pay for a Postgres container.
+    from usan_api.db.session import dispose_engine
+
     try:
         async with engine.begin() as conn:
             await conn.execute(
@@ -94,6 +96,11 @@ async def _truncate_and_dispose(engine: AsyncEngine) -> None:
             )
     finally:
         await engine.dispose()
+        # Also dispose the process-global engine (used by BackgroundTasks like
+        # flush_pending_sms). It's lazily bound to the loop of whichever request
+        # first opened it; without resetting it, the next `client` fixture runs on
+        # a fresh loop and reuses a now-dead engine -> "Event loop is closed".
+        await dispose_engine()
 
 
 @pytest.fixture

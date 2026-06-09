@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from livekit import api
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +10,7 @@ from usan_api.db.session import get_db
 from usan_api.observability.custom_metrics import WEBHOOKS_TOTAL
 from usan_api.repositories import calls as calls_repo
 from usan_api.settings import Settings, get_settings
+from usan_api.sms_outbox import flush_pending_sms
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -30,6 +31,7 @@ def _recording_uri(info: Any, gcs_bucket: str | None) -> str | None:
 @router.post("/livekit", status_code=status.HTTP_200_OK)
 async def livekit_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, bool]:
@@ -53,6 +55,9 @@ async def livekit_webhook(
         call = await calls_repo.mark_completed_if_in_progress(db, event.room.name)
         if call is not None:
             await db.commit()
+            # Deliver any queued SMS after the response (own session); idempotent so the
+            # end_call tool firing too is safe (design §6.3).
+            background_tasks.add_task(flush_pending_sms, call.id)
             logger.bind(call_id=str(call.id), room=event.room.name).info(
                 "Call completed via room_finished webhook"
             )

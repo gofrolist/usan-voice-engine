@@ -1,7 +1,7 @@
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from loguru import logger
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
@@ -49,6 +49,7 @@ from usan_api.schemas.tools import (
     TranscriptLoggedResponse,
 )
 from usan_api.settings import Settings, get_settings
+from usan_api.sms_outbox import flush_pending_sms
 
 router = APIRouter(prefix="/v1/tools", tags=["tools"])
 
@@ -193,6 +194,7 @@ async def get_today_meds(
 @track_tool("end_call")
 async def end_call(
     body: EndCallRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     claims: dict[str, Any] = Depends(require_service_token),
 ) -> CallEndedResponse:
@@ -204,6 +206,9 @@ async def end_call(
         # Count only the actual terminal transition, not idempotent end_call replays.
         # Label value is the bounded call_status enum, NOT body.reason (free-text PHI).
         CALLS_TOTAL.labels(direction=updated.direction.value, end_reason=updated.status.value).inc()
+        # Deliver any queued SMS after the response (own session); idempotent so the
+        # room_finished webhook firing too is safe (design §6.3).
+        background_tasks.add_task(flush_pending_sms, call.id)
     # Don't log body.reason: it's free-text the LLM fills, so it could carry clinical
     # content. It's already persisted to the DB (end_reason); the log keeps only call_id.
     logger.bind(call_id=str(call.id)).info("end_call requested")
