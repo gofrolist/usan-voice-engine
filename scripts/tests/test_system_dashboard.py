@@ -59,3 +59,21 @@ def test_system_has_host_metric_panels():
 def test_system_no_overlap():
     doc = load_dashboard("system.json")
     assert gridpos_overlaps(list(iter_panels(doc))) == []
+
+
+def test_system_has_followup_flags_panel():
+    # Phase-3 B9 (F3): id 11 at y=29, the urgent-flags series.
+    doc = load_dashboard("system.json")
+    panel = next((p for p in iter_panels(doc) if p.get("id") == 11), None)
+    assert panel is not None, "expected follow-up-flags panel id 11"
+    assert panel["gridPos"] == {"x": 0, "y": 29, "w": 24, "h": 8}
+    exprs = " ".join(t.get("expr", "") for t in panel.get("targets", []))
+    assert "usan_followup_flags_total" in exprs
+    # The panel must surface the urgent series (alert rule fires on severity="urgent").
+    assert 'severity="urgent"' in exprs
+
+
+def test_system_dashboard_still_valid_with_followup_panel():
+    doc = load_dashboard("system.json")
+    assert validate_dashboard(doc) == []
+    assert gridpos_overlaps(list(iter_panels(doc))) == []

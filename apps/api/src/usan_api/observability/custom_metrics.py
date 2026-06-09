@@ -44,6 +44,12 @@ TOOL_CALLS_TOTAL = Counter(
 
 # severity: routine|urgent ; category: the bounded FlagForFollowupRequest enum
 # (medical, emotional, medication, safety, other). NEVER the free-text reason (PHI).
+#
+# Grafana alert (deploy step — notification channel supplied by the operator, spec §5.1):
+#   ALERT  usan_urgent_followup_flag
+#   EXPR   sum(increase(usan_followup_flags_total{severity="urgent"}[10m])) > 0
+#   FOR    0m
+#   on the `prometheus` datasource; routed to the operator's email/Slack contact point.
 FOLLOWUP_FLAGS_TOTAL = Counter(
     "usan_followup_flags",
     "Follow-up flags created.",
