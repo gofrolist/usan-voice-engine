@@ -9,6 +9,7 @@ goodbye → delete_room → shutdown.
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from livekit.agents import Agent, RunContext, function_tool
@@ -16,6 +17,7 @@ from loguru import logger
 
 from usan_agent import api_client
 from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
+from usan_agent.prompt_vars import build_vars, substitute
 from usan_agent.settings import Settings
 
 # Control characters and the format-slot braces are stripped from any API-supplied
@@ -223,11 +225,29 @@ def _select_tools(enabled: list[str]) -> list[Any]:
     return [_TOOL_REGISTRY[n] for n in names]
 
 
-def build_check_in_agent(cfg: AgentConfig | None = None) -> Agent:
-    """The outbound check-in Agent with its configured instructions + enabled tools."""
+def build_check_in_agent(
+    cfg: AgentConfig | None = None,
+    *,
+    resolved_vars: dict[str, str] | None = None,
+    custom_vars: dict[str, Any] | None = None,
+    timezone: str = "",
+    now: datetime | None = None,
+) -> Agent:
+    """The outbound check-in Agent with substituted instructions + enabled tools.
+
+    All prompt vars (built-in + custom) are merged via build_vars and substituted
+    token-scoped across the configured flow instructions. With no vars supplied the
+    default token-free template renders unchanged (backward compatible).
+    """
     cfg = cfg or DEFAULT_AGENT_CONFIG
+    values = build_vars(
+        resolved_vars or {},
+        custom_vars or {},
+        timezone=timezone,
+        now=now or datetime.now(UTC),
+    )
     return Agent(
-        instructions=cfg.prompts.checkin_flow_instructions,
+        instructions=substitute(cfg.prompts.checkin_flow_instructions, values),
         tools=_select_tools(cfg.tools.enabled),
     )
 
@@ -255,12 +275,46 @@ def _inbound_instructions(template: str, dynamic_vars: dict[str, Any]) -> str:
     return template.format(elder_name=elder_name, last_check_in_line=last_check_in_line)
 
 
-def build_inbound_agent(cfg: AgentConfig | None, dynamic_vars: dict[str, Any]) -> Agent:
-    """The inbound check-in Agent: configured tools + personalized instructions."""
+def _with_legacy_inbound_slots(values: dict[str, str]) -> dict[str, str]:
+    """Backfill the two legacy single-brace slots from the resolved built-ins.
+
+    Old `inbound_personalization_template` snapshots use `{elder_name}` and
+    `{last_check_in_line}`. elder_name already maps 1:1; last_check_in_line is the
+    pre-formatted sentence, derived here from last_check_in when not provided.
+    """
+    out = dict(values)
+    if not out.get("last_check_in_line"):
+        last = out.get("last_check_in") or ""
+        out["last_check_in_line"] = (
+            f"For context, their last check-in was {last}.\n" if last else ""
+        )
+    return out
+
+
+def build_inbound_agent(
+    cfg: AgentConfig | None,
+    *,
+    resolved_vars: dict[str, str] | None = None,
+    custom_vars: dict[str, Any] | None = None,
+    timezone: str = "",
+    now: datetime | None = None,
+) -> Agent:
+    """The inbound check-in Agent: configured tools + personalized instructions.
+
+    Substitutes `{{tokens}}` AND the two legacy single-brace slots ({elder_name},
+    {last_check_in_line}) across the inbound personalization template, so both new
+    and already-published templates render. All injected values (resolved built-in
+    + custom) are sanitized inside build_vars before substitution.
+    """
     cfg = cfg or DEFAULT_AGENT_CONFIG
+    values = build_vars(
+        resolved_vars or {},
+        custom_vars or {},
+        timezone=timezone,
+        now=now or datetime.now(UTC),
+    )
+    values = _with_legacy_inbound_slots(values)
     return Agent(
-        instructions=_inbound_instructions(
-            cfg.prompts.inbound_personalization_template, dynamic_vars
-        ),
+        instructions=substitute(cfg.prompts.inbound_personalization_template, values),
         tools=_select_tools(cfg.tools.enabled),
     )

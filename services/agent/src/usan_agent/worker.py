@@ -108,7 +108,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
             goodbye_message=cfg.prompts.goodbye_message,
         )
         session = build_session(settings, cfg, userdata=data)
-        agent = build_inbound_agent(cfg, dynamic_vars)
+        agent = build_inbound_agent(cfg, resolved_vars=dynamic_vars)
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
