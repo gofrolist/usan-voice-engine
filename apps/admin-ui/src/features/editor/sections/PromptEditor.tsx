@@ -2,6 +2,7 @@ import { Suspense, lazy, useRef } from "react";
 import type { EditorProps, OnChange, OnMount } from "@monaco-editor/react";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { Textarea } from "../../../components/ui/textarea";
+import { matchPromptTokens } from "./promptTokens";
 
 // Lazy-load Monaco so it is split out of the main bundle and never blocks first
 // paint. While it loads we render a plain <textarea>; if the chunk fails to load
@@ -24,11 +25,6 @@ type EditorInstance = Parameters<OnMount>[0];
 type MonacoInstance = Parameters<OnMount>[1];
 type DecorationsCollection = ReturnType<EditorInstance["createDecorationsCollection"]>;
 type Decorations = NonNullable<Parameters<EditorInstance["createDecorationsCollection"]>[0]>;
-
-// {{variable}} / {slot} tokens. Both arms use [^{}] so a token can never span an
-// unmatched brace — this also avoids quadratic backtracking on pathological input
-// (e.g. a long run of "{" with no closer).
-const TOKEN_RE = /\{\{[^{}]+\}\}|\{[^{}]+\}/g;
 
 const MONACO_OPTIONS: EditorProps["options"] = {
   minimap: { enabled: false },
@@ -53,9 +49,10 @@ export function PromptEditor(props: PromptEditorProps) {
   const monacoRef = useRef<MonacoInstance | null>(null);
   const collectionRef = useRef<DecorationsCollection | null>(null);
 
-  // Tint {{variable}} tokens so migrated Retell prompts read well. The decorations
-  // collection is owned by the editor and torn down with it (@monaco-editor/react
-  // disposes the editor on unmount), so no manual cleanup is required.
+  // Tint {{variable}} tokens so migrated Retell prompts read well. matchPromptTokens is
+  // linear/backtrack-free (see promptTokens.ts). The decorations collection is owned by
+  // the editor and torn down with it (@monaco-editor/react disposes it on unmount), so
+  // no manual cleanup is required.
   function highlightTokens(): void {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
@@ -63,18 +60,14 @@ export function PromptEditor(props: PromptEditorProps) {
     if (!editor || !monaco || !collection) return;
     const model = editor.getModel();
     if (!model) return;
-    const text = model.getValue();
-    const decorations: Decorations = [];
-    TOKEN_RE.lastIndex = 0; // shared global regex — reset before each scan
-    let m: RegExpExecArray | null;
-    while ((m = TOKEN_RE.exec(text)) !== null) {
-      const start = model.getPositionAt(m.index);
-      const end = model.getPositionAt(m.index + m[0].length);
-      decorations.push({
+    const decorations: Decorations = matchPromptTokens(model.getValue()).map((tok) => {
+      const start = model.getPositionAt(tok.start);
+      const end = model.getPositionAt(tok.end);
+      return {
         range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column),
         options: { inlineClassName: "prompt-var-token" },
-      });
-    }
+      };
+    });
     collection.set(decorations);
   }
 

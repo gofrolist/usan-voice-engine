@@ -216,7 +216,7 @@ export function ProfileEditorPage() {
         open={publishOpen}
         onClose={() => setPublishOpen(false)}
         profileId={id}
-        draftConfig={form.getValues() as AgentConfig}
+        draftConfig={(publishOpen ? form.getValues() : profile.draft_config) as AgentConfig}
         publishedVersion={profile.published_version}
         onPublished={() => {
           setPublishOpen(false);

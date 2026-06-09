@@ -103,7 +103,7 @@ export function VersionHistoryPage() {
           {list.map((v) => {
             const selected = v.version === left || v.version === right;
             return (
-              <Tr key={v.version} className={selected ? "bg-blue-50" : undefined}>
+              <Tr key={v.version} className={selected ? "bg-indigo-50" : undefined}>
                 <Td className="font-medium">v{v.version}</Td>
                 <Td>{v.published_by ?? <span className="text-slate-400">—</span>}</Td>
                 <Td>{fmtDate(v.published_at)}</Td>
