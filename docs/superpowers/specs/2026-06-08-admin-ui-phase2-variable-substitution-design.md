@@ -135,14 +135,15 @@ The catalog (name, tier, description, default, example) is a **global constant**
 
 ### 5.1 Backend (`apps/api/.../schemas/agent_config.py`)
 
-Brace handling flips from "reject all braces on short fields" to a **uniform token rule** on every prompt field:
+Validation is **field-tiered**, because the two large free-form fields must stay permissive (Phase 1 deliberately allows arbitrary braces there so a pasted prompt containing literal/JSON braces still saves), while the short fields stay strict:
 
-- Valid `{{catalog_var}}` tokens are allowed everywhere.
-- **Unknown** `{{var}}` tokens are **accepted** (Phase-2 decision: warn, don't block). The server records them (e.g. returns a `warnings` list on the save/validate response) but does not raise.
-- **Stray** single `{` or `}` that is not part of a `{{ }}` token (and, on the legacy template, not a recognized single-brace slot) is still **rejected** — typos and malformed `str.format` slots stay caught.
-- `inbound_personalization_template`: continues to accept its two legacy single-brace slots on read for back-compat; the UI migrates it to `{{ }}`.
+- **`{{catalog_var}}` tokens are allowed on every field**, and the LLM never receives a literal token (the agent substitutes a value or blanks it).
+- **Unknown** `{{var}}` tokens are **accepted everywhere** (Phase-2 decision: warn, don't block). The server returns the unknown names as a non-fatal `warnings` list on the save/validate response; it does not raise.
+- **`system_prompt` and `checkin_flow_instructions`** — permissive: any braces allowed (unchanged from Phase 1). Stray braces are harmless because substitution is token-scoped, never `str.format`.
+- **Short fields** (`greeting`, `recording_disclosure`, `voicemail_message`, `goodbye_message`, `inbound_opening`) — allow `{{tokens}}` but **reject stray single `{`/`}`** (a lone brace in a one-line string is a typo). This replaces today's blanket "reject all braces".
+- **`inbound_personalization_template`** — allow `{{tokens}}` **plus** its two legacy single-brace slots (`{elder_name}`, `{last_check_in_line}`) for back-compat; reject any other stray brace. The UI emits `{{ }}` for new edits.
 
-Forward-compat: because unknown tokens are accepted and the catalog is not stored in the config, **no previously-published `agent_profile_versions.config` row can fail validation** under the new rules. No data migration required.
+Forward-compat: because unknown tokens are accepted, the short-field rule only tightens what was already brace-free, and the catalog is not stored in the config, **no previously-published `agent_profile_versions.config` row can fail validation** under the new rules. No data migration required.
 
 ### 5.2 Frontend (`apps/admin-ui/.../config/agentConfigSchema.ts`)
 
