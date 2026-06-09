@@ -211,14 +211,15 @@ def _select_tools(tools: ToolsConfig) -> list[Any]:
     whose agent-side callable has not landed yet (see _TOOL_REGISTRY note) -- enabling
     such a tool is accepted by the API but is a no-op here until the registry catches up.
     send_sms is a dead tool until at least one SMS template is configured, so it is
-    dropped unless ``tools.sms`` carries templates (the field may not exist yet, hence
-    the getattr guard). end_call is always included: it drives
+    dropped unless ``tools.sms`` carries templates. The drop is currently belt-and-braces
+    (send_sms is not yet in _TOOL_REGISTRY, so the registry filter above already removes
+    it) -- TODO(Part B/C/D): once send_sms lands in _TOOL_REGISTRY this guard becomes the
+    sole gate; verify the template branches then. end_call is always included: it drives
     report->goodbye->delete_room->shutdown, so removing it would leave a call unable to
     end gracefully.
     """
     names = [n for n in tools.enabled if n in _TOOL_REGISTRY]  # preserve enabled order
-    sms_cfg = getattr(tools, "sms", None)
-    if not (sms_cfg and getattr(sms_cfg, "templates", None)):
+    if not (tools.sms and tools.sms.templates):
         names = [n for n in names if n != "send_sms"]
     if "end_call" not in names:
         names.append("end_call")

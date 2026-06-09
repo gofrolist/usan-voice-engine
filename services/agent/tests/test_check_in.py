@@ -3,11 +3,32 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
+from livekit.agents import RunContext, function_tool
+
 from usan_agent import check_in
-from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig, PromptsConfig
+from usan_agent.agent_config import (
+    DEFAULT_AGENT_CONFIG,
+    AgentConfig,
+    PromptsConfig,
+    SmsConfig,
+    ToolsConfig,
+)
 from usan_agent.settings import Settings
 
 _NOW = datetime(2026, 6, 8, 13, 15, 0, tzinfo=ZoneInfo("UTC"))  # a Monday
+
+
+@function_tool
+async def _send_sms_stub(ctx: RunContext[check_in.CheckInData]) -> str:
+    """Stub send_sms whose FunctionTool.id is "send_sms" (its function name).
+
+    Lets the guard tests register a real send_sms in _TOOL_REGISTRY ahead of Parts
+    B/C/D, so the template guard -- not the Part A registry filter -- is what's exercised.
+    """
+    return ""
+
+
+_send_sms_stub._info.name = "send_sms"  # FunctionTool.id resolves to _info.name
 
 
 def _tools(enabled, sms=None):
@@ -235,10 +256,9 @@ def test_build_check_in_agent_respects_enabled():
     assert {t.id for t in agent.tools} == {"log_wellness", "end_call"}
 
 
-def test_select_tools_drops_send_sms_without_templates():
-    # send_sms is enabled but has no templates -> not offered (dead tool guard).
-    # send_sms is not in _TOOL_REGISTRY in Part A, so this also exercises the
-    # registry filter; either way send_sms must be absent.
+def test_select_tools_drops_send_sms_via_registry_filter_in_part_a():
+    # In Part A send_sms is not in _TOOL_REGISTRY, so the registry filter removes it
+    # before the template guard ever runs (this is the vacuous-by-design Part A path).
     sms_cfg = SimpleNamespace(templates=[])
     tools = check_in._select_tools(_tools(["log_wellness", "send_sms"], sms=sms_cfg))
     ids = {t.id for t in tools}
@@ -246,8 +266,39 @@ def test_select_tools_drops_send_sms_without_templates():
     assert ids == {"log_wellness", "end_call"}
 
 
-def test_select_tools_safe_when_tools_has_no_sms_attr():
-    # ToolsConfig in Part A has no `sms` field; the getattr guard must not raise.
+def test_select_tools_drops_send_sms_when_in_registry_but_no_templates(monkeypatch):
+    # Real guard coverage: with send_sms IN _TOOL_REGISTRY (simulating Parts B/C/D) the
+    # registry filter no longer hides it, so the template guard alone must drop it when
+    # tools.sms has no templates.
+    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", _send_sms_stub)
+    cfg = ToolsConfig(enabled=["log_wellness", "send_sms"], sms=SmsConfig(templates=[]))
+    ids = {t.id for t in check_in._select_tools(cfg)}
+    assert "send_sms" not in ids
+    assert ids == {"log_wellness", "end_call"}
+
+
+def test_select_tools_drops_send_sms_when_in_registry_but_sms_unset(monkeypatch):
+    # Same guard, sms entirely unset (None) -> still dropped even though it's registered.
+    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", _send_sms_stub)
+    cfg = ToolsConfig(enabled=["log_wellness", "send_sms"], sms=None)
+    ids = {t.id for t in check_in._select_tools(cfg)}
+    assert "send_sms" not in ids
+    assert ids == {"log_wellness", "end_call"}
+
+
+def test_select_tools_keeps_send_sms_when_in_registry_with_templates(monkeypatch):
+    # Affirmative branch: send_sms registered AND tools.sms carries templates -> retained.
+    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", _send_sms_stub)
+    cfg = ToolsConfig(
+        enabled=["log_wellness", "send_sms"], sms=SmsConfig(templates=["You have a message."])
+    )
+    ids = {t.id for t in check_in._select_tools(cfg)}
+    assert "send_sms" in ids
+    assert ids == {"log_wellness", "send_sms", "end_call"}
+
+
+def test_select_tools_safe_when_sms_is_none():
+    # ToolsConfig.sms defaults to None; the guard must not raise on the None path.
     tools = check_in._select_tools(_tools(["log_wellness"]))
     assert {t.id for t in tools} == {"log_wellness", "end_call"}
 

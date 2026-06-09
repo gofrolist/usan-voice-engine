@@ -49,6 +49,13 @@ class TimingConfig(BaseModel):
     max_call_duration_s: int = 1800
 
 
+class SmsConfig(BaseModel):
+    # Mirrors the forward-compat Optional+default pattern of the API copy. send_sms is a
+    # dead tool until at least one template is configured; _select_tools drops it while
+    # templates is empty. Lands fully in Parts B/C/D.
+    templates: list[str] = Field(default_factory=list)
+
+
 class ToolsConfig(BaseModel):
     enabled: list[str] = Field(
         default_factory=lambda: [
@@ -61,6 +68,9 @@ class ToolsConfig(BaseModel):
             "end_call",
         ]
     )
+    # FORWARD-COMPAT: Optional with a default so older published configs (no `sms`
+    # block) keep deserializing. See the API copy's invariant note.
+    sms: SmsConfig | None = None
 
 
 class VoicemailDetectionConfig(BaseModel):
