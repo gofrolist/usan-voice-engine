@@ -611,6 +611,23 @@ def _set_call_override(async_database_url, call_id, profile_id):
     asyncio.run(_do())
 
 
+@pytest.mark.skip(
+    reason="Elder.phone_e164 is NOT NULL (and the elder-create API requires it), so a "
+    "null/empty phone cannot be seeded through the helpers. The 409 guard in send_sms is "
+    "cheap defense for any future path that could persist a blank number."
+)
+def test_send_sms_missing_phone_409(client, mock_dispatch, async_database_url):
+    _publish_sms_profile(async_database_url)
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 409
+
+
 def test_send_sms_resolves_profile_override_over_direction_default(
     client, mock_dispatch, async_database_url
 ):

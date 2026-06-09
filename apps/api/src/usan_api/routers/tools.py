@@ -227,6 +227,8 @@ async def send_sms(
     elder = await elders_repo.get_elder(db, elder_id)
     if elder is None:
         raise HTTPException(status_code=409, detail="elder record not found")
+    if not elder.phone_e164:
+        raise HTTPException(status_code=409, detail="elder has no phone number")
 
     resolved = await profiles_repo.resolve_agent_config(
         db,
