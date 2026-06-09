@@ -77,3 +77,17 @@ def test_system_dashboard_still_valid_with_followup_panel():
     doc = load_dashboard("system.json")
     assert validate_dashboard(doc) == []
     assert gridpos_overlaps(list(iter_panels(doc))) == []
+
+
+def test_system_has_sms_failed_panel():
+    doc = load_dashboard("system.json")
+    panels = list(iter_panels(doc))
+    sms = next((p for p in panels if p.get("id") == 12), None)
+    assert sms is not None, "expected SMS-failed panel id 12 (Part D)"
+    assert sms["gridPos"] == {"x": 0, "y": 37, "w": 12, "h": 8}
+    exprs = " ".join(t.get("expr", "") for t in sms.get("targets", []))
+    assert "usan_sms_messages_total" in exprs
+    assert 'status="failed"' in exprs
+    # still no overlap after the new panel
+    assert gridpos_overlaps(panels) == []
+    assert validate_dashboard(doc) == []
