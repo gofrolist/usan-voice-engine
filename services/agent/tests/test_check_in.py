@@ -519,3 +519,28 @@ def test_select_tools_includes_schedule_callback_when_enabled():
     ids = {t.id for t in tools}
     assert "schedule_callback" in ids
     assert "end_call" in ids  # always force-included
+
+
+async def test_do_send_sms_calls_api_and_confirms(monkeypatch):
+    spy = AsyncMock()
+    monkeypatch.setattr(check_in.api_client, "send_sms", spy)
+    result = await check_in._do_send_sms(_data(), template_key="med_reminder")
+    spy.assert_awaited_once()
+    assert spy.await_args.kwargs == {"template_key": "med_reminder"}
+    assert spy.await_args.args[0] == "call-1"
+    assert isinstance(result, str)
+    assert result  # a spoken confirmation
+
+
+async def test_do_send_sms_handles_api_failure(monkeypatch):
+    async def _boom(*a, **k):
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr(check_in.api_client, "send_sms", _boom)
+    result = await check_in._do_send_sms(_data(), template_key="x")
+    assert isinstance(result, str)
+    assert result  # calm spoken fallback, never raises
+
+
+def test_send_sms_registered_in_registry():
+    assert check_in._TOOL_REGISTRY.get("send_sms") is check_in.send_sms

@@ -160,6 +160,15 @@ def _format_times(times: Any) -> str:
     return ", ".join(seg for seg in cleaned if seg)
 
 
+async def _do_send_sms(data: CheckInData, *, template_key: str) -> str:
+    try:
+        await api_client.send_sms(data.call_id, data.settings, template_key=template_key)
+    except Exception:
+        logger.bind(call_id=data.call_id).warning("send_sms tool failed")
+        return "I wasn't able to send that text just now, but we can continue."
+    return "I've sent that text message for you."
+
+
 async def _do_end_call(data: CheckInData, session: Any, reason: str) -> None:
     """Report the end reason (best-effort), say goodbye, then hang up."""
     try:
@@ -258,6 +267,17 @@ async def schedule_callback(
 
 
 @function_tool
+async def send_sms(ctx: RunContext[CheckInData], template_key: str) -> str:
+    """Send the elder a pre-approved text message.
+
+    Args:
+        template_key: The id of the message template to send (choose from the
+            available templates; you cannot write custom text).
+    """
+    return await _do_send_sms(ctx.userdata, template_key=template_key)
+
+
+@function_tool
 async def end_call(ctx: RunContext[CheckInData], reason: str = "check_in_complete") -> str:
     """End the call once the check-in is complete.
 
@@ -278,6 +298,7 @@ _TOOL_REGISTRY: dict[str, Any] = {
     "get_today_meds": get_today_meds,
     "flag_for_followup": flag_for_followup,
     "schedule_callback": schedule_callback,
+    "send_sms": send_sms,
     "end_call": end_call,
 }
 

@@ -111,6 +111,10 @@ async def log_medication(
     )
 
 
+async def send_sms(call_id: str, settings: Settings, *, template_key: str) -> None:
+    await _post_tool("send_sms", call_id, settings, {"template_key": template_key})
+
+
 async def schedule_callback(
     call_id: str,
     settings: Settings,
