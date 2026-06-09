@@ -176,6 +176,9 @@ class ToolsConfig(BaseModel):
             "log_wellness",
             "log_medication",
             "get_today_meds",
+            "flag_for_followup",
+            "schedule_callback",
+            "send_sms",
             "end_call",
         ]
     )

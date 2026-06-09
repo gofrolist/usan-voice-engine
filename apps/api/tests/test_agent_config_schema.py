@@ -17,12 +17,15 @@ def test_default_config_matches_current_agent_constants():
     assert cfg.stt.model == "ink-whisper"
     assert cfg.timing.answer_timeout_s == 50.0
     assert cfg.timing.max_call_duration_s == 1800
-    assert set(cfg.tools.enabled) == {
+    assert cfg.tools.enabled == [
         "log_wellness",
         "log_medication",
         "get_today_meds",
+        "flag_for_followup",
+        "schedule_callback",
+        "send_sms",
         "end_call",
-    }
+    ]
     assert cfg.prompts.greeting.startswith("Hello! This is your daily check-in")
 
 
@@ -233,3 +236,18 @@ def test_phi_var_in_two_sensitive_fields_returns_two_distinct_warnings():
     assert len(warnings) == 2
     fields_mentioned = [w for w in warnings if "greeting" in w or "voicemail_message" in w]
     assert len(fields_mentioned) == 2
+
+
+def test_tools_config_tool_names_is_catalog_single_source():
+    from usan_api.schemas.agent_config import TOOL_NAMES as CONFIG_TOOL_NAMES
+    from usan_api.schemas.tool_catalog import TOOL_CATALOG, TOOL_NAMES
+
+    assert CONFIG_TOOL_NAMES is TOOL_NAMES
+    assert {t.name for t in TOOL_CATALOG} == CONFIG_TOOL_NAMES
+
+
+def test_tools_accepts_all_seven_catalog_tools():
+    from usan_api.schemas.tool_catalog import TOOL_CATALOG
+
+    names = [t.name for t in TOOL_CATALOG]
+    assert ToolsConfig(enabled=names).enabled == names
