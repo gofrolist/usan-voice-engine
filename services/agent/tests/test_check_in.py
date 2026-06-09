@@ -19,19 +19,18 @@ _NOW = datetime(2026, 6, 8, 13, 15, 0, tzinfo=ZoneInfo("UTC"))  # a Monday
 
 
 @function_tool
-async def _send_sms_stub(ctx: RunContext[check_in.CheckInData]) -> str:
+async def send_sms(ctx: RunContext[check_in.CheckInData]) -> str:
     """Stub send_sms whose FunctionTool.id is "send_sms" (its function name).
 
-    Lets the guard tests register a real send_sms in _TOOL_REGISTRY ahead of Parts
-    B/C/D, so the template guard -- not the Part A registry filter -- is what's exercised.
+    Naming the function ``send_sms`` makes @function_tool derive ``.id == "send_sms"``
+    from the function name, so the guard tests can register a real send_sms in
+    _TOOL_REGISTRY ahead of Parts B/C/D without mutating any livekit-agents internals.
+    That way the template guard -- not the Part A registry filter -- is what's exercised.
     """
     return ""
 
 
-_send_sms_stub._info.name = "send_sms"  # FunctionTool.id resolves to _info.name
-
-
-def _tools(enabled, sms=None):
+def _tools(enabled, sms=None) -> SimpleNamespace:
     # _select_tools takes a ToolsConfig-like object (.enabled + optional .sms).
     return SimpleNamespace(enabled=list(enabled), sms=sms)
 
@@ -270,7 +269,7 @@ def test_select_tools_drops_send_sms_when_in_registry_but_no_templates(monkeypat
     # Real guard coverage: with send_sms IN _TOOL_REGISTRY (simulating Parts B/C/D) the
     # registry filter no longer hides it, so the template guard alone must drop it when
     # tools.sms has no templates.
-    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", _send_sms_stub)
+    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", send_sms)
     cfg = ToolsConfig(enabled=["log_wellness", "send_sms"], sms=SmsConfig(templates=[]))
     ids = {t.id for t in check_in._select_tools(cfg)}
     assert "send_sms" not in ids
@@ -279,7 +278,7 @@ def test_select_tools_drops_send_sms_when_in_registry_but_no_templates(monkeypat
 
 def test_select_tools_drops_send_sms_when_in_registry_but_sms_unset(monkeypatch):
     # Same guard, sms entirely unset (None) -> still dropped even though it's registered.
-    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", _send_sms_stub)
+    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", send_sms)
     cfg = ToolsConfig(enabled=["log_wellness", "send_sms"], sms=None)
     ids = {t.id for t in check_in._select_tools(cfg)}
     assert "send_sms" not in ids
@@ -288,7 +287,7 @@ def test_select_tools_drops_send_sms_when_in_registry_but_sms_unset(monkeypatch)
 
 def test_select_tools_keeps_send_sms_when_in_registry_with_templates(monkeypatch):
     # Affirmative branch: send_sms registered AND tools.sms carries templates -> retained.
-    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", _send_sms_stub)
+    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", send_sms)
     cfg = ToolsConfig(
         enabled=["log_wellness", "send_sms"], sms=SmsConfig(templates=["You have a message."])
     )
