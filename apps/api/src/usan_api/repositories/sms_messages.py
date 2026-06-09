@@ -12,6 +12,12 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+# Defensive cap for list_messages, mirroring the sibling repos (admin_audit /
+# follow_up_flags / callback_requests all use _MAX_LIST_LIMIT=500); newest-first
+# ordering means the cap keeps the most recent rows.
+_MAX_LIST_LIMIT = 500
+
+
 async def create_sms_message(
     db: AsyncSession,
     *,
@@ -64,6 +70,11 @@ async def mark_sent(
         return None
     await db.flush()
     row = await db.get(SmsMessage, sms_id)
+    if row is None:
+        # The guard above claimed the row, but a concurrent transaction deleted it
+        # before this GET. Treat it as "nothing to return" rather than crashing in
+        # db.refresh(None).
+        return None
     await db.refresh(row)
     return row
 
@@ -82,6 +93,9 @@ async def mark_failed(
         return None
     await db.flush()
     row = await db.get(SmsMessage, sms_id)
+    if row is None:
+        # Concurrent delete between the guarded UPDATE and this GET — no row to refresh.
+        return None
     await db.refresh(row)
     return row
 
@@ -89,6 +103,7 @@ async def mark_failed(
 async def list_messages(
     db: AsyncSession, *, status: str | None = None, limit: int = 100
 ) -> list[SmsMessage]:
+    limit = max(1, min(limit, _MAX_LIST_LIMIT))
     stmt = select(SmsMessage)
     if status is not None:
         stmt = stmt.where(SmsMessage.status == status)
