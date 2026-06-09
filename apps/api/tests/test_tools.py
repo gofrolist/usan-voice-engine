@@ -433,3 +433,77 @@ def test_flag_for_followup_increments_metric(client, mock_dispatch):
     assert r.status_code == 200
     after = _counter_value(FOLLOWUP_FLAGS_TOTAL, severity="urgent", category="safety")
     assert after == before + 1
+
+
+# --- send_sms -------------------------------------------------------------
+def _publish_sms_profile(async_database_url, *, body="Hello {{first_name}} from USAN."):
+    """Create a default-outbound profile whose draft enables send_sms with one template,
+    publish it, set it default-outbound. Uses the REAL repo API (publish / set_default)."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import agent_profiles as profiles_repo
+
+    async def _do():
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as db:
+                profile = await profiles_repo.create_profile(
+                    db, name=f"sms-{uuid.uuid4()}", description=None, actor_email="op@x.io"
+                )
+                draft = dict(profile.draft_config)
+                tools = dict(draft.get("tools") or {})
+                tools["enabled"] = list(tools.get("enabled") or [])
+                if "send_sms" not in tools["enabled"]:
+                    tools["enabled"].append("send_sms")
+                tools["sms"] = {"templates": [{"key": "greet", "label": "Greet", "body": body}]}
+                draft["tools"] = tools
+                await profiles_repo.update_draft(
+                    db, profile.id, config=draft, description=None, actor_email="op@x.io"
+                )
+                await profiles_repo.publish(db, profile.id, note=None, actor_email="op@x.io")
+                await profiles_repo.set_default(db, profile.id, direction="outbound")
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_do())
+
+
+def test_send_sms_enqueues_pending_row(client, mock_dispatch, async_database_url):
+    _publish_sms_profile(async_database_url)
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    # mark the call answered/in_progress is not required for enqueue; the endpoint
+    # only needs the call + elder to exist (mirrors log_wellness, which works at QUEUED).
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "pending"
+    uuid.UUID(body["id"])  # is a uuid
+
+
+def test_send_sms_unknown_template_404(client, mock_dispatch, async_database_url):
+    _publish_sms_profile(async_database_url)
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "nope"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 404
+
+
+def test_send_sms_requires_token(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post("/v1/tools/send_sms", json={"call_id": call_id, "template_key": "greet"})
+    assert r.status_code == 401

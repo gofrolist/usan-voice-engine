@@ -1,5 +1,5 @@
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -7,8 +7,9 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api import cost
+from usan_api import cost, sms_render
 from usan_api.auth import require_service_token
+from usan_api.db.base import CallDirection
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
 from usan_api.observability.custom_metrics import (
@@ -17,14 +18,17 @@ from usan_api.observability.custom_metrics import (
     FOLLOWUP_FLAGS_TOTAL,
     track_tool,
 )
+from usan_api.repositories import agent_profiles as profiles_repo
 from usan_api.repositories import callback_requests as callback_requests_repo
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import follow_up_flags as follow_up_flags_repo
 from usan_api.repositories import medications as medications_repo
 from usan_api.repositories import metrics as metrics_repo
+from usan_api.repositories import sms_messages as sms_repo
 from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.repositories import wellness as wellness_repo
+from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG
 from usan_api.schemas.tools import (
     CallbackScheduledResponse,
     CallEndedResponse,
@@ -40,6 +44,8 @@ from usan_api.schemas.tools import (
     MedicationScheduleItem,
     MetricsAcceptedResponse,
     ScheduleCallbackRequest,
+    SendSmsRequest,
+    SmsQueuedResponse,
     TodayMedsResponse,
     TranscriptLoggedResponse,
 )
@@ -203,6 +209,52 @@ async def end_call(
     # content. It's already persisted to the DB (end_reason); the log keeps only call_id.
     logger.bind(call_id=str(call.id)).info("end_call requested")
     return CallEndedResponse(status=final.status.value)
+
+
+@router.post("/send_sms", response_model=SmsQueuedResponse)
+@track_tool("send_sms")
+async def send_sms(
+    body: SendSmsRequest,
+    db: AsyncSession = Depends(get_db),
+    claims: dict[str, Any] = Depends(require_service_token),
+) -> SmsQueuedResponse:
+    call = await _authorize_call(body.call_id, claims, db)
+    elder_id = _require_elder(call)
+    elder = await elders_repo.get_elder(db, elder_id)
+    if elder is None:
+        raise HTTPException(status_code=409, detail="elder record not found")
+
+    direction: Literal["inbound", "outbound"] = (
+        "inbound" if call.direction is CallDirection.INBOUND else "outbound"
+    )
+    resolved = await profiles_repo.resolve_agent_config(
+        db,
+        profile_override=None,
+        elder_profile_id=elder.agent_profile_id,
+        direction=direction,
+    )
+    cfg = resolved.config if resolved is not None else DEFAULT_AGENT_CONFIG
+    sms_cfg = cfg.tools.sms
+    template = None
+    if sms_cfg is not None:
+        template = next((t for t in sms_cfg.templates if t.key == body.template_key), None)
+    if template is None:
+        # Either send_sms is not configured, or the key doesn't match a template.
+        raise HTTPException(status_code=404, detail="sms template not found")
+
+    rendered = sms_render.render_sms_body(template.body, call=call, elder=elder)
+    row = await sms_repo.create_sms_message(
+        db,
+        call_id=call.id,
+        elder_id=elder_id,
+        to_number=elder.phone_e164,
+        template_key=template.key,
+        body=rendered,
+    )
+    await db.commit()
+    # Does NOT send synchronously: flush_pending_sms delivers post-call (design §6.3).
+    logger.bind(call_id=str(call.id)).info("Queued send_sms")
+    return SmsQueuedResponse(id=row.id, status=row.status)
 
 
 @router.post("/log_transcript", response_model=TranscriptLoggedResponse)
