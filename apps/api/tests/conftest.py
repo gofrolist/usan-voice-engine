@@ -2,8 +2,10 @@ import asyncio
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -17,6 +19,20 @@ from usan_api.settings import get_settings
 
 API_DIR = Path(__file__).resolve().parents[1]
 TEST_SECRET = "a" * 32
+
+# Shared auth helpers (the operator bearer header + a service JWT minted with the
+# same JWT_SIGNING_KEY the `client` fixture sets). Several test modules need these;
+# keep one copy here so a token-format change is a single edit.
+OPERATOR_HEADERS = {"Authorization": "Bearer " + "o" * 32}
+
+
+def service_token(call_id: str, secret: str = "s" * 32) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
+        secret,
+        algorithm="HS256",
+    )
 
 
 @pytest.fixture(scope="session")

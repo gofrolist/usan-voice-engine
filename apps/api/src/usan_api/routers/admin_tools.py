@@ -8,6 +8,7 @@ C and D ADD their summary route to this file (additive; no re-register).
 import uuid
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_actor import get_actor_email
@@ -35,13 +36,19 @@ async def list_follow_up_flags(
     rows = await follow_up_flags_repo.list_flags(db, status=status, elder_id=elder_id, limit=limit)
     # PHI read (reason) -> audit. Detail carries only the filter shape + count,
     # NEVER the reason text or an elder's name/phone (PHI-free; spec §9).
-    await admin_audit.record(
-        db,
-        actor_email=actor,
-        action="follow_up_flags.list",
-        entity_type="follow_up_flag",
-        entity_id=str(elder_id) if elder_id is not None else None,
-        detail={"status": status, "count": len(rows)},
-    )
-    await db.commit()
+    # Guard the audit write+commit so a transient DB error rolls the session
+    # back instead of leaving it dirty (matches admin_elders / admin_profiles).
+    try:
+        await admin_audit.record(
+            db,
+            actor_email=actor,
+            action="follow_up_flags.list",
+            entity_type="follow_up_flag",
+            entity_id=str(elder_id) if elder_id is not None else None,
+            detail={"status": status, "count": len(rows)},
+        )
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        raise
     return [FollowupFlagSummary.model_validate(r) for r in rows]

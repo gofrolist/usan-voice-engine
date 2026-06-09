@@ -4,11 +4,12 @@ Uses the cookie-jar admin_session fixture exactly like test_admin_elders_api /
 test_variable_catalog_api (the cookie is set on the shared `client`).
 """
 
-import time
 import uuid
 
-import jwt
 import pytest
+
+from tests.conftest import OPERATOR_HEADERS as _OP
+from tests.conftest import service_token as _service_token
 
 
 @pytest.fixture
@@ -19,18 +20,6 @@ def mock_dispatch(monkeypatch):
 
     monkeypatch.setattr(livekit_dispatch, "dispatch_agent", AsyncMock())
     monkeypatch.setattr(dialer, "schedule_dial", lambda call_id, settings: None)
-
-
-def _service_token(call_id: str, secret: str = "s" * 32) -> str:
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
-    )
-
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 def _create_elder(client) -> str:
@@ -70,7 +59,7 @@ def _seed_flag(client, *, severity="urgent", category="medical", reason="reporte
     return elder_id, call_id, r.json()["id"]
 
 
-def test_follow_up_flags_requires_session(client, mock_dispatch):
+def test_follow_up_flags_requires_session(client):
     assert client.get("/v1/admin/follow-up-flags").status_code == 401
 
 
