@@ -26,6 +26,42 @@ export const ALLOWED_TEMPLATE_SLOTS = ["elder_name", "last_check_in_line"] as co
 // {{name}} tokens (with optional inner whitespace) are the unified substitution
 // syntax. Mirrors apps/api TOKEN_RE / the agent's prompt_vars.TOKEN_RE.
 const DOUBLE_TOKEN_RE = /\{\{\s*[a-zA-Z0-9_]+\s*\}\}/g;
+
+// PHI built-in variable names (mirror apps/api PHI_BUILTIN_NAMES). An SMS template
+// body referencing any of these hard-blocks (design §6.2) — stricter than greetings.
+const PHI_TOKEN_NAMES = [
+  "last_check_in",
+  "last_check_in_line",
+  "last_mood",
+  "last_pain",
+  "today_meds",
+] as const;
+// {{name}} token capture (mirrors DOUBLE_TOKEN_RE but captures the name).
+const TOKEN_NAME_RE = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+
+export const smsTemplateSchema = z
+  .object({
+    key: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9_]+$/, "key must be a lowercase slug (a-z, 0-9, _)"),
+    label: z.string().min(1).max(120),
+    body: z.string().min(1).max(480),
+  })
+  .superRefine((v, ctx) => {
+    const phi = new Set<string>(PHI_TOKEN_NAMES);
+    for (const m of v.body.matchAll(TOKEN_NAME_RE)) {
+      const name = m[1];
+      if (name !== undefined && phi.has(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["body"],
+          message: `SMS body must not reference protected health information ({{${name}}})`,
+        });
+      }
+    }
+  });
 // Legacy single-brace slots kept only for back-compat in the personalization template.
 const LEGACY_SLOT_RE = /\{(elder_name|last_check_in_line)\}/g;
 
@@ -107,6 +143,7 @@ export const timingSchema = z.object({
 
 export const toolsSchema = z.object({
   enabled: z.array(z.enum(TOOL_NAMES)),
+  sms: z.object({ templates: z.array(smsTemplateSchema) }).optional().nullable(),
 });
 
 export const voicemailDetectionSchema = z.object({
