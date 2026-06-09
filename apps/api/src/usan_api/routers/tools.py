@@ -256,7 +256,8 @@ async def send_sms(
     )
     await db.commit()
     # Does NOT send synchronously: flush_pending_sms delivers post-call (design §6.3).
-    logger.bind(call_id=str(call.id), elder_id=str(elder_id)).info("Queued send_sms")
+    # Bind only call_id (matches flag_for_followup / schedule_callback); elder_id is PHI.
+    logger.bind(call_id=str(call.id)).info("Queued send_sms")
     return SmsQueuedResponse(id=row.id, status=row.status)
 
 
