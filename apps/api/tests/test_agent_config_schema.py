@@ -54,18 +54,27 @@ def test_timing_rejects_cap_below_answer_timeout():
     assert ok.max_call_duration_s == 1800
 
 
-def test_prompt_field_rejects_braces():
+def test_short_field_rejects_stray_single_brace():
+    # A lone { or } in a one-line field is a typo — still rejected.
     bad = DEFAULT_AGENT_CONFIG.prompts.model_dump()
     bad["greeting"] = "Hello {name}"
     with pytest.raises(ValidationError):
         PromptsConfig.model_validate(bad)
 
 
-def test_personalization_template_rejects_unknown_slot():
-    bad = DEFAULT_AGENT_CONFIG.prompts.model_dump()
-    bad["inbound_personalization_template"] = "Hi {ssn}"
-    with pytest.raises(ValidationError):
-        PromptsConfig.model_validate(bad)
+def test_short_field_accepts_double_brace_tokens():
+    # Phase 2: {{token}} is allowed on short fields (the agent substitutes a value).
+    ok = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    ok["greeting"] = "Hello {{first_name}}, this is your check-in."
+    parsed = PromptsConfig.model_validate(ok)
+    assert "{{first_name}}" in parsed.greeting
+
+
+def test_personalization_template_accepts_unknown_double_brace_token():
+    # Unknown {{var}} names are warned-not-blocked (design §5.1): they pass validation.
+    ok = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    ok["inbound_personalization_template"] = "Hi {{first_name}}, talk about {{weather}}."
+    assert PromptsConfig.model_validate(ok)
 
 
 def test_personalization_template_accepts_allowed_slots():
@@ -112,3 +121,54 @@ def test_system_prompt_rejects_over_cap():
     cfg["system_prompt"] = "x" * 24001
     with pytest.raises(ValidationError):
         PromptsConfig.model_validate(cfg)
+
+
+def test_short_field_accepts_unknown_double_brace_token():
+    # Unknown {{var}} on a short field is accepted (warn-don't-block).
+    ok = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    ok["voicemail_message"] = "Sorry we missed you, {{nickname}}."
+    assert PromptsConfig.model_validate(ok)
+
+
+def test_personalization_template_still_accepts_legacy_single_brace_slots():
+    # Back-compat: old configs use single-brace {elder_name}/{last_check_in_line}.
+    ok = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    ok["inbound_personalization_template"] = "Hi {elder_name}. {last_check_in_line}"
+    assert PromptsConfig.model_validate(ok)
+
+
+def test_personalization_template_rejects_unknown_single_brace_slot():
+    # A non-legacy single-brace slot is still a stray brace -> rejected.
+    bad = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    bad["inbound_personalization_template"] = "Hi {ssn}"
+    with pytest.raises(ValidationError):
+        PromptsConfig.model_validate(bad)
+
+
+def test_short_field_rejects_stray_brace_even_with_valid_token():
+    bad = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    bad["greeting"] = "Hello {{first_name}} and {oops"
+    with pytest.raises(ValidationError):
+        PromptsConfig.model_validate(bad)
+
+
+def test_unknown_tokens_lists_only_non_builtin_double_brace_names():
+    from usan_api.schemas.agent_config import unknown_tokens
+
+    text = "Hi {{first_name}}, the {{weather}} is {{mood_today}}. {not_a_token}"
+    assert unknown_tokens(text) == ["weather", "mood_today"]
+
+
+def test_unknown_tokens_dedupes_and_preserves_first_seen_order():
+    from usan_api.schemas.agent_config import unknown_tokens
+
+    text = "{{weather}} {{weather}} {{tone}}"
+    assert unknown_tokens(text) == ["weather", "tone"]
+
+
+def test_unknown_tokens_respects_extra_known_names():
+    from usan_api.schemas.agent_config import unknown_tokens
+
+    # A declared custom var is "known" once passed in — not reported.
+    text = "Hi {{first_name}}, special offer: {{promo}}."
+    assert unknown_tokens(text, known_names=frozenset({"promo"})) == []

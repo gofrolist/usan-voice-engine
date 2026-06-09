@@ -14,21 +14,54 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from usan_api.schemas.variable_catalog import BUILTIN_NAMES
+
 # Tool names the agent can register; mirrors check_in.build_check_in_agent().
 TOOL_NAMES = frozenset({"log_wellness", "log_medication", "get_today_meds", "end_call"})
 # Personalization slots allowed in the inbound template (check_in.py rendering).
+# Kept for any external code that may import it; no longer used by the validators.
 ALLOWED_TEMPLATE_SLOTS = frozenset({"elder_name", "last_check_in_line"})
 
-_SLOT_RE = re.compile(r"\{([^{}]*)\}")
+# Phase 2 token syntax: {{ name }} with optional inner spaces (design contract D/E).
+# Mirrors services/agent prompt_vars.TOKEN_RE so the two layers agree on what a token is.
+_TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
+# Legacy single-brace personalization slots kept for already-published configs.
+_LEGACY_SLOT_RE = re.compile(r"\{(elder_name|last_check_in_line)\}")
 
 
-def _reject_braces(value: str) -> str:
-    """Reject raw format-slot braces: they break str.format and are an injection
-    vector (cf. check_in._PROMPT_UNSAFE). Used on every prompt field except the
-    one explicit personalization template."""
-    if "{" in value or "}" in value:
-        raise ValueError("must not contain '{' or '}'")
+def _reject_stray_braces_after_tokens(value: str, *, allow_legacy_slots: bool) -> str:
+    """Field-tiered brace check (design §5.1).
+
+    Strip every well-formed ``{{token}}`` (and, when ``allow_legacy_slots``, the two
+    legacy single-brace slots) then reject any ``{``/``}`` that remains. Unknown
+    ``{{var}}`` NAMES are intentionally NOT rejected here — they are surfaced as
+    non-fatal warnings on the save response (warn-don't-block). This is never
+    str.format, so the leftover-brace check only guards against typos in the short
+    one-line fields, not injection (substitution is token-scoped agent-side).
+    """
+    stripped = _TOKEN_RE.sub("", value)
+    if allow_legacy_slots:
+        stripped = _LEGACY_SLOT_RE.sub("", stripped)
+    if "{" in stripped or "}" in stripped:
+        raise ValueError("must not contain a stray '{' or '}' outside a {{token}}")
     return value
+
+
+def unknown_tokens(text: str, known_names: frozenset[str] = frozenset()) -> list[str]:
+    """Return the ``{{var}}`` token names in ``text`` that are not catalog built-ins.
+
+    ``known_names`` lets a caller treat declared custom variables as known too. The
+    result is de-duplicated and keeps first-seen order so the warning list reads
+    deterministically. Used to populate the additive ``warnings`` field on the
+    profile save/validate response (design §5.1).
+    """
+    seen: list[str] = []
+    for name in _TOKEN_RE.findall(text):
+        if name in BUILTIN_NAMES or name in known_names:
+            continue
+        if name not in seen:
+            seen.append(name)
+    return seen
 
 
 class PromptsConfig(BaseModel):
@@ -46,10 +79,10 @@ class PromptsConfig(BaseModel):
     inbound_opening: str = Field(min_length=1, max_length=1000)
     inbound_personalization_template: str = Field(min_length=1, max_length=6000)
 
-    # Brace rejection applies ONLY to the short, literal fields. system_prompt and
-    # checkin_flow_instructions are intentionally excluded (they carry {{variable}}
-    # tokens and are never str.format-ed). DO NOT route either field through
-    # str.format anywhere — that would reintroduce the injection vector.
+    # Field-tiered braces (design §5.1). Short literal fields accept {{tokens}} but
+    # reject a stray lone brace (a typo in a one-line string). system_prompt and
+    # checkin_flow_instructions stay permissive (NOT listed here) — they carry large
+    # pasted prompts full of arbitrary braces and are never str.format-ed.
     @field_validator(
         "greeting",
         "recording_disclosure",
@@ -58,24 +91,15 @@ class PromptsConfig(BaseModel):
         "inbound_opening",
     )
     @classmethod
-    def _no_braces(cls, v: str) -> str:
-        return _reject_braces(v)
+    def _tokens_only_no_stray_braces(cls, v: str) -> str:
+        return _reject_stray_braces_after_tokens(v, allow_legacy_slots=False)
 
+    # The inbound template additionally tolerates its two legacy single-brace slots
+    # ({elder_name}/{last_check_in_line}) so old published snapshots still validate.
     @field_validator("inbound_personalization_template")
     @classmethod
-    def _only_allowed_slots(cls, v: str) -> str:
-        slots = _SLOT_RE.findall(v)
-        bad = [s for s in slots if s not in ALLOWED_TEMPLATE_SLOTS]
-        if bad:
-            raise ValueError(
-                f"unknown template slot(s): {', '.join(sorted(set(bad)))}; "
-                f"allowed: {', '.join(sorted(ALLOWED_TEMPLATE_SLOTS))}"
-            )
-        # Reject stray braces not part of a recognized slot.
-        stripped = _SLOT_RE.sub("", v)
-        if "{" in stripped or "}" in stripped:
-            raise ValueError("contains an unmatched '{' or '}'")
-        return v
+    def _tokens_plus_legacy_slots(cls, v: str) -> str:
+        return _reject_stray_braces_after_tokens(v, allow_legacy_slots=True)
 
 
 class VoiceConfig(BaseModel):
