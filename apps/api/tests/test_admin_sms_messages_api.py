@@ -10,7 +10,7 @@ from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import sms_messages as sms_repo
 
 
-async def _seed(url, *, status):
+async def _seed(url: str, *, status: str) -> uuid.UUID:
     engine = create_async_engine(url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
@@ -59,4 +59,5 @@ def test_sms_messages_status_filter(client, admin_session, async_database_url):
     asyncio.run(_seed(async_database_url, status="failed"))
     r = client.get("/v1/admin/sms-messages?status=failed")
     assert r.status_code == 200
+    assert len(r.json()) >= 1
     assert all(i["status"] == "failed" for i in r.json())

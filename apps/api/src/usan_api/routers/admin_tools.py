@@ -98,9 +98,29 @@ async def list_sms_messages(
     status: str | None = Query(default=None, max_length=32),
     limit: int = Query(default=100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    actor: str = Depends(get_actor_email),
 ) -> list[SmsMessageSummary]:
-    # The router-level Depends(require_admin_session) already gates this route.
-    # No admin_audit.record here: the summary omits `body`, so no PHI is returned
-    # (unlike follow-up-flags which expose `reason`).
     rows = await sms_repo.list_messages(db, status=status, limit=limit)
+    # PHI read -> audit. The summary omits `body`, but `to_number` is the elder's
+    # E.164 phone number, which is direct PII/PHI under §10's access-logging rule,
+    # so this read is audited just like the PHI-returning sibling endpoints.
+    # Detail carries only the filter shape + count, NEVER the phone or body
+    # (PHI-free; spec §9). Guard the write+commit so a transient DB error rolls
+    # the session back instead of leaving it dirty (matches the siblings above).
+    # NOTE: no `elder_id` filter here, unlike list_follow_up_flags /
+    # list_callback_requests — per-elder SMS scoping is deferred because the D6
+    # `sms_repo.list_messages` repo does not yet expose an `elder_id` parameter.
+    try:
+        await admin_audit.record(
+            db,
+            actor_email=actor,
+            action="sms_messages.list",
+            entity_type="sms_message",
+            entity_id=None,
+            detail={"status": status, "count": len(rows)},
+        )
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        raise
     return [SmsMessageSummary.model_validate(r) for r in rows]
