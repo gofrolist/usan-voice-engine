@@ -1,3 +1,5 @@
+import pytest
+
 from usan_api.settings import Settings
 
 _BASE = {
@@ -44,3 +46,13 @@ def test_messaging_enabled_and_secret_set():
     assert s.telnyx_messaging_api_key.get_secret_value() == "KEY123"
     assert s.telnyx_messaging_profile_id == "mp1"
     assert s.telnyx_from_number == "+15551230000"
+
+
+def test_messaging_api_url_rejects_plaintext():
+    with pytest.raises(ValueError, match="https://"):
+        Settings(**_BASE, TELNYX_MESSAGING_API_URL="http://api.telnyx.com/v2")
+
+
+def test_messaging_api_url_accepts_https():
+    s = Settings(**_BASE, TELNYX_MESSAGING_API_URL="https://example.test/v2")
+    assert s.telnyx_messaging_api_url == "https://example.test/v2"
