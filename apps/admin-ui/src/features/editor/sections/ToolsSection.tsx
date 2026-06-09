@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Controller, type UseFormReturn } from "react-hook-form";
+import { Controller, useFieldArray, type UseFormReturn } from "react-hook-form";
 import type { AgentConfigForm, ToolName } from "../../../config/agentConfigSchema";
 import { TOOL_NAMES } from "../../../config/agentConfigSchema";
 import { useToolCatalog, type ToolSpec } from "../../../config/toolCatalog";
@@ -98,6 +98,77 @@ export function ToolsSection({ form }: { form: UseFormReturn<AgentConfigForm> })
       />
       {isLoading ? <p className="text-xs text-slate-400">Loading tool catalog…</p> : null}
       {error ? <p className="text-xs font-medium text-red-700">{error}</p> : null}
+      <SmsTemplatesEditor form={form} />
+    </div>
+  );
+}
+
+// Operator-authored SMS templates for the send_sms tool. The agent never writes free
+// text — it picks a template by key — so this is where those bodies live. When send_sms
+// is enabled but no templates exist yet, a needs-templates hint warns the operator that
+// the agent has nothing to send (the catalog's requires_config flag made the same point
+// on the toggle). The body's PHI rejection lives in the zod schema (smsTemplateSchema).
+function SmsTemplatesEditor({ form }: { form: UseFormReturn<AgentConfigForm> }) {
+  const enabled = form.watch("tools.enabled") ?? [];
+  const templates = form.watch("tools.sms.templates") ?? [];
+  const { fields, append, remove } = useFieldArray({
+    control: form.control,
+    name: "tools.sms.templates",
+  });
+  const sendSmsEnabled = enabled.includes("send_sms");
+  const needsTemplates = sendSmsEnabled && templates.length === 0;
+
+  return (
+    <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-card">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-900">SMS templates</h3>
+        <button
+          type="button"
+          className="rounded-lg border border-slate-300 px-2 py-1 text-xs"
+          onClick={() => append({ key: "", label: "", body: "" })}
+        >
+          Add template
+        </button>
+      </div>
+      {needsTemplates ? (
+        <p className="text-xs font-medium text-amber-700">
+          send_sms is enabled — needs templates: add at least one template or the agent
+          cannot send any text.
+        </p>
+      ) : null}
+      <ul className="space-y-3">
+        {fields.map((f, i) => (
+          <li key={f.id} className="space-y-2 rounded-lg border border-slate-100 p-3">
+            <input
+              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              placeholder="key (lowercase slug)"
+              {...form.register(`tools.sms.templates.${i}.key` as const)}
+            />
+            <input
+              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              placeholder="label"
+              {...form.register(`tools.sms.templates.${i}.label` as const)}
+            />
+            <textarea
+              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              placeholder="body (non-PHI {{variables}} only)"
+              {...form.register(`tools.sms.templates.${i}.body` as const)}
+            />
+            {form.formState.errors.tools?.sms?.templates?.[i]?.body ? (
+              <p className="text-xs font-medium text-red-700">
+                {form.formState.errors.tools.sms.templates[i]?.body?.message}
+              </p>
+            ) : null}
+            <button
+              type="button"
+              className="text-xs text-red-700"
+              onClick={() => remove(i)}
+            >
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

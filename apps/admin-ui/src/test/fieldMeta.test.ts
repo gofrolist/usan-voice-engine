@@ -45,3 +45,13 @@ describe("fieldMeta tools help text", () => {
     expect(help.toLowerCase()).toContain("catalog");
   });
 });
+
+describe("fieldMeta tools.sms", () => {
+  it("registers tools.sms help mentioning templates and non-PHI", () => {
+    const meta = fieldMeta["tools.sms"];
+    expect(meta).toBeDefined();
+    expect(meta!.label.toLowerCase()).toContain("sms");
+    expect(meta!.help.toLowerCase()).toMatch(/template/);
+    expect(meta!.help.toLowerCase()).toMatch(/non-phi|protected health|phi/);
+  });
+});

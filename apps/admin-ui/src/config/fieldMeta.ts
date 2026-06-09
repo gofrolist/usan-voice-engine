@@ -96,6 +96,10 @@ export const fieldMeta: Record<string, FieldMeta> = {
     label: "Enabled tools",
     help: "Which tools the agent may call this profile. The available tools come from the server catalog; end_call is always on.",
   },
+  "tools.sms": {
+    label: "SMS templates",
+    help: "Operator-authored text templates the agent can send by key (it never writes free text). Bodies may use non-PHI variables only — a PHI variable is rejected (SMS is unencrypted). send_sms is offered to the agent only when at least one template exists.",
+  },
 
   // Voicemail detection
   "voicemail_detection.window_s": {

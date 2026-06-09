@@ -144,3 +144,20 @@ describe("ToolsSection", () => {
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
   });
 });
+
+describe("ToolsSection SMS", () => {
+  it("shows a needs-templates hint when send_sms is enabled but no templates exist", async () => {
+    getMock.mockResolvedValue({ tools: CATALOG });
+    render(wrapper(<Harness enabled={["send_sms", "end_call"]} />));
+
+    expect(await screen.findByText(/needs templates/i)).toBeInTheDocument();
+  });
+
+  it("does not show the hint when send_sms is not enabled", async () => {
+    getMock.mockResolvedValue({ tools: CATALOG });
+    render(wrapper(<Harness enabled={["log_wellness", "end_call"]} />));
+
+    await screen.findByText("Record the elder's wellness.");
+    expect(screen.queryByText(/needs templates/i)).not.toBeInTheDocument();
+  });
+});
