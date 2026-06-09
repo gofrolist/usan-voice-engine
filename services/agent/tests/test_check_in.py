@@ -440,3 +440,36 @@ def test_build_inbound_agent_caps_injected_value_length() -> None:
         now=_NOW,
     )
     assert "A" * 301 not in agent.instructions
+
+
+async def test_do_flag_for_followup_calls_api_and_acks(monkeypatch):
+    spy = AsyncMock()
+    monkeypatch.setattr(check_in.api_client, "flag_for_followup", spy)
+    result = await check_in._do_flag_for_followup(
+        _data(), severity="urgent", category="medical", reason="chest pain"
+    )
+    spy.assert_awaited_once()
+    kwargs = spy.await_args.kwargs
+    assert kwargs == {"severity": "urgent", "category": "medical", "reason": "chest pain"}
+    assert spy.await_args.args[0] == "call-1"
+    assert isinstance(result, str)
+    assert result  # a calm spoken confirmation
+
+
+async def test_do_flag_for_followup_handles_api_failure(monkeypatch):
+    async def _boom(*a, **k):
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr(check_in.api_client, "flag_for_followup", _boom)
+    result = await check_in._do_flag_for_followup(
+        _data(), severity="routine", category="other", reason="x"
+    )
+    assert isinstance(result, str)
+    assert result  # graceful fallback, no exception
+
+
+def test_flag_for_followup_in_tool_registry():
+    # R5: registry grows additively; flag_for_followup is registered before end_call.
+    assert "flag_for_followup" in check_in._TOOL_REGISTRY
+    keys = list(check_in._TOOL_REGISTRY)
+    assert keys.index("flag_for_followup") < keys.index("end_call")

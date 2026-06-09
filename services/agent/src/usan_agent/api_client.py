@@ -79,6 +79,22 @@ async def log_wellness(
     )
 
 
+async def flag_for_followup(
+    call_id: str,
+    settings: Settings,
+    *,
+    severity: str,
+    category: str,
+    reason: str,
+) -> None:
+    await _post_tool(
+        "flag_for_followup",
+        call_id,
+        settings,
+        {"severity": severity, "category": category, "reason": reason},
+    )
+
+
 async def log_medication(
     call_id: str,
     settings: Settings,

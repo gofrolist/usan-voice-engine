@@ -84,6 +84,19 @@ async def _do_log_medication(
     return "Got it, I've recorded that."
 
 
+async def _do_flag_for_followup(
+    data: CheckInData, *, severity: str, category: str, reason: str
+) -> str:
+    try:
+        await api_client.flag_for_followup(
+            data.call_id, data.settings, severity=severity, category=category, reason=reason
+        )
+    except Exception:
+        logger.bind(call_id=data.call_id).warning("flag_for_followup tool failed")
+        return "I've made a note of that, and I'll make sure someone follows up."
+    return "Thank you. I've flagged this so someone can follow up with you."
+
+
 async def _do_get_today_meds(data: CheckInData) -> str:
     try:
         meds = await api_client.get_today_meds(data.call_id, data.settings)
@@ -181,6 +194,25 @@ async def get_today_meds(ctx: RunContext[CheckInData]) -> str:
 
 
 @function_tool
+async def flag_for_followup(
+    ctx: RunContext[CheckInData],
+    severity: str,
+    category: str,
+    reason: str,
+) -> str:
+    """Flag this call for a human to follow up on.
+
+    Args:
+        severity: "routine" for a non-urgent note, "urgent" for prompt attention.
+        category: One of "medical", "emotional", "medication", "safety", "other".
+        reason: A short description of what should be followed up on.
+    """
+    return await _do_flag_for_followup(
+        ctx.userdata, severity=severity, category=category, reason=reason
+    )
+
+
+@function_tool
 async def end_call(ctx: RunContext[CheckInData], reason: str = "check_in_complete") -> str:
     """End the call once the check-in is complete.
 
@@ -199,6 +231,7 @@ _TOOL_REGISTRY: dict[str, Any] = {
     "log_wellness": log_wellness,
     "log_medication": log_medication,
     "get_today_meds": get_today_meds,
+    "flag_for_followup": flag_for_followup,
     "end_call": end_call,
 }
 
