@@ -10,7 +10,7 @@ never str.format, so a hostile value cannot inject a new slot.
 """
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from usan_api import builtin_vars
@@ -23,6 +23,10 @@ from usan_api.schemas.variable_catalog import PHI_BUILTIN_NAMES
 _VALUE_UNSAFE = re.compile(
     r"[{}\x00-\x1f\x7f\x85\u00ad\u200b-\u200f\u2028-\u2029\u202a-\u202e\u2060-\u2064\ufeff]"
 )
+# Per-substituted-value safety cap, NOT the final SMS body length. It bounds any
+# single resolved variable so one runaway value can't dominate the message; a body
+# with multiple substitutions can still exceed 160 chars (segment length is the
+# carrier's concern, not enforced here).
 _VALUE_MAX_LEN = 160
 
 
@@ -41,8 +45,11 @@ def _clock_vars(elder: Any, now: datetime) -> dict[str, str]:
         local = now.astimezone(ZoneInfo(tz))
     except Exception:
         local = now
+    # %-I / %-d are POSIX strftime extensions (no leading zero); they raise
+    # ValueError on Windows. Fine for our GCP/Docker (Linux) deployment. %-I
+    # already drops the leading zero, so no lstrip is needed.
     return {
-        "current_time": local.strftime("%-I:%M %p").lstrip("0"),
+        "current_time": local.strftime("%-I:%M %p"),
         "current_date": local.strftime("%A, %B %-d"),
     }
 
@@ -55,7 +62,7 @@ def render_sms_body(
     ``now`` is injectable for testing; the endpoint calls
     ``render_sms_body(template.body, call=call, elder=elder)``.
     """
-    when = now or datetime.now()
+    when = now or datetime.now(UTC)
     raw_direction = getattr(getattr(call, "direction", None), "value", "outbound")
     direction: Literal["inbound", "outbound"] = (
         "inbound" if raw_direction == "inbound" else "outbound"

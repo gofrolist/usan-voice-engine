@@ -29,6 +29,22 @@ def test_phi_token_renders_empty_defense_in_depth():
     assert out == "Mood: ."
 
 
+def test_today_meds_phi_token_renders_empty_defense_in_depth():
+    # today_meds is PHI (variable_catalog) and is dropped by the non-PHI subset,
+    # so {{today_meds}} resolves to empty even when meds are configured. The
+    # save-time hard-block in _reject_phi_in_templates already prevents this body
+    # from being stored; this guards the render path as defense-in-depth.
+    # Dict-shaped entries so today_meds would resolve to a non-empty value if the
+    # PHI filter were absent — proving the filter (not an empty source) blanks it.
+    out = render_sms_body(
+        "Meds: {{today_meds}}.",
+        call=_call(),
+        elder=_elder(meds=[{"name": "Lisinopril"}, {"name": "Metformin"}]),
+        now=_NOW,
+    )
+    assert out == "Meds: ."
+
+
 def test_unknown_token_renders_empty():
     out = render_sms_body("X {{not_a_var}} Y", call=_call(), elder=_elder(), now=_NOW)
     assert out == "X  Y"
@@ -44,5 +60,6 @@ def test_value_is_sanitized_before_insertion():
 
 
 def test_clock_tokens_resolve():
+    # _NOW is 2026-06-09 09:15 UTC; %A, %B %-d in UTC -> "Tuesday, June 9".
     out = render_sms_body("Today is {{current_date}}.", call=_call(), elder=_elder(), now=_NOW)
-    assert "2026" in out or "June" in out
+    assert out == "Today is Tuesday, June 9."
