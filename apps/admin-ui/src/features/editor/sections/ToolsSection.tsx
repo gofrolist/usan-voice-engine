@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Controller, type UseFormReturn } from "react-hook-form";
 import type { AgentConfigForm, ToolName } from "../../../config/agentConfigSchema";
 import { TOOL_NAMES } from "../../../config/agentConfigSchema";
@@ -6,11 +7,14 @@ import { useToolCatalog, type ToolSpec } from "../../../config/toolCatalog";
 // Retell-style "Functions" list: each enabled tool is a function the agent can call
 // mid-call. The catalog (useToolCatalog) is the runtime source of truth for what
 // renders; TOOL_NAMES is the canonical order used to rebuild the enabled[] array so
-// diffs stay stable. The catalog degrades gracefully: while loading or on error
-// `data` is undefined, so no rows render (the form value is left untouched).
+// diffs stay stable. The catalog degrades gracefully: while loading no rows render,
+// and on error we surface a message so the user never mistakes a failed fetch for an
+// intentionally empty tool set (which would silently omit always_on tools like
+// end_call). always_on tools are force-added to the form value once the catalog
+// loads (the disabled checkbox is UI-only — see the effect below).
 export function ToolsSection({ form }: { form: UseFormReturn<AgentConfigForm> }) {
   const error = form.formState.errors.tools?.enabled?.message;
-  const { data: catalog } = useToolCatalog();
+  const { data: catalog, isError, isLoading } = useToolCatalog();
   // Pair each known ToolName with its catalog spec, in canonical TOOL_NAMES order and
   // restricted to names the catalog actually returned. Carrying the ToolName keeps the
   // toggle type-safe (enabled[] is ToolName[]); the spec drives the rendered labels.
@@ -20,15 +24,43 @@ export function ToolsSection({ form }: { form: UseFormReturn<AgentConfigForm> })
     return spec ? [{ name, spec }] : [];
   });
 
+  // Guarantee every always_on tool is actually present in the form value. The disabled
+  // checkbox alone is UI-only: a stored draft that omits e.g. end_call would render the
+  // box visually checked (lockedOn) but submit a config without it. When the catalog
+  // loads we union any missing always_on names into enabled[], in canonical order.
+  const setValue = form.setValue;
+  const getValues = form.getValues;
+  useEffect(() => {
+    if (!catalog) return;
+    const alwaysOn = catalog.filter((s) => s.always_on).map((s) => s.name);
+    if (alwaysOn.length === 0) return;
+    const current = new Set(getValues("tools.enabled"));
+    const missing = alwaysOn.filter((name) => !current.has(name as ToolName));
+    if (missing.length === 0) return;
+    const next = new Set([...current, ...(missing as ToolName[])]);
+    setValue(
+      "tools.enabled",
+      TOOL_NAMES.filter((t) => next.has(t)),
+      { shouldDirty: true },
+    );
+  }, [catalog, getValues, setValue]);
+
   return (
     <div className="space-y-3">
       <p className="text-sm text-slate-500">Functions the agent can call during a call.</p>
+      {isError ? (
+        <p className="text-xs font-medium text-red-700">
+          Could not load tool catalog — please refresh.
+        </p>
+      ) : null}
       <Controller
         control={form.control}
         name="tools.enabled"
         render={({ field }) => {
           const enabled = new Set(field.value);
           function toggle(tool: ToolName, on: boolean): void {
+            // always_on tools are locked on; never remove them even programmatically.
+            if (!on && byName.get(tool)?.always_on === true) return;
             const next = new Set(enabled);
             if (on) next.add(tool);
             else next.delete(tool);
@@ -50,9 +82,12 @@ export function ToolsSection({ form }: { form: UseFormReturn<AgentConfigForm> })
                     id={`tool-${name}`}
                     type="checkbox"
                     className="mt-1 h-4 w-4 accent-indigo-600"
-                    checked={enabled.has(name)}
-                    // always_on tools (end_call) are locked on and cannot be toggled off.
+                    // always_on tools (end_call) render checked + disabled; the effect
+                    // above guarantees they are also present in the submitted value.
+                    checked={spec.always_on ? true : enabled.has(name)}
                     disabled={spec.always_on}
+                    // TODO(Part D): when spec.requires_config (send_sms) is enabled but
+                    // has no templates yet, show a "needs a template" hint and gate save.
                     onChange={(e) => toggle(name, e.target.checked)}
                   />
                 </li>
@@ -61,6 +96,7 @@ export function ToolsSection({ form }: { form: UseFormReturn<AgentConfigForm> })
           );
         }}
       />
+      {isLoading ? <p className="text-xs text-slate-400">Loading tool catalog…</p> : null}
       {error ? <p className="text-xs font-medium text-red-700">{error}</p> : null}
     </div>
   );

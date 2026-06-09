@@ -14,6 +14,9 @@ export interface ToolSpec {
   // end_call is locked on (rendered, cannot be disabled).
   always_on: boolean;
   // send_sms needs >=1 template before the agent offers it.
+  // TODO(Part D): enforce this in ToolsSection — when requires_config is true and the
+  // tool is enabled without a configured template, show a hint and gate save. Until
+  // then this flag is carried through but not yet read by the UI.
   requires_config: boolean;
 }
 
