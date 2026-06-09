@@ -21,7 +21,7 @@ async def session_factory(async_database_url):
 
 
 async def _seed_call_and_elder(factory) -> tuple[uuid.UUID, uuid.UUID]:
-    phone = f"+1555{str(uuid.uuid4().int)[:7]}"
+    phone = f"+1555{str(uuid.uuid4().int)[:7].zfill(7)}"
     async with factory() as db:
         elder = await elders_repo.create_elder(
             db, name="Callback Elder", phone_e164=phone, timezone="UTC"

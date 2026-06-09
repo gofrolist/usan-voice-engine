@@ -23,7 +23,7 @@ async def _seed_callback(
                     "INSERT INTO elders (id, name, phone_e164, timezone) "
                     "VALUES (CAST(:id AS uuid), 'Ada', :p, 'UTC')"
                 ),
-                {"id": elder_id, "p": f"+1555{str(uuid.UUID(elder_id).int)[:7]}"},
+                {"id": elder_id, "p": f"+1555{str(uuid.UUID(elder_id).int)[:7].zfill(7)}"},
             )
             await conn.execute(
                 text(
@@ -83,6 +83,17 @@ def test_list_callback_requests_filters_by_status(client, admin_session, async_d
     assert "open-one" in texts
     assert "done-one" not in texts
     assert all(r["status"] == "open" for r in open_rows)
+
+
+def test_list_callback_requests_filters_by_elder(client, admin_session, async_database_url):
+    _call_a, elder_a = asyncio.run(
+        _seed_callback(async_database_url, requested_time_text="elder-a-cb")
+    )
+    asyncio.run(_seed_callback(async_database_url, requested_time_text="elder-b-cb"))
+    rows = client.get(f"/v1/admin/callback-requests?elder_id={elder_a}").json()
+    texts = {r["requested_time_text"] for r in rows}
+    assert texts == {"elder-a-cb"}
+    assert all(r["elder_id"] == elder_a for r in rows)
 
 
 def test_list_callback_requests_over_cap_limit_422(client, admin_session):

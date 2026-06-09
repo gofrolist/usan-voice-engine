@@ -58,13 +58,16 @@ async def list_follow_up_flags(
 @router.get("/callback-requests", response_model=list[CallbackRequestSummary])
 async def list_callback_requests(
     status: str | None = Query(default=None, max_length=32),
+    elder_id: uuid.UUID | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     actor: str = Depends(get_actor_email),
 ) -> list[CallbackRequestSummary]:
-    # Paged + status-filtered in SQL (never select the whole table). Callback notes are
-    # PHI but stay in our DB; this endpoint is session-gated via the router dependency.
-    rows = await callback_requests_repo.list_callback_requests(db, status=status, limit=limit)
+    # Paged + status/elder-filtered in SQL (never select the whole table). Callback notes
+    # are PHI but stay in our DB; this endpoint is session-gated via the router dependency.
+    rows = await callback_requests_repo.list_callback_requests(
+        db, status=status, elder_id=elder_id, limit=limit
+    )
     # PHI read (notes) -> audit. Detail carries only the filter shape + count,
     # NEVER the notes text or an elder's name/phone (PHI-free; spec §9).
     # Guard the audit write+commit so a transient DB error rolls the session
@@ -75,7 +78,7 @@ async def list_callback_requests(
             actor_email=actor,
             action="callback_requests.list",
             entity_type="callback_request",
-            entity_id=None,
+            entity_id=str(elder_id) if elder_id is not None else None,
             detail={"status": status, "count": len(rows)},
         )
         await db.commit()

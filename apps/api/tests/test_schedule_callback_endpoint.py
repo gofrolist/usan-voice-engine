@@ -4,22 +4,10 @@ import uuid
 import jwt
 import pytest
 
+from tests.conftest import counter_value as _counter_value
 from usan_api import livekit_dispatch
 
 _OP = {"Authorization": "Bearer " + "o" * 32}
-
-
-def _counter_value(counter, **labels) -> float:
-    """Read a Counter's cumulative value via the public collect() API.
-
-    Avoids the private `._value.get()` internal. The `_total` sample carries the
-    cumulative count; `labels` filters labeled counters (empty for unlabeled ones).
-    """
-    for metric in counter.collect():
-        for sample in metric.samples:
-            if sample.name.endswith("_total") and sample.labels == labels:
-                return sample.value
-    return 0.0
 
 
 @pytest.fixture
