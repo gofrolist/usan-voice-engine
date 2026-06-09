@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentConfigSchema, type AgentConfigForm } from "../config/agentConfigSchema";
+import { agentConfigSchema, TOOL_NAMES, type AgentConfigForm } from "../config/agentConfigSchema";
 
 function validConfig(): AgentConfigForm {
   return {
@@ -23,7 +23,17 @@ function validConfig(): AgentConfigForm {
     llm: { model: "gemini-3.1-flash-lite", temperature: null },
     stt: { model: "ink-whisper", language: null },
     timing: { answer_timeout_s: 50, max_call_duration_s: 1800 },
-    tools: { enabled: ["log_wellness", "log_medication", "get_today_meds", "end_call"] },
+    tools: {
+      enabled: [
+        "log_wellness",
+        "log_medication",
+        "get_today_meds",
+        "flag_for_followup",
+        "schedule_callback",
+        "send_sms",
+        "end_call",
+      ],
+    },
     voicemail_detection: { window_s: 3, trigger_phrases: [] },
     speech_advanced: {
       vad_min_silence_s: null,
@@ -40,6 +50,18 @@ function validConfig(): AgentConfigForm {
 describe("agentConfigSchema", () => {
   it("accepts a valid config", () => {
     expect(agentConfigSchema.safeParse(validConfig()).success).toBe(true);
+  });
+
+  it("exposes all seven catalog tool names", () => {
+    expect([...TOOL_NAMES]).toEqual([
+      "log_wellness",
+      "log_medication",
+      "get_today_meds",
+      "flag_for_followup",
+      "schedule_callback",
+      "send_sms",
+      "end_call",
+    ]);
   });
 
   it("rejects a brace in the greeting", () => {
