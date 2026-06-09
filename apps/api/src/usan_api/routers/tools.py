@@ -11,9 +11,14 @@ from usan_api import cost
 from usan_api.auth import require_service_token
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
-from usan_api.observability.custom_metrics import CALLS_TOTAL, track_tool
+from usan_api.observability.custom_metrics import (
+    CALLS_TOTAL,
+    FOLLOWUP_FLAGS_TOTAL,
+    track_tool,
+)
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import follow_up_flags as follow_up_flags_repo
 from usan_api.repositories import medications as medications_repo
 from usan_api.repositories import metrics as metrics_repo
 from usan_api.repositories import transcripts as transcripts_repo
@@ -21,6 +26,8 @@ from usan_api.repositories import wellness as wellness_repo
 from usan_api.schemas.tools import (
     CallEndedResponse,
     EndCallRequest,
+    FlagForFollowupRequest,
+    FollowupFlaggedResponse,
     GetTodayMedsRequest,
     LoggedResponse,
     LogMedicationRequest,
@@ -73,6 +80,32 @@ async def log_wellness(
     await db.commit()
     logger.bind(call_id=str(call.id)).info("Logged wellness")
     return LoggedResponse(id=row.id)
+
+
+@router.post("/flag_for_followup", response_model=FollowupFlaggedResponse)
+@track_tool("flag_for_followup")
+async def flag_for_followup(
+    body: FlagForFollowupRequest,
+    db: AsyncSession = Depends(get_db),
+    claims: dict[str, Any] = Depends(require_service_token),
+) -> FollowupFlaggedResponse:
+    call = await _authorize_call(body.call_id, claims, db)
+    elder_id = _require_elder(call)
+    row = await follow_up_flags_repo.create_follow_up_flag(
+        db,
+        call_id=call.id,
+        elder_id=elder_id,
+        severity=body.severity,
+        category=body.category,
+        reason=body.reason,
+    )
+    await db.commit()
+    # Increment AFTER commit so a crash can't double-count. Labels are bounded
+    # enums only — never body.reason (free-text PHI).
+    FOLLOWUP_FLAGS_TOTAL.labels(severity=body.severity, category=body.category).inc()
+    # Don't log body.reason: it can carry clinical content; it's persisted to the DB.
+    logger.bind(call_id=str(call.id)).info("Flagged for follow-up")
+    return FollowupFlaggedResponse(id=row.id)
 
 
 @router.post("/log_medication", response_model=LoggedResponse)

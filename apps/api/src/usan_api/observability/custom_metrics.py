@@ -42,6 +42,14 @@ TOOL_CALLS_TOTAL = Counter(
     labelnames=("tool", "outcome"),
 )
 
+# severity: routine|urgent ; category: the bounded FlagForFollowupRequest enum
+# (medical, emotional, medication, safety, other). NEVER the free-text reason (PHI).
+FOLLOWUP_FLAGS_TOTAL = Counter(
+    "usan_followup_flags",
+    "Follow-up flags created.",
+    labelnames=("severity", "category"),
+)
+
 
 def track_tool(tool: str) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
     """Decorate a tool route handler to record usan_tool_calls_total{tool,outcome}.

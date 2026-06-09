@@ -356,3 +356,79 @@ def test_log_transcript_empty_segments_422(client, mock_dispatch):
         headers=_auth(call_id),
     )
     assert r.status_code == 422
+
+
+def test_flag_for_followup_ok(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={
+            "call_id": call_id,
+            "severity": "urgent",
+            "category": "medical",
+            "reason": "reported chest pain",
+        },
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    assert isinstance(r.json()["id"], int)
+
+
+def test_flag_for_followup_requires_token(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={"call_id": call_id, "severity": "routine", "category": "other", "reason": "x"},
+    )
+    assert r.status_code == 401
+
+
+def test_flag_for_followup_call_id_mismatch_403(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    wrong = str(uuid.uuid4())
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={"call_id": call_id, "severity": "routine", "category": "other", "reason": "x"},
+        headers=_auth(wrong),
+    )
+    assert r.status_code == 403
+
+
+def test_flag_for_followup_unknown_call_404(client, mock_dispatch):
+    cid = str(uuid.uuid4())
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={"call_id": cid, "severity": "routine", "category": "other", "reason": "x"},
+        headers=_auth(cid),
+    )
+    assert r.status_code == 404
+
+
+def test_flag_for_followup_bad_enum_422(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={"call_id": call_id, "severity": "panic", "category": "medical", "reason": "x"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 422
+
+
+def test_flag_for_followup_increments_metric(client, mock_dispatch):
+    from usan_api.observability.custom_metrics import FOLLOWUP_FLAGS_TOTAL
+
+    before = FOLLOWUP_FLAGS_TOTAL.labels(severity="urgent", category="safety")._value.get()
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={"call_id": call_id, "severity": "urgent", "category": "safety", "reason": "fell"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    after = FOLLOWUP_FLAGS_TOTAL.labels(severity="urgent", category="safety")._value.get()
+    assert after == before + 1
