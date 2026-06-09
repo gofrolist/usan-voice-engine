@@ -201,6 +201,7 @@ services:
       TELNYX_MESSAGING_PROFILE_ID: ${TELNYX_MESSAGING_PROFILE_ID:-}
       TELNYX_FROM_NUMBER: ${TELNYX_FROM_NUMBER:-}
       TELNYX_MESSAGING_API_URL: ${TELNYX_MESSAGING_API_URL:-https://api.telnyx.com/v2}
+      TELNYX_MESSAGING_TIMEOUT_S: ${TELNYX_MESSAGING_TIMEOUT_S:-10}
       # Admin UI / Google SSO (Plan admin-3 code; admin-5 wires it through here so
       # the settings actually reach the container). All optional — SSO is off until
       # the client id + secret + redirect are all set; SESSION_COOKIE_SECURE defaults
