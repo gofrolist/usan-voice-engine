@@ -22,6 +22,11 @@ class VariableSpec(BaseModel):
     description: str
     default: str  # "" when there is no default
     example: str
+    # phi=True marks protected health information. The admin-ui uses this flag to
+    # render a non-blocking warning when a PHI variable appears in a sensitive prompt
+    # field (e.g. greeting, voicemail_message) that may be spoken before the caller's
+    # identity is confirmed or to an answering machine.
+    phi: bool = False
 
 
 # The 10 built-in variables, in catalog/display order (design §3.1). Keep this
@@ -68,6 +73,7 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
         description="Summary of the elder's most recent wellness check-in.",
         default="",
         example="on 2026-06-05, mood 4/5, pain 2/10",
+        phi=True,
     ),
     VariableSpec(
         name="last_check_in_line",
@@ -75,6 +81,7 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
         description="A ready-made sentence about the last check-in, or empty if none.",
         default="",
         example="For context, their last check-in was on 2026-06-05, mood 4/5.",
+        phi=True,
     ),
     VariableSpec(
         name="last_mood",
@@ -82,6 +89,7 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
         description="The elder's most recent mood rating (1-5).",
         default="",
         example="4",
+        phi=True,
     ),
     VariableSpec(
         name="last_pain",
@@ -89,6 +97,7 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
         description="The elder's most recent pain level (0-10).",
         default="",
         example="2",
+        phi=True,
     ),
     VariableSpec(
         name="today_meds",
@@ -96,6 +105,7 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
         description="Comma-separated names of the elder's medications scheduled today.",
         default="",
         example="Lisinopril, Metformin",
+        phi=True,
     ),
 )
 

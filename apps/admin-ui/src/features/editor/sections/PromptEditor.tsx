@@ -4,6 +4,7 @@ import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { Textarea } from "../../../components/ui/textarea";
 import { matchPromptTokens } from "./promptTokens";
 import { unknownTokenNames } from "./unknownTokens";
+import { phiTokenNames, SENSITIVE_PROMPT_FIELDS } from "./phiTokens";
 import { VariablePalette } from "./VariablePalette";
 import type { VariableSpec } from "../../../config/variableCatalog";
 
@@ -19,6 +20,9 @@ const MonacoEditor = lazy(async () => {
 
 interface PromptEditorProps {
   id: string;
+  // The prompt field key (e.g. "greeting"). When supplied alongside phiNames, the
+  // editor renders a non-blocking PHI warning for sensitive fields.
+  fieldKey?: string;
   value: string;
   onChange: (value: string) => void;
   rows?: number;
@@ -26,6 +30,9 @@ interface PromptEditorProps {
   // Optional so existing callers (and the Fallback) keep compiling before Task 3.6.
   variables?: VariableSpec[];
   knownNames?: ReadonlySet<string>;
+  // Set of variable names flagged phi=true in the catalog. When provided together
+  // with fieldKey, drives the non-blocking PHI notice for sensitive fields.
+  phiNames?: ReadonlySet<string>;
 }
 
 type EditorInstance = Parameters<OnMount>[0];
@@ -61,13 +68,17 @@ function isUnknown(tokenText: string, known: ReadonlySet<string>): boolean {
 const EMPTY_KNOWN: ReadonlySet<string> = new Set<string>();
 
 export function PromptEditor(props: PromptEditorProps) {
-  const { value, onChange, rows = 6, variables, knownNames } = props;
+  const { value, onChange, rows = 6, variables, knownNames, fieldKey, phiNames } = props;
   const editorRef = useRef<EditorInstance | null>(null);
   const monacoRef = useRef<MonacoInstance | null>(null);
   const collectionRef = useRef<DecorationsCollection | null>(null);
 
   const known = knownNames ?? EMPTY_KNOWN;
   const unknown = unknownTokenNames(value, known);
+
+  const isSensitive = fieldKey !== undefined && SENSITIVE_PROMPT_FIELDS.has(fieldKey);
+  const phiWarnings =
+    isSensitive && phiNames !== undefined ? phiTokenNames(value, phiNames) : [];
 
   // Tint {{variable}} tokens so migrated Retell prompts read well. Known tokens get the
   // indigo .prompt-var-token; tokens whose name is not in the catalog get the amber
@@ -145,6 +156,13 @@ export function PromptEditor(props: PromptEditorProps) {
         <p className="text-xs font-medium text-amber-700">
           unknown variable: {unknown.join(", ")} — will resolve to empty unless declared as a
           custom variable.
+        </p>
+      ) : null}
+      {phiWarnings.length > 0 ? (
+        <p className="text-xs font-medium text-amber-700">
+          ⚠ {phiWarnings.map((n) => `{{${n}}}`).join(", ")} reveals health information and may be
+          spoken before the caller&apos;s identity is confirmed (or to voicemail). Avoid health
+          variables in this field.
         </p>
       ) : null}
     </div>

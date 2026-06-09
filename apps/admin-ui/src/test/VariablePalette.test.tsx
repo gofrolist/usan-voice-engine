@@ -12,6 +12,7 @@ const VARS: VariableSpec[] = [
     description: "The elder's first name.",
     default: "there",
     example: "Margaret",
+    phi: false,
   },
   {
     name: "promo_code",
@@ -19,6 +20,7 @@ const VARS: VariableSpec[] = [
     description: "Operator-supplied promo code.",
     default: "",
     example: "SPRING",
+    phi: false,
   },
 ];
 

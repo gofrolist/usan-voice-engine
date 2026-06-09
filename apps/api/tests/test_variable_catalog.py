@@ -58,3 +58,24 @@ def test_builtin_names_is_frozenset_of_all_ten():
 
 def test_builtin_defaults_cover_every_name():
     assert set(BUILTIN_DEFAULTS) == BUILTIN_NAMES
+
+
+# --- PHI flag tests ---
+
+PHI_NAMES = {"last_check_in", "last_check_in_line", "last_mood", "last_pain", "today_meds"}
+
+
+def test_phi_true_variables_are_exactly_the_health_data_set():
+    actual_phi = {v.name for v in BUILTIN_VARIABLES if v.phi}
+    assert actual_phi == PHI_NAMES
+
+
+def test_non_phi_builtins_have_phi_false():
+    for v in BUILTIN_VARIABLES:
+        if v.name not in PHI_NAMES:
+            assert v.phi is False, f"{v.name} should have phi=False"
+
+
+def test_every_builtin_has_phi_field():
+    for v in BUILTIN_VARIABLES:
+        assert isinstance(v.phi, bool), f"{v.name}.phi must be bool"

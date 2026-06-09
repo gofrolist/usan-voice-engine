@@ -33,6 +33,7 @@ export function PromptsSection({ form }: { form: UseFormReturn<AgentConfigForm> 
   // known set is empty (no false warnings).
   const { data: variables } = useVariableCatalog();
   const knownNames = new Set((variables ?? []).map((v) => v.name));
+  const phiNames = new Set((variables ?? []).filter((v) => v.phi).map((v) => v.name));
 
   return (
     <div className="space-y-5">
@@ -48,11 +49,13 @@ export function PromptsSection({ form }: { form: UseFormReturn<AgentConfigForm> 
               render={({ field }) => (
                 <PromptEditor
                   id={path}
+                  fieldKey={key}
                   value={field.value}
                   onChange={field.onChange}
                   rows={rowsFor(key)}
                   variables={variables ?? []}
                   knownNames={knownNames}
+                  phiNames={phiNames}
                 />
               )}
             />

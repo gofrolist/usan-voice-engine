@@ -13,8 +13,19 @@ const VARS: VariableSpec[] = [
     description: "The elder's first name.",
     default: "there",
     example: "Margaret",
+    phi: false,
+  },
+  {
+    name: "today_meds",
+    tier: "builtin",
+    description: "Medications scheduled today.",
+    default: "",
+    example: "Lisinopril",
+    phi: true,
   },
 ];
+
+const PHI_NAMES: ReadonlySet<string> = new Set(["today_meds"]);
 
 function Harness() {
   const [value, setValue] = useState("Hello ");
@@ -31,6 +42,72 @@ function Harness() {
     </>
   );
 }
+
+describe("PromptEditor PHI warnings", () => {
+  it("(a) shows PHI warning for a PHI var in a sensitive field", () => {
+    render(
+      <PromptEditor
+        id="prompts.voicemail_message"
+        fieldKey="voicemail_message"
+        value="Your meds today: {{today_meds}}"
+        onChange={() => {}}
+        variables={VARS}
+        knownNames={new Set(["first_name", "today_meds"])}
+        phiNames={PHI_NAMES}
+      />,
+    );
+    expect(screen.getByText(/today_meds.*health information/i)).toBeInTheDocument();
+  });
+
+  it("(b) does NOT show PHI warning for a non-PHI var in a sensitive field", () => {
+    render(
+      <PromptEditor
+        id="prompts.voicemail_message"
+        fieldKey="voicemail_message"
+        value="Hello {{first_name}}"
+        onChange={() => {}}
+        variables={VARS}
+        knownNames={new Set(["first_name", "today_meds"])}
+        phiNames={PHI_NAMES}
+      />,
+    );
+    expect(screen.queryByText(/health information/i)).not.toBeInTheDocument();
+  });
+
+  it("(c) does NOT show PHI warning for a PHI var in a non-sensitive field", () => {
+    render(
+      <PromptEditor
+        id="prompts.system_prompt"
+        fieldKey="system_prompt"
+        value="Meds: {{today_meds}}"
+        onChange={() => {}}
+        variables={VARS}
+        knownNames={new Set(["first_name", "today_meds"])}
+        phiNames={PHI_NAMES}
+      />,
+    );
+    expect(screen.queryByText(/health information/i)).not.toBeInTheDocument();
+  });
+
+  it("(d) PHI warning is non-blocking — component renders without error", () => {
+    // A warning must never throw or prevent rendering (saving remains possible).
+    const { container } = render(
+      <PromptEditor
+        id="prompts.greeting"
+        fieldKey="greeting"
+        value="{{today_meds}}"
+        onChange={() => {}}
+        variables={VARS}
+        knownNames={new Set(["first_name", "today_meds"])}
+        phiNames={PHI_NAMES}
+      />,
+    );
+    expect(container).toBeTruthy();
+    expect(screen.getByText(/health information/i)).toBeInTheDocument();
+    // No Zod error text — purely informational notice.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
 
 describe("PromptEditor variable palette", () => {
   it("renders the insert-variable button alongside the editor", () => {

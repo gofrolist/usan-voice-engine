@@ -10,6 +10,10 @@ export interface VariableSpec {
   description: string;
   default: string;
   example: string;
+  // phi=true marks protected health information. The editor uses this to render a
+  // non-blocking warning when a PHI variable appears in a sensitive prompt field
+  // (spoken before identity is confirmed, or to voicemail).
+  phi: boolean;
 }
 
 interface VariableCatalogResponse {
