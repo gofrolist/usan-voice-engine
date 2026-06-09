@@ -48,21 +48,24 @@ async def mark_sent(
 ) -> SmsMessage | None:
     """Status-guarded pending->sent. Returns the row, or None if it was not pending
     (idempotent: a second flush claims nothing)."""
+    now = _utcnow()
     result = await db.execute(
         update(SmsMessage)
         .where(SmsMessage.id == sms_id, SmsMessage.status == "pending")
         .values(
             status="sent",
             telnyx_message_id=telnyx_message_id,
-            sent_at=_utcnow(),
-            updated_at=_utcnow(),
+            sent_at=now,
+            updated_at=now,
         )
         .returning(SmsMessage.id)
     )
     if result.scalar_one_or_none() is None:
         return None
     await db.flush()
-    return await db.get(SmsMessage, sms_id)
+    row = await db.get(SmsMessage, sms_id)
+    await db.refresh(row)
+    return row
 
 
 async def mark_failed(
@@ -78,7 +81,9 @@ async def mark_failed(
     if result.scalar_one_or_none() is None:
         return None
     await db.flush()
-    return await db.get(SmsMessage, sms_id)
+    row = await db.get(SmsMessage, sms_id)
+    await db.refresh(row)
+    return row
 
 
 async def list_messages(
