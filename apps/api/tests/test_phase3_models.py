@@ -18,7 +18,11 @@ def test_follow_up_flag_columns_and_table():
         "status",
         "created_at",
     } <= set(cols.keys())
-    assert cols["call_id"].foreign_keys.pop().ondelete == "CASCADE"
+    # Read FK rules without mutating the shared Table metadata (no .pop()).
+    assert next(iter(cols["call_id"].foreign_keys)).ondelete == "CASCADE"
+    # elder_id deliberately has NO cascade: a flag's clinical context must outlive
+    # an elder row removal (load-bearing design, mirrored in the model comment).
+    assert next(iter(cols["elder_id"].foreign_keys)).ondelete is None
     assert not cols["severity"].nullable
     assert not cols["status"].nullable
 
@@ -36,6 +40,9 @@ def test_callback_request_columns_and_table():
         "status",
         "created_at",
     } <= set(cols.keys())
+    # Same asymmetric FK design as follow_up_flags: call_id cascades, elder_id does not.
+    assert next(iter(cols["call_id"].foreign_keys)).ondelete == "CASCADE"
+    assert next(iter(cols["elder_id"].foreign_keys)).ondelete is None
     assert not cols["requested_time_text"].nullable
     assert cols["requested_at"].nullable
 
