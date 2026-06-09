@@ -168,18 +168,29 @@ async def test_do_end_call_hangs_up_even_if_report_fails(monkeypatch):
     job_ctx.shutdown.assert_called_once()
 
 
-def test_build_check_in_agent_attaches_four_tools():
+def test_build_check_in_agent_attaches_registry_tools():
     agent = check_in.build_check_in_agent()
-    # livekit-agents 1.5.14: FunctionTool has no .name; use .id (== function name)
-    names = {t.id for t in agent.tools}
-    assert names == {"log_wellness", "log_medication", "get_today_meds", "end_call"}
+    # Registry-driven so it survives Parts B/C/D growing _TOOL_REGISTRY: the default
+    # config enables all 7 catalog tools, but only those present in the registry are
+    # attachable, and send_sms is excluded without templates; end_call is always on.
+    # livekit-agents 1.5.14: FunctionTool has no .name; use .id (== function name).
+    expected = {
+        n
+        for n in DEFAULT_AGENT_CONFIG.tools.enabled
+        if n in check_in._TOOL_REGISTRY and n != "send_sms"
+    } | {"end_call"}
+    assert {t.id for t in agent.tools} == expected
     assert agent.instructions == check_in.CHECK_IN_INSTRUCTIONS
 
 
-def test_build_inbound_agent_has_same_four_tools():
+def test_build_inbound_agent_attaches_same_registry_tools():
     agent = check_in.build_inbound_agent(None, resolved_vars={"elder_name": "Ada"}, now=_NOW)
-    names = {t.id for t in agent.tools}
-    assert names == {"log_wellness", "log_medication", "get_today_meds", "end_call"}
+    expected = {
+        n
+        for n in DEFAULT_AGENT_CONFIG.tools.enabled
+        if n in check_in._TOOL_REGISTRY and n != "send_sms"
+    } | {"end_call"}
+    assert {t.id for t in agent.tools} == expected
     assert "Ada" in agent.instructions
 
 
