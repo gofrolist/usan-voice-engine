@@ -22,3 +22,46 @@ def test_followup_flag_summary_from_attributes():
     assert s.severity == "urgent"
     assert s.reason == "chest pain"  # admin read exposes PHI reason (audited)
     assert s.status == "open"
+
+
+def test_callback_request_summary_from_attributes():
+    from usan_api.schemas.admin_tools import CallbackRequestSummary
+
+    class _Row:
+        id = 7
+        call_id = uuid.uuid4()
+        elder_id = uuid.uuid4()
+        requested_time_text = "tomorrow afternoon"
+        requested_at = datetime(2026, 6, 10, 15, 0, tzinfo=UTC)
+        notes = "prefers afternoons"
+        status = "open"
+        created_at = datetime(2026, 6, 9, 12, 0, tzinfo=UTC)
+
+    row = _Row()
+    summary = CallbackRequestSummary.model_validate(row)
+    assert summary.id == 7
+    assert summary.call_id == row.call_id
+    assert summary.elder_id == row.elder_id
+    assert summary.requested_time_text == "tomorrow afternoon"
+    assert summary.requested_at == row.requested_at
+    assert summary.notes == "prefers afternoons"
+    assert summary.status == "open"
+    assert summary.created_at == row.created_at
+
+
+def test_callback_request_summary_allows_null_requested_at_and_notes():
+    from usan_api.schemas.admin_tools import CallbackRequestSummary
+
+    class _Row:
+        id = 8
+        call_id = uuid.uuid4()
+        elder_id = uuid.uuid4()
+        requested_time_text = "soon"
+        requested_at = None
+        notes = None
+        status = "open"
+        created_at = datetime(2026, 6, 9, 12, 0, tzinfo=UTC)
+
+    summary = CallbackRequestSummary.model_validate(_Row())
+    assert summary.requested_at is None
+    assert summary.notes is None

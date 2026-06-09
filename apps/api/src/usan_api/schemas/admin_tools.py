@@ -22,3 +22,16 @@ class FollowupFlagSummary(BaseModel):
     reason: str | None
     status: str
     created_at: datetime
+
+
+class CallbackRequestSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    call_id: uuid.UUID
+    elder_id: uuid.UUID
+    requested_time_text: str
+    requested_at: datetime | None
+    notes: str | None
+    status: str
+    created_at: datetime
