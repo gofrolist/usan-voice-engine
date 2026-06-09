@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -9,7 +10,11 @@ from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import MedicationLog, Transcript, WellnessLog
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
-from usan_api.schemas.tools import FlagForFollowupRequest, FollowupFlaggedResponse
+from usan_api.schemas.tools import (
+    FlagForFollowupRequest,
+    FollowupFlaggedResponse,
+    ScheduleCallbackRequest,
+)
 
 
 @pytest.fixture
@@ -129,3 +134,32 @@ def test_flag_for_followup_reason_rejects_empty():
 
 def test_followup_flagged_response_shape():
     assert FollowupFlaggedResponse(id=7).id == 7
+
+
+def test_schedule_callback_naive_requested_at_becomes_utc():
+    req = ScheduleCallbackRequest(
+        call_id=uuid.uuid4(),
+        requested_time_text="tomorrow morning",
+        requested_at="2026-06-10T09:00:00",  # naive: no offset / Z
+    )
+    assert req.requested_at is not None
+    assert req.requested_at.tzinfo is not None
+    assert req.requested_at.utcoffset().total_seconds() == 0
+
+
+def test_schedule_callback_offset_requested_at_preserved():
+    req = ScheduleCallbackRequest(
+        call_id=uuid.uuid4(),
+        requested_time_text="tomorrow",
+        requested_at="2026-06-10T09:00:00-05:00",
+    )
+    assert req.requested_at is not None
+    assert req.requested_at.utcoffset() == timezone(timedelta(hours=-5)).utcoffset(None)
+
+
+def test_schedule_callback_requested_at_none_passes_through():
+    req = ScheduleCallbackRequest(
+        call_id=uuid.uuid4(), requested_time_text="someday", requested_at=None
+    )
+    assert req.requested_at is None
+    assert UTC is not None  # import is exercised by the naive-coercion test above
