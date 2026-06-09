@@ -515,7 +515,7 @@ def test_enqueue_config_error_does_not_schedule_retry(client, monkeypatch, async
     assert _count_children(async_database_url, call_id) == 0  # misconfig is permanent
 
 
-def test_enqueue_call_resolves_builtins_into_dispatch_metadata(client, monkeypatch):
+def test_enqueue_call_resolves_builtins_and_passes_to_dispatch_agent(client, monkeypatch):
 
     captured = {}
 

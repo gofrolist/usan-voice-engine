@@ -509,3 +509,35 @@ async def test_dispatch_agent_metadata_defaults_when_no_builtins(monkeypatch):
     meta = json.loads(fake.agent_dispatch.create_dispatch.await_args.args[0].metadata)
     assert meta["resolved_vars"] == {}
     assert meta["timezone"] == ""
+
+
+@pytest.mark.asyncio
+async def test_dispatch_and_dial_retry_carries_resolved_vars_in_metadata(
+    monkeypatch, session_factory
+):
+    """dispatch_and_dial (the retry path) must resolve built-ins and forward them to
+    dispatch_agent — not call dispatch_agent with empty resolved_vars/timezone."""
+    import json
+
+    fake = _fake_api()
+    fake.sip.create_sip_participant.return_value = type("R", (), {"sip_call_id": "SCL_R"})()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    call_id, _ = await _seed(session_factory, room="usan-retry-meta")
+
+    # Enrich the elder with a timezone so the resolved tz is non-empty.
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+        elder = await elders_repo.get_elder(db, call.elder_id)
+        elder.name = "Margaret Retry"
+        elder.timezone = "US/Central"
+        await db.commit()
+
+    await livekit_dispatch.dispatch_and_dial(call_id, _settings())
+
+    req = fake.agent_dispatch.create_dispatch.await_args.args[0]
+    meta = json.loads(req.metadata)
+    assert meta["timezone"] == "US/Central"
+    assert meta["resolved_vars"]["first_name"] == "Margaret"
+    assert meta["resolved_vars"]["call_direction"] == "outbound"
