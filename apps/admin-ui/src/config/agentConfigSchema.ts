@@ -3,8 +3,21 @@ import { z } from "zod";
 // Mirrors apps/api/src/usan_api/schemas/agent_config.py. The server is the source
 // of truth; this gives instant client-side feedback with identical rules.
 
-// Tool names the agent can register (TOOL_NAMES).
-export const TOOL_NAMES = ["log_wellness", "log_medication", "get_today_meds", "end_call"] as const;
+// Closed set of tool names the config may enable. Mirrors the backend catalog
+// (apps/api/.../schemas/tool_catalog.py TOOL_CATALOG, in display order). The server
+// hard-blocks names outside this set, so the zod enum below must stay in sync or a
+// config that passes backend validation would fail client-side. The runtime source
+// of truth for rendering is useToolCatalog (toolCatalog.ts); this static list exists
+// only to give the form's zod validator identical accept/reject rules.
+export const TOOL_NAMES = [
+  "log_wellness",
+  "log_medication",
+  "get_today_meds",
+  "flag_for_followup",
+  "schedule_callback",
+  "send_sms",
+  "end_call",
+] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
 // Personalization slots allowed in the inbound template (ALLOWED_TEMPLATE_SLOTS).

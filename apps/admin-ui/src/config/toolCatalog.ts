@@ -9,7 +9,8 @@ export interface ToolSpec {
   name: string;
   label: string;
   description: string;
-  category: string; // "logging" | "lifecycle" | "safety" | "messaging"
+  // Closed set mirroring the backend Literal (tool_catalog.py ToolSpec.category).
+  category: "logging" | "lifecycle" | "safety" | "messaging";
   // end_call is locked on (rendered, cannot be disabled).
   always_on: boolean;
   // send_sms needs >=1 template before the agent offers it.

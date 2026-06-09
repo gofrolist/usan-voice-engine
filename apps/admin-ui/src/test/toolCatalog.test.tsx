@@ -50,4 +50,12 @@ describe("useToolCatalog", () => {
     expect(getMock).toHaveBeenCalledWith("/v1/admin/tool-catalog");
     expect(result.current.data).toEqual(SAMPLE);
   });
+
+  it("surfaces the error state and leaves data undefined when the fetch fails", async () => {
+    getMock.mockRejectedValue(new Error("boom"));
+    const { result } = renderHook(() => useToolCatalog(), { wrapper: wrapper() });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.data).toBeUndefined();
+  });
 });

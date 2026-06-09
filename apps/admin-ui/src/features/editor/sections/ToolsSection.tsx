@@ -1,18 +1,25 @@
 import { Controller, type UseFormReturn } from "react-hook-form";
-import type { AgentConfigForm } from "../../../config/agentConfigSchema";
-import { TOOL_NAMES, type ToolName } from "../../../config/agentConfigSchema";
-
-const TOOL_HELP: Record<ToolName, string> = {
-  log_wellness: "Record the elder's wellness response.",
-  log_medication: "Log a medication as taken / not taken.",
-  get_today_meds: "Read back today's medication schedule.",
-  end_call: "Let the agent end the call when the check-in is complete.",
-};
+import type { AgentConfigForm, ToolName } from "../../../config/agentConfigSchema";
+import { TOOL_NAMES } from "../../../config/agentConfigSchema";
+import { useToolCatalog, type ToolSpec } from "../../../config/toolCatalog";
 
 // Retell-style "Functions" list: each enabled tool is a function the agent can call
-// mid-call. The set is fixed in Phase 1 (the registry is data-driven in a later phase).
+// mid-call. The catalog (useToolCatalog) is the runtime source of truth for what
+// renders; TOOL_NAMES is the canonical order used to rebuild the enabled[] array so
+// diffs stay stable. The catalog degrades gracefully: while loading or on error
+// `data` is undefined, so no rows render (the form value is left untouched).
 export function ToolsSection({ form }: { form: UseFormReturn<AgentConfigForm> }) {
   const error = form.formState.errors.tools?.enabled?.message;
+  const { data: catalog } = useToolCatalog();
+  // Pair each known ToolName with its catalog spec, in canonical TOOL_NAMES order and
+  // restricted to names the catalog actually returned. Carrying the ToolName keeps the
+  // toggle type-safe (enabled[] is ToolName[]); the spec drives the rendered labels.
+  const byName = new Map<string, ToolSpec>(catalog?.map((t) => [t.name, t]) ?? []);
+  const tools = TOOL_NAMES.flatMap((name) => {
+    const spec = byName.get(name);
+    return spec ? [{ name, spec }] : [];
+  });
+
   return (
     <div className="space-y-3">
       <p className="text-sm text-slate-500">Functions the agent can call during a call.</p>
@@ -30,21 +37,23 @@ export function ToolsSection({ form }: { form: UseFormReturn<AgentConfigForm> })
           }
           return (
             <ul className="space-y-2">
-              {TOOL_NAMES.map((tool) => (
+              {tools.map(({ name, spec }) => (
                 <li
-                  key={tool}
+                  key={name}
                   className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-card"
                 >
-                  <label htmlFor={`tool-${tool}`} className="min-w-0">
-                    <span className="font-mono text-sm text-slate-900">{tool}</span>
-                    <span className="mt-0.5 block text-xs text-slate-500">{TOOL_HELP[tool]}</span>
+                  <label htmlFor={`tool-${name}`} className="min-w-0">
+                    <span className="font-mono text-sm text-slate-900">{name}</span>
+                    <span className="mt-0.5 block text-xs text-slate-500">{spec.description}</span>
                   </label>
                   <input
-                    id={`tool-${tool}`}
+                    id={`tool-${name}`}
                     type="checkbox"
                     className="mt-1 h-4 w-4 accent-indigo-600"
-                    checked={enabled.has(tool)}
-                    onChange={(e) => toggle(tool, e.target.checked)}
+                    checked={enabled.has(name)}
+                    // always_on tools (end_call) are locked on and cannot be toggled off.
+                    disabled={spec.always_on}
+                    onChange={(e) => toggle(name, e.target.checked)}
                   />
                 </li>
               ))}
