@@ -35,3 +35,13 @@ describe("fieldMeta prompt help text", () => {
     }
   });
 });
+
+describe("fieldMeta tools help text", () => {
+  it("does not hardcode the old four-tool list", () => {
+    const help = fieldMeta["tools.enabled"]!.help;
+    // The catalog is now the source of truth; help must not enumerate the old set.
+    expect(help).not.toContain("log_medication");
+    expect(help).not.toContain("get_today_meds");
+    expect(help.toLowerCase()).toContain("catalog");
+  });
+});

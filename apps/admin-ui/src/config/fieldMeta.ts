@@ -94,7 +94,7 @@ export const fieldMeta: Record<string, FieldMeta> = {
   // Tools
   "tools.enabled": {
     label: "Enabled tools",
-    help: "Subset of log_wellness, log_medication, get_today_meds, end_call.",
+    help: "Which tools the agent may call this profile. The available tools come from the server catalog; end_call is always on.",
   },
 
   // Voicemail detection
