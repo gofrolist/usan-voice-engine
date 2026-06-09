@@ -1,3 +1,14 @@
+"""Tool catalog API tests (Admin-UI Phase 3 design §4.1).
+
+Covers GET /v1/admin/tool-catalog: admin-session gating, the closed 7-tool inventory
+in catalog order, the per-entry contract shape (name/label/description/category plus
+the always_on/requires_config gating flags), and that the response set matches
+``TOOL_NAMES``. Mirrors test_variable_catalog_api.py.
+"""
+
+from usan_api.schemas.tool_catalog import TOOL_NAMES
+
+
 def test_tool_catalog_requires_admin_session(client):
     # Mirrors the admin plane: no session cookie -> 401.
     r = client.get("/v1/admin/tool-catalog")
@@ -39,7 +50,5 @@ def test_tool_catalog_each_entry_has_contract_shape(client, admin_session):
 
 
 def test_tool_catalog_response_matches_tool_names(client, admin_session):
-    from usan_api.schemas.tool_catalog import TOOL_NAMES
-
     tools = client.get("/v1/admin/tool-catalog").json()["tools"]
     assert {t["name"] for t in tools} == TOOL_NAMES

@@ -8,6 +8,13 @@ holds a hand-mirrored ``_TOOL_REGISTRY`` (services/agent/.../check_in.py); the
 admin-ui fetches the full list at runtime from GET /v1/admin/tool-catalog. The
 catalog is a GLOBAL constant, NOT a per-version snapshot, so it never participates
 in the agent_profile_versions forward-compat invariant.
+
+The catalog is the SUPERSET: a tool may appear here (so it validates and renders in
+the editor) before its agent-side ``@function_tool`` callable exists. The agent
+``_select_tools`` silently drops any enabled name that is not yet in its registry, so
+enabling such a tool saves successfully but is a no-op until the agent catches up.
+This is a deliberate rollout property -- the two sides converge per the design's
+catalog<->registry sync test once every tool's callable lands (Parts B/C/D).
 """
 
 from typing import Literal
@@ -21,7 +28,9 @@ class ToolSpec(BaseModel):
     name: str  # registry key, e.g. "flag_for_followup"
     label: str  # human label for the UI
     description: str  # what it does (shown in the editor)
-    category: Literal["logging", "lifecycle", "safety", "messaging"]
+    # "logging" writes call data; "query" reads it back; "lifecycle"/"safety"/
+    # "messaging" gate call termination, human escalation, and outbound SMS.
+    category: Literal["logging", "query", "lifecycle", "safety", "messaging"]
     # end_call is locked on (cannot be disabled): it drives the only graceful
     # report->goodbye->delete_room->shutdown path.
     always_on: bool = False
@@ -30,8 +39,9 @@ class ToolSpec(BaseModel):
     requires_config: bool = False
 
 
-# The 7 catalog tools, in catalog/display order (design §4.1). Keep this list and
-# the agent-side mirror (services/agent/.../check_in.py _TOOL_REGISTRY) in lockstep.
+# The 7 catalog tools, in catalog/display order (design §4.1). This is the superset;
+# the agent-side mirror (services/agent/.../check_in.py _TOOL_REGISTRY) catches up as
+# each tool's @function_tool callable lands (B/C/D) and may legitimately trail it.
 TOOL_CATALOG: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="log_wellness",
@@ -49,7 +59,7 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
         name="get_today_meds",
         label="Get today's medications",
         description="Read back the medications the elder is scheduled to take today.",
-        category="logging",
+        category="query",
     ),
     ToolSpec(
         name="flag_for_followup",
@@ -85,4 +95,7 @@ TOOL_NAMES: frozenset[str] = frozenset(t.name for t in TOOL_CATALOG)
 
 
 class ToolCatalogResponse(BaseModel):
+    # Lives in the schema module (not inline in admin_tool_catalog.py the way
+    # admin_variable_catalog.VariableCatalogResponse does) because it is part of this
+    # module's unit-tested A1 contract (test_tool_catalog.test_catalog_response_*).
     tools: list[ToolSpec]

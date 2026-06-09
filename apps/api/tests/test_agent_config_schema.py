@@ -88,6 +88,15 @@ def test_tools_rejects_unknown_tool():
         ToolsConfig(enabled=["log_wellness", "launch_missiles"])
 
 
+def test_tools_accepts_three_new_catalog_tools():
+    # flag_for_followup / schedule_callback / send_sms are valid catalog names, so
+    # ToolsConfig accepts and round-trips them. NOTE: the agent's _TOOL_REGISTRY does
+    # not yet hold their callables, so enabling them saves but is a no-op agent-side
+    # until Parts B/C/D land (documents the intended rollout gap, not a bug here).
+    names = ["flag_for_followup", "schedule_callback", "send_sms"]
+    assert ToolsConfig(enabled=names).enabled == names
+
+
 def test_personalization_template_rejects_stray_brace():
     bad = DEFAULT_AGENT_CONFIG.prompts.model_dump()
     bad["inbound_personalization_template"] = "{elder_name} and {"
