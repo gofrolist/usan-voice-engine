@@ -105,6 +105,24 @@ class Settings(BaseSettings):
     )
     pricing_version: str = Field(default="2026-06-05", alias="PRICING_VERSION")
 
+    # --- Telnyx Messaging (Phase 3 send_sms; design §6.6). Feature flag default
+    # FALSE: SMS never fires until a deploy explicitly enables it. The 3 secret/
+    # profile/from fields are blank-able (compose passes "" when unset).
+    telnyx_messaging_api_key: SecretStr | None = Field(
+        default=None, alias="TELNYX_MESSAGING_API_KEY"
+    )
+    telnyx_messaging_profile_id: str | None = Field(
+        default=None, alias="TELNYX_MESSAGING_PROFILE_ID"
+    )
+    telnyx_from_number: str | None = Field(default=None, alias="TELNYX_FROM_NUMBER")
+    telnyx_messaging_enabled: bool = Field(default=False, alias="TELNYX_MESSAGING_ENABLED")
+    telnyx_messaging_api_url: str = Field(
+        default="https://api.telnyx.com/v2", alias="TELNYX_MESSAGING_API_URL"
+    )
+    telnyx_messaging_timeout_s: int = Field(
+        default=10, ge=1, le=60, alias="TELNYX_MESSAGING_TIMEOUT_S"
+    )
+
     @field_validator(
         "telnyx_caller_id",
         "telnyx_sip_username",
@@ -117,6 +135,9 @@ class Settings(BaseSettings):
         # this, the empty string fails int|None coercion and crashes startup.
         # Blank => None => retention disabled, matching the documented default.
         "phi_retention_days",
+        "telnyx_messaging_api_key",
+        "telnyx_messaging_profile_id",
+        "telnyx_from_number",
         mode="before",
     )
     @classmethod
