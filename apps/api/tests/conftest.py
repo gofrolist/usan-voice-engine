@@ -58,7 +58,8 @@ async def _truncate_and_dispose(engine: AsyncEngine) -> None:
             await conn.execute(
                 text(
                     "TRUNCATE agent_profile_versions, agent_profiles, admin_audit_log, "
-                    "admin_users, calls, dnc_list, elders RESTART IDENTITY CASCADE"
+                    "admin_users, follow_up_flags, calls, dnc_list, elders "
+                    "RESTART IDENTITY CASCADE"
                 )
             )
     finally:
