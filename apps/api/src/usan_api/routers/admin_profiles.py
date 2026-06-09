@@ -11,6 +11,7 @@ from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
 from usan_api.repositories.agent_profiles import CloneSourceNotFoundError, ProfileInUseError
+from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields, unknown_tokens
 from usan_api.schemas.agent_profile import (
     DraftUpdate,
     ProfileCreate,
@@ -105,6 +106,25 @@ async def update_draft(
     )
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
+    # Compute non-fatal unknown-{{var}} warnings across every prompt field so the
+    # editor can flag them (warn-don't-block, design §5.1). The save itself already
+    # succeeded — unknown tokens never fail validation.
+    prompts = body.config.prompts
+    seen: list[str] = []
+    for text in (
+        prompts.system_prompt,
+        prompts.greeting,
+        prompts.recording_disclosure,
+        prompts.voicemail_message,
+        prompts.checkin_flow_instructions,
+        prompts.goodbye_message,
+        prompts.inbound_opening,
+        prompts.inbound_personalization_template,
+    ):
+        for name in unknown_tokens(text):
+            if name not in seen:
+                seen.append(name)
+    warnings = seen + phi_tokens_in_sensitive_fields(prompts)
     await admin_audit.record(
         db,
         actor_email=actor,
@@ -114,7 +134,7 @@ async def update_draft(
     )
     await db.commit()
     await db.refresh(profile)
-    return ProfileDetail.from_model(profile)
+    return ProfileDetail.from_model(profile, warnings=warnings)
 
 
 @router.post(

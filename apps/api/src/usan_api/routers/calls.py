@@ -9,9 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import dialer, livekit_dispatch, object_storage
 from usan_api.auth import require_operator_token, require_service_token, require_worker_token
+from usan_api.builtin_vars import format_last_check_in as _format_last_check_in
+from usan_api.builtin_vars import resolve_builtin_vars
 from usan_api.client_ip import client_ip
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call, Elder, WellnessLog
+from usan_api.db.models import Call, Elder
 from usan_api.db.session import get_db
 from usan_api.phone import to_e164
 from usan_api.repositories import calls as calls_repo
@@ -29,19 +31,6 @@ from usan_api.schemas.call import (
 from usan_api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/v1/calls", tags=["calls"])
-
-
-def _format_last_check_in(log: WellnessLog) -> str:
-    """A short human summary of the elder's most recent wellness log."""
-    parts = [f"on {log.logged_at.date().isoformat()}"]
-    if log.mood is not None:
-        parts.append(f"mood {log.mood}/5")
-    if log.pain_level is not None:
-        parts.append(f"pain {log.pain_level}/10")
-    summary = ", ".join(parts)
-    if log.notes:
-        summary += f" — note: {log.notes}"
-    return summary
 
 
 def _idempotent_replay(existing: Call, body: CreateCallRequest, response: Response) -> CallResponse:
@@ -81,8 +70,12 @@ async def _create_and_dispatch(
             raise HTTPException(status_code=409, detail="idempotency_key conflict") from exc
         return _idempotent_replay(existing, body, response)
 
+    last = await wellness_repo.get_latest_for_elder(db, elder.id)
+    resolved_vars, timezone = resolve_builtin_vars(elder, last, direction="outbound")
     try:
-        await livekit_dispatch.dispatch_agent(call, settings=settings)
+        await livekit_dispatch.dispatch_agent(
+            call, settings=settings, resolved_vars=resolved_vars, timezone=timezone
+        )
     except livekit_dispatch.OutboundDispatchError as exc:
         await calls_repo.set_status(db, call.id, CallStatus.FAILED, error={"reason": str(exc)})
         await db.commit()
@@ -164,12 +157,17 @@ async def register_inbound_call(
     # ("+16692388604"), so the raw value would never match. See usan_api.phone.
     phone = to_e164(body.phone_e164)
     elder = await elders_repo.get_elder_by_phone(db, phone) if phone else None
+    # dynamic_vars stays the caller/operator-supplied dict (idempotency payload, §4.3);
+    # legacy single-brace slots remain for old inbound templates. Built-ins go into
+    # resolved_vars, NOT here.
     dynamic_vars: dict[str, Any] = {}
+    last = None
     if elder is not None:
         dynamic_vars["elder_name"] = elder.name
         last = await wellness_repo.get_latest_for_elder(db, elder.id)
         if last is not None:
             dynamic_vars["last_check_in"] = _format_last_check_in(last)
+    resolved_vars, timezone = resolve_builtin_vars(elder, last, direction="inbound")
     call = await calls_repo.create_inbound_call(
         db,
         elder_id=elder.id if elder is not None else None,
@@ -180,7 +178,11 @@ async def register_inbound_call(
     await db.commit()
     logger.bind(call_id=str(call.id), elder_known=elder is not None).info("Inbound call registered")
     return InboundCallResponse(
-        call_id=call.id, elder_known=elder is not None, dynamic_vars=dynamic_vars
+        call_id=call.id,
+        elder_known=elder is not None,
+        dynamic_vars=dynamic_vars,
+        resolved_vars=resolved_vars,
+        timezone=timezone,
     )
 
 

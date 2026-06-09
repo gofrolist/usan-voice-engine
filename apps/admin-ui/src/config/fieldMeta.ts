@@ -33,35 +33,35 @@ export const fieldMeta: Record<string, FieldMeta> = {
   // Prompts
   "prompts.system_prompt": {
     label: "System prompt",
-    help: "Base persona/instructions. Supports {{variables}}. Up to 24,000 chars.",
+    help: "Base persona/instructions. Supports {{variable}} tokens (use the insert-variable button); a missing value falls back to the variable's default. Up to 24,000 chars.",
   },
   "prompts.greeting": {
     label: "Greeting",
-    help: "First thing said on an outbound call. Max 1000 chars.",
+    help: "First thing said on an outbound call. Supports {{variable}} tokens (use the insert-variable button); a missing value falls back to its default. Max 1000 chars.",
   },
   "prompts.recording_disclosure": {
     label: "Recording disclosure",
-    help: "Recording notice read at call start. Max 1000 chars.",
+    help: "Recording notice read at call start. Supports {{variable}} tokens (insert-variable button); missing values fall back to defaults. Max 1000 chars.",
   },
   "prompts.voicemail_message": {
     label: "Voicemail message",
-    help: "Left when a voicemail is detected. Max 1000 chars.",
+    help: "Left when a voicemail is detected. Supports {{variable}} tokens (insert-variable button); missing values fall back to defaults. Max 1000 chars.",
   },
   "prompts.checkin_flow_instructions": {
     label: "Check-in flow instructions",
-    help: "Step-by-step check-in script. Supports {{variables}}. Up to 24,000 chars.",
+    help: "Step-by-step check-in script. Supports {{variable}} tokens (use the insert-variable button); a missing value falls back to the variable's default. Up to 24,000 chars.",
   },
   "prompts.goodbye_message": {
     label: "Goodbye message",
-    help: "Said before hangup. Max 1000 chars.",
+    help: "Said before hangup. Supports {{variable}} tokens (insert-variable button); missing values fall back to defaults. Max 1000 chars.",
   },
   "prompts.inbound_opening": {
     label: "Inbound opening",
-    help: "How to open an inbound (elder-initiated) call. Max 1000 chars.",
+    help: "How to open an inbound (elder-initiated) call. Supports {{variable}} tokens (insert-variable button); missing values fall back to defaults. Max 1000 chars.",
   },
   "prompts.inbound_personalization_template": {
     label: "Inbound personalization template",
-    help: "Allowed slots: {elder_name}, {last_check_in_line}. Max 6000 chars.",
+    help: "Supports {{variable}} tokens (use the insert-variable button); missing values fall back to defaults. Legacy single-brace slots {elder_name} and {last_check_in_line} still work. Max 6000 chars.",
   },
 
   // Voice

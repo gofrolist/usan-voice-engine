@@ -6,12 +6,14 @@ from google.protobuf.duration_pb2 import Duration
 from livekit import api
 from loguru import logger
 
+from usan_api.builtin_vars import resolve_builtin_vars
 from usan_api.db.base import CallStatus
 from usan_api.db.models import Call, Elder
 from usan_api.db.session import get_session_factory
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import wellness as wellness_repo
 from usan_api.settings import Settings
 from usan_api.sip_status import classify_dial_exception
 
@@ -132,18 +134,39 @@ async def resolve_outbound_trunk_id(settings: Settings) -> str:
         return created_id
 
 
-def _outbound_metadata(call: Call) -> str:
+def _outbound_metadata(
+    call: Call, *, resolved_vars: dict[str, str] | None, timezone: str | None
+) -> str:
+    # dynamic_vars stays the persisted operator/idempotency payload; the server-
+    # resolved built-ins + timezone ride alongside it out-of-band (design §4.3),
+    # matching the agent's CallMetadata parsing (resolved_vars, timezone).
+    # Both sentinels normalise to their empty counterparts here so the agent always
+    # receives consistent types regardless of which caller path produced the values.
     return json.dumps(
         {
             "call_id": str(call.id),
             "direction": "outbound",
             "dynamic_vars": call.dynamic_vars,
+            "resolved_vars": resolved_vars or {},
+            "timezone": timezone or "",
         }
     )
 
 
-async def dispatch_agent(call: Call, *, settings: Settings) -> None:
-    """Dispatch the named agent worker into the call's room (fast, synchronous)."""
+async def dispatch_agent(
+    call: Call,
+    *,
+    settings: Settings,
+    resolved_vars: dict[str, str] | None = None,
+    timezone: str | None = None,
+) -> None:
+    """Dispatch the named agent worker into the call's room (fast, synchronous).
+
+    ``resolved_vars``/``timezone`` carry the server-resolved built-ins to the agent
+    via the dispatch metadata without persisting them (contract C, §4.3). Both
+    default to ``None`` (normalised to empty in ``_outbound_metadata``) so callers
+    that don't resolve built-ins still work.
+    """
     if not outbound_configured(settings):
         raise OutboundDispatchError(
             "outbound calling not configured: set TELNYX_CALLER_ID plus Telnyx "
@@ -158,7 +181,7 @@ async def dispatch_agent(call: Call, *, settings: Settings) -> None:
             api.CreateAgentDispatchRequest(
                 agent_name=settings.agent_name,
                 room=call.livekit_room,
-                metadata=_outbound_metadata(call),
+                metadata=_outbound_metadata(call, resolved_vars=resolved_vars, timezone=timezone),
             )
         )
     logger.bind(call_id=str(call.id), room=call.livekit_room).info("Agent dispatched")
@@ -307,10 +330,14 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
                 logger.bind(call_id=str(call_id)).info("Retry blocked by DNC")
                 await _delete_room(room, settings)
                 return
+            last_log = await wellness_repo.get_latest_for_elder(db, elder.id)
+            resolved_vars, timezone = resolve_builtin_vars(elder, last_log, direction="outbound")
             await db.commit()  # release the advisory lock before the slow dial
 
         try:
-            await dispatch_agent(call, settings=settings)
+            await dispatch_agent(
+                call, settings=settings, resolved_vars=resolved_vars, timezone=timezone
+            )
         except OutboundDispatchError:
             async with factory() as db:
                 await calls_repo.mark_dial_failure(

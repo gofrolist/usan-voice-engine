@@ -38,25 +38,33 @@ class CallMetadata:
     """Per-call context passed by the API via dispatch metadata.
 
     Inbound dispatch-rule jobs carry no metadata, so absence means inbound.
+    ``resolved_vars`` holds the API-resolved DATA built-ins; ``timezone`` is the
+    elder's IANA tz string.  The agent adds ``current_time``/``current_date``
+    from ``timezone`` via ``build_vars``.  ``dynamic_vars`` stays the operator's
+    custom map (the idempotency payload — never merged with built-ins).
     """
 
     call_id: str | None
     direction: str
     dynamic_vars: dict[str, Any] = field(default_factory=dict)
+    resolved_vars: dict[str, str] = field(default_factory=dict)
+    timezone: str = ""
 
 
 def parse_metadata(raw: str | None) -> CallMetadata:
     if not raw:
-        return CallMetadata(call_id=None, direction="inbound", dynamic_vars={})
+        return CallMetadata(call_id=None, direction="inbound")
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
         logger.warning("Could not parse job metadata as JSON; treating as inbound")
-        return CallMetadata(call_id=None, direction="inbound", dynamic_vars={})
+        return CallMetadata(call_id=None, direction="inbound")
     return CallMetadata(
         call_id=data.get("call_id"),
         direction=data.get("direction", "inbound"),
         dynamic_vars=data.get("dynamic_vars") or {},
+        resolved_vars=data.get("resolved_vars") or {},
+        timezone=data.get("timezone") or "",
     )
 
 
@@ -108,7 +116,12 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
             goodbye_message=cfg.prompts.goodbye_message,
         )
         session = build_session(settings, cfg, userdata=data)
-        agent = build_inbound_agent(cfg, dynamic_vars)
+        agent = build_inbound_agent(
+            cfg,
+            resolved_vars=info.get("resolved_vars") or {},
+            custom_vars=dynamic_vars,
+            timezone=info.get("timezone") or "",
+        )
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
@@ -219,7 +232,12 @@ async def entrypoint(ctx: JobContext) -> None:
             goodbye_message=cfg.prompts.goodbye_message,
         )
         session = build_session(settings, cfg, userdata=data)
-        agent = build_check_in_agent(cfg)
+        agent = build_check_in_agent(
+            cfg,
+            resolved_vars=meta.resolved_vars,
+            custom_vars=meta.dynamic_vars,
+            timezone=meta.timezone,
+        )
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)

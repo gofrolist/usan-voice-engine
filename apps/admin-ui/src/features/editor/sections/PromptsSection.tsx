@@ -1,6 +1,7 @@
 import { Controller, type UseFormReturn } from "react-hook-form";
 import type { AgentConfigForm } from "../../../config/agentConfigSchema";
 import { ALLOWED_TEMPLATE_SLOTS } from "../../../config/agentConfigSchema";
+import { useVariableCatalog } from "../../../config/variableCatalog";
 import { Field } from "./Field";
 import { PromptEditor } from "./PromptEditor";
 
@@ -27,6 +28,13 @@ function rowsFor(key: PromptKey): number {
 
 export function PromptsSection({ form }: { form: UseFormReturn<AgentConfigForm> }) {
   const errors = form.formState.errors.prompts;
+  // Catalog drives the insert palette + unknown-token warnings. It degrades gracefully:
+  // while loading or on error `data` is undefined, so variables=[] (no palette) and the
+  // known set is empty (no false warnings).
+  const { data: variables } = useVariableCatalog();
+  const knownNames = new Set((variables ?? []).map((v) => v.name));
+  const phiNames = new Set((variables ?? []).filter((v) => v.phi).map((v) => v.name));
+
   return (
     <div className="space-y-5">
       {PROMPT_ORDER.map((key) => {
@@ -41,15 +49,19 @@ export function PromptsSection({ form }: { form: UseFormReturn<AgentConfigForm> 
               render={({ field }) => (
                 <PromptEditor
                   id={path}
+                  fieldKey={key}
                   value={field.value}
                   onChange={field.onChange}
                   rows={rowsFor(key)}
+                  variables={variables ?? []}
+                  knownNames={knownNames}
+                  phiNames={phiNames}
                 />
               )}
             />
             {isTemplate ? (
               <p className="text-xs text-slate-500">
-                Allowed slots:{" "}
+                Also accepts legacy slots:{" "}
                 {ALLOWED_TEMPLATE_SLOTS.map((s) => (
                   <code key={s} className="mr-1 rounded bg-slate-100 px-1 py-0.5 font-mono">
                     {`{${s}}`}

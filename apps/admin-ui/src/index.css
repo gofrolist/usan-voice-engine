@@ -19,3 +19,11 @@
   background: #eef2ff;
   border-radius: 3px;
 }
+
+/* Unknown {{variable}} (not in the fetched catalog): warn amber, distinct from the
+   indigo known-token highlight. Non-blocking — the field still saves. */
+.prompt-var-token--unknown {
+  color: #b45309;
+  background: #fef3c7;
+  border-radius: 3px;
+}

@@ -7,8 +7,8 @@ failure never crashes the call. end_call mirrors leave_voicemail: report → say
 goodbye → delete_room → shutdown.
 """
 
-import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from livekit.agents import Agent, RunContext, function_tool
@@ -16,37 +16,27 @@ from loguru import logger
 
 from usan_agent import api_client
 from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
+from usan_agent.prompt_vars import build_vars, substitute
+from usan_agent.sanitize import sanitize_prompt_value
 from usan_agent.settings import Settings
 
-# Control characters and the format-slot braces are stripped from any API-supplied
-# string before it reaches an LLM prompt (design spec §3 dynamic vars are caller
-# data, not trusted instructions). Removing "{"/"}" closes both a prompt-injection
-# vector and an str.format KeyError/IndexError on attacker-controlled slots.
-_PROMPT_UNSAFE = re.compile(
-    # format-slot braces; ASCII control chars; the Unicode line/paragraph separators
-    # NEL (U+0085), LS (U+2028), PS (U+2029); and invisible/directional chars
-    # (zero-width, bidi overrides) that could smuggle instructions or new lines past
-    # the LLM. Separators are listed explicitly so the regex alone suffices and does
-    # not silently rely on the later str.split() to drop them.
-    r"[{}\x00-\x1f\x7f\x85\u00ad\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\ufeff]"
-)
-_NAME_MAX_LEN = 100
-_CONTEXT_MAX_LEN = 300
+# Medication field length caps — used by _do_get_today_meds / _format_times.
+# (Name/context caps for the old str.format inbound path were removed with
+# _inbound_instructions; values now go through prompt_vars.build_vars which applies
+# a single _INJECTED_VALUE_MAX_LEN=300 cap to all injected values.)
 _MED_NAME_MAX_LEN = 80
 _MED_DOSAGE_MAX_LEN = 40
 _MED_TIME_MAX_LEN = 20
 
 
 def _sanitize_prompt_value(value: Any, *, max_len: int) -> str:
-    """Neutralize an API-supplied string for safe interpolation into LLM instructions.
+    """Backward-compat alias — delegates to ``sanitize.sanitize_prompt_value``.
 
-    Strips format-slot braces and control characters (including newlines), collapses
-    surrounding whitespace, and caps the length so a hostile value can neither inject
-    new instructions nor introduce ``str.format`` slots.
+    New code should import ``sanitize_prompt_value`` from ``usan_agent.sanitize``
+    directly.  This alias is kept so existing tests and internal helpers that
+    reference the private name continue to work without a flag-day rename.
     """
-    text = _PROMPT_UNSAFE.sub(" ", str(value))
-    text = " ".join(text.split())
-    return text[:max_len].strip()
+    return sanitize_prompt_value(value, max_len=max_len)
 
 
 CHECK_IN_INSTRUCTIONS = DEFAULT_AGENT_CONFIG.prompts.checkin_flow_instructions
@@ -223,44 +213,59 @@ def _select_tools(enabled: list[str]) -> list[Any]:
     return [_TOOL_REGISTRY[n] for n in names]
 
 
-def build_check_in_agent(cfg: AgentConfig | None = None) -> Agent:
-    """The outbound check-in Agent with its configured instructions + enabled tools."""
+def build_check_in_agent(
+    cfg: AgentConfig | None = None,
+    *,
+    resolved_vars: dict[str, str] | None = None,
+    custom_vars: dict[str, Any] | None = None,
+    timezone: str = "",
+    now: datetime | None = None,
+) -> Agent:
+    """The outbound check-in Agent with substituted instructions + enabled tools.
+
+    All prompt vars (built-in + custom) are merged via build_vars and substituted
+    token-scoped across the configured flow instructions. With no vars supplied the
+    default token-free template renders unchanged (backward compatible).
+    """
     cfg = cfg or DEFAULT_AGENT_CONFIG
+    values = build_vars(
+        resolved_vars or {},
+        custom_vars or {},
+        timezone=timezone,
+        now=now or datetime.now(UTC),
+    )
     return Agent(
-        instructions=cfg.prompts.checkin_flow_instructions,
+        instructions=substitute(cfg.prompts.checkin_flow_instructions, values),
         tools=_select_tools(cfg.tools.enabled),
     )
 
 
-def _inbound_instructions(template: str, dynamic_vars: dict[str, Any]) -> str:
-    """Render the inbound instructions from the resolved template, weaving in dynamic vars.
+def build_inbound_agent(
+    cfg: AgentConfig | None,
+    *,
+    resolved_vars: dict[str, str] | None = None,
+    custom_vars: dict[str, Any] | None = None,
+    timezone: str = "",
+    now: datetime | None = None,
+) -> Agent:
+    """The inbound check-in Agent: configured tools + personalized instructions.
 
-    The dynamic vars are API-supplied (ultimately caller-derived) data, so each value
-    is sanitized before interpolation: it can introduce neither new format slots nor
-    fresh prompt instructions. Only the two allowed slots (elder_name,
-    last_check_in_line) are ever passed to .format — never admin-supplied kwargs.
+    Substitutes ``{{tokens}}`` AND the two legacy single-brace slots
+    (``{elder_name}``, ``{last_check_in_line}``) across the inbound
+    personalization template, so both new and already-published templates render.
+    All injected values (resolved built-in + custom) are sanitized inside
+    ``build_vars`` before substitution.  ``last_check_in_line`` is derived from
+    ``last_check_in`` inside ``build_vars`` when not already present, so the
+    logic is shared with the outbound path.
     """
-    elder_name = (
-        _sanitize_prompt_value(
-            dynamic_vars.get("elder_name") or "the caller", max_len=_NAME_MAX_LEN
-        )
-        or "the caller"
-    )
-    last_check_in = _sanitize_prompt_value(
-        dynamic_vars.get("last_check_in") or "", max_len=_CONTEXT_MAX_LEN
-    )
-    last_check_in_line = (
-        f"For context, their last check-in was {last_check_in}.\n" if last_check_in else ""
-    )
-    return template.format(elder_name=elder_name, last_check_in_line=last_check_in_line)
-
-
-def build_inbound_agent(cfg: AgentConfig | None, dynamic_vars: dict[str, Any]) -> Agent:
-    """The inbound check-in Agent: configured tools + personalized instructions."""
     cfg = cfg or DEFAULT_AGENT_CONFIG
+    values = build_vars(
+        resolved_vars or {},
+        custom_vars or {},
+        timezone=timezone,
+        now=now or datetime.now(UTC),
+    )
     return Agent(
-        instructions=_inbound_instructions(
-            cfg.prompts.inbound_personalization_template, dynamic_vars
-        ),
+        instructions=substitute(cfg.prompts.inbound_personalization_template, values),
         tools=_select_tools(cfg.tools.enabled),
     )

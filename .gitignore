@@ -19,6 +19,10 @@ __pycache__/
 dist/
 build/
 
+# Node / Vite (admin-ui deps + caches; also stray root-level npm/vite invocations)
+node_modules/
+.vite/
+
 # Docker
 .docker/
 

@@ -513,3 +513,66 @@ def test_enqueue_config_error_does_not_schedule_retry(client, monkeypatch, async
 
     call_id = _call_id_by_idempotency_key(async_database_url, idem_key)
     assert _count_children(async_database_url, call_id) == 0  # misconfig is permanent
+
+
+def test_enqueue_call_resolves_builtins_and_passes_to_dispatch_agent(client, monkeypatch):
+
+    captured = {}
+
+    async def _spy_dispatch(call, *, settings, resolved_vars=None, timezone=""):
+        captured["resolved_vars"] = resolved_vars
+        captured["timezone"] = timezone
+        captured["persisted_dynamic_vars"] = dict(call.dynamic_vars)
+
+    monkeypatch.setattr(livekit_dispatch, "dispatch_agent", _spy_dispatch)
+    from usan_api import dialer
+
+    monkeypatch.setattr(dialer, "schedule_dial", lambda *a, **k: None)
+
+    r = client.post(
+        "/v1/elders",
+        json={
+            "name": "Margaret Doe",
+            "phone_e164": "+15557654321",
+            "timezone": "US/Eastern",
+            "metadata": {"medication_schedule": [{"name": "Lisinopril"}]},
+        },
+        headers=_OP,
+    )
+    elder_id = r.json()["id"]
+    resp = client.post(
+        "/v1/calls",
+        json={"elder_id": elder_id, "idempotency_key": "rv1", "dynamic_vars": {"promo": "x"}},
+        headers=_OP,
+    )
+    assert resp.status_code == 202
+    assert captured["resolved_vars"]["first_name"] == "Margaret"
+    assert captured["resolved_vars"]["call_direction"] == "outbound"
+    assert captured["resolved_vars"]["today_meds"] == "Lisinopril"
+    assert captured["timezone"] == "US/Eastern"
+    # §4.3: built-ins are NOT merged into the persisted idempotency payload.
+    assert captured["persisted_dynamic_vars"] == {"promo": "x"}
+
+
+def test_enqueue_call_idempotent_replay_still_matches_after_builtin_resolution(client, monkeypatch):
+    # Built-in resolution must not touch Call.dynamic_vars, so a replay still 200s.
+    async def _noop_dispatch(call, *, settings, resolved_vars=None, timezone=""):
+        return None
+
+    monkeypatch.setattr(livekit_dispatch, "dispatch_agent", _noop_dispatch)
+    from usan_api import dialer
+
+    monkeypatch.setattr(dialer, "schedule_dial", lambda *a, **k: None)
+
+    r = client.post(
+        "/v1/elders",
+        json={"name": "Ada Lovelace", "phone_e164": "+15550008888", "timezone": "UTC"},
+        headers=_OP,
+    )
+    elder_id = r.json()["id"]
+    payload = {"elder_id": elder_id, "idempotency_key": "replay-rv", "dynamic_vars": {"a": 1}}
+    first = client.post("/v1/calls", json=payload, headers=_OP)
+    second = client.post("/v1/calls", json=payload, headers=_OP)
+    assert first.status_code == 202
+    assert second.status_code == 200  # not 409 — payload unchanged
+    assert second.json()["id"] == first.json()["id"]

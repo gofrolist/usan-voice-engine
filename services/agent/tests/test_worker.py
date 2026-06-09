@@ -127,7 +127,9 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
 
     built = {}
 
-    def _fake_build_check_in_agent(cfg=None):
+    def _fake_build_check_in_agent(
+        cfg=None, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+    ):
         agent = MagicMock(name="check_in_agent")
         built["agent"] = agent
         return agent
@@ -172,7 +174,7 @@ async def test_outbound_registers_transcript_flush(monkeypatch):
         return session
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
-    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None, **kw: MagicMock())
     monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
     monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
     monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
@@ -249,8 +251,10 @@ async def test_inbound_known_elder_runs_check_in(monkeypatch):
 
     built = {}
 
-    def _fake_build_inbound_agent(cfg, dynamic_vars):
-        built["dynamic_vars"] = dynamic_vars
+    def _fake_build_inbound_agent(
+        cfg, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+    ):
+        built["custom_vars"] = custom_vars
         agent = MagicMock(name="inbound_agent")
         built["agent"] = agent
         return agent
@@ -291,7 +295,7 @@ async def test_inbound_known_elder_runs_check_in(monkeypatch):
 
     await worker.entrypoint(ctx)
 
-    assert built["dynamic_vars"] == {"elder_name": "Ada"}
+    assert built["custom_vars"] == {"elder_name": "Ada"}
     assert captured["userdata"].call_id == "inb-1"
     assert captured["userdata"].job_ctx is ctx
     captured["session"].start.assert_awaited_once()
@@ -414,7 +418,7 @@ async def test_outbound_starts_call_recording(monkeypatch):
         return session
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
-    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None, **kw: MagicMock())
     monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
     monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
     monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
@@ -447,7 +451,7 @@ async def test_inbound_known_starts_call_recording(monkeypatch):
         return {"call_id": "inb-1", "elder_known": True, "dynamic_vars": {"elder_name": "Ada"}}
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
-    monkeypatch.setattr(worker, "build_inbound_agent", lambda cfg, dv: MagicMock())
+    monkeypatch.setattr(worker, "build_inbound_agent", lambda cfg, **kw: MagicMock())
 
     captured = {}
 
@@ -504,7 +508,7 @@ async def test_outbound_fetches_and_applies_config(monkeypatch):
 
     monkeypatch.setattr(worker, "fetch_agent_config", _fetch)
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
-    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None, **kw: MagicMock())
     monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
     monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
     monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
@@ -568,7 +572,7 @@ async def test_outbound_arms_duration_guard(monkeypatch):
         return session
 
     monkeypatch.setattr(worker, "build_session", _fake_build_session)
-    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None: MagicMock())
+    monkeypatch.setattr(worker, "build_check_in_agent", lambda cfg=None, **kw: MagicMock())
     monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
     monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
     monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
@@ -582,3 +586,116 @@ async def test_outbound_arms_duration_guard(monkeypatch):
 
     await worker.entrypoint(ctx)
     assert "coro" in created  # the guard was armed
+
+
+def test_parse_metadata_carries_resolved_vars_and_timezone():
+    raw = (
+        '{"call_id": "abc", "direction": "outbound", "dynamic_vars": {"company": "USAN"}, '
+        '"resolved_vars": {"first_name": "Ada"}, "timezone": "US/Eastern"}'
+    )
+    md = parse_metadata(raw)
+    assert md.resolved_vars == {"first_name": "Ada"}
+    assert md.timezone == "US/Eastern"
+    assert md.dynamic_vars == {"company": "USAN"}
+
+
+def test_parse_metadata_defaults_resolved_vars_and_timezone():
+    md = parse_metadata(None)
+    assert md.resolved_vars == {}
+    assert md.timezone == ""
+
+
+async def test_outbound_threads_resolved_vars_into_builder(monkeypatch):
+    _settings(monkeypatch)
+    built = {}
+
+    def _fake_build_check_in_agent(
+        cfg=None, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+    ):
+        built["resolved_vars"] = resolved_vars
+        built["custom_vars"] = custom_vars
+        built["timezone"] = timezone
+        return MagicMock()
+
+    def _fake_build_session(settings, cfg=None, userdata=None):
+        session = MagicMock()
+        session.start = AsyncMock()
+        session.say = AsyncMock()
+        session.on = MagicMock()
+        return session
+
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "build_check_in_agent", _fake_build_check_in_agent)
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
+    monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
+    monkeypatch.setattr(worker, "start_call_recording", AsyncMock())
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock()
+    ctx.room.name = "usan-outbound-x"
+    ctx.job.metadata = (
+        '{"call_id": "call-1", "direction": "outbound", "dynamic_vars": {"company": "USAN"}, '
+        '"resolved_vars": {"first_name": "Ada"}, "timezone": "US/Eastern"}'
+    )
+
+    await worker.entrypoint(ctx)
+
+    assert built["resolved_vars"] == {"first_name": "Ada"}
+    assert built["custom_vars"] == {"company": "USAN"}
+    assert built["timezone"] == "US/Eastern"
+
+
+async def test_inbound_threads_resolved_vars_into_builder(monkeypatch):
+    _settings(monkeypatch)
+
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+        return {
+            "call_id": "inb-1",
+            "elder_known": True,
+            "dynamic_vars": {"company": "USAN"},
+            "resolved_vars": {"first_name": "Ada"},
+            "timezone": "US/Eastern",
+        }
+
+    monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
+
+    built = {}
+
+    def _fake_build_inbound_agent(
+        cfg, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+    ):
+        built["resolved_vars"] = resolved_vars
+        built["custom_vars"] = custom_vars
+        built["timezone"] = timezone
+        return MagicMock()
+
+    def _fake_build_session(settings, cfg=None, userdata=None):
+        session = MagicMock()
+        session.start = AsyncMock()
+        session.generate_reply = AsyncMock()
+        session.say = AsyncMock()
+        return session
+
+    monkeypatch.setattr(worker, "build_inbound_agent", _fake_build_inbound_agent)
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
+    monkeypatch.setattr(worker, "start_call_recording", AsyncMock())
+
+    participant = MagicMock()
+    participant.attributes = {"sip.phoneNumber": "+15551234567"}
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock(return_value=participant)
+    ctx.room.name = "usan-inbound-x"
+    ctx.job.metadata = None
+
+    await worker.entrypoint(ctx)
+
+    assert built["resolved_vars"] == {"first_name": "Ada"}
+    assert built["custom_vars"] == {"company": "USAN"}
+    assert built["timezone"] == "US/Eastern"

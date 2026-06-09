@@ -3,6 +3,10 @@ import type { EditorProps, OnChange, OnMount } from "@monaco-editor/react";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { Textarea } from "../../../components/ui/textarea";
 import { matchPromptTokens } from "./promptTokens";
+import { unknownTokenNames } from "./unknownTokens";
+import { phiTokenNames, SENSITIVE_PROMPT_FIELDS } from "./phiTokens";
+import { VariablePalette } from "./VariablePalette";
+import type { VariableSpec } from "../../../config/variableCatalog";
 
 // Lazy-load Monaco so it is split out of the main bundle and never blocks first
 // paint. While it loads we render a plain <textarea>; if the chunk fails to load
@@ -16,9 +20,19 @@ const MonacoEditor = lazy(async () => {
 
 interface PromptEditorProps {
   id: string;
+  // The prompt field key (e.g. "greeting"). When supplied alongside phiNames, the
+  // editor renders a non-blocking PHI warning for sensitive fields.
+  fieldKey?: string;
   value: string;
   onChange: (value: string) => void;
   rows?: number;
+  // Catalog variables for the insert palette; knownNames drives unknown-token warnings.
+  // Optional so existing callers (and the Fallback) keep compiling before Task 3.6.
+  variables?: VariableSpec[];
+  knownNames?: ReadonlySet<string>;
+  // Set of variable names flagged phi=true in the catalog. When provided together
+  // with fieldKey, drives the non-blocking PHI notice for sensitive fields.
+  phiNames?: ReadonlySet<string>;
 }
 
 type EditorInstance = Parameters<OnMount>[0];
@@ -43,16 +57,33 @@ function Fallback({ id, value, onChange, rows = 6 }: PromptEditorProps) {
   );
 }
 
+// Strip the wrapping braces from a token name (used to know which tokens are unknown).
+function isUnknown(tokenText: string, known: ReadonlySet<string>): boolean {
+  const m = /^\{\{\s*([a-zA-Z0-9_]+)\s*\}\}$/.exec(tokenText);
+  return m != null && m[1] != null ? !known.has(m[1]) : false;
+}
+
+// Stable empty set so the unknown-token scan is a no-op when no catalog is supplied
+// (avoids a new Set() per render changing identity).
+const EMPTY_KNOWN: ReadonlySet<string> = new Set<string>();
+
 export function PromptEditor(props: PromptEditorProps) {
-  const { value, onChange, rows = 6 } = props;
+  const { value, onChange, rows = 6, variables, knownNames, fieldKey, phiNames } = props;
   const editorRef = useRef<EditorInstance | null>(null);
   const monacoRef = useRef<MonacoInstance | null>(null);
   const collectionRef = useRef<DecorationsCollection | null>(null);
 
-  // Tint {{variable}} tokens so migrated Retell prompts read well. matchPromptTokens is
-  // linear/backtrack-free (see promptTokens.ts). The decorations collection is owned by
-  // the editor and torn down with it (@monaco-editor/react disposes it on unmount), so
-  // no manual cleanup is required.
+  const known = knownNames ?? EMPTY_KNOWN;
+  const unknown = unknownTokenNames(value, known);
+
+  const isSensitive = fieldKey !== undefined && SENSITIVE_PROMPT_FIELDS.has(fieldKey);
+  const phiWarnings =
+    isSensitive && phiNames !== undefined ? phiTokenNames(value, phiNames) : [];
+
+  // Tint {{variable}} tokens so migrated Retell prompts read well. Known tokens get the
+  // indigo .prompt-var-token; tokens whose name is not in the catalog get the amber
+  // .prompt-var-token--unknown. matchPromptTokens is linear/backtrack-free. The
+  // decorations collection is owned by the editor and torn down with it.
   function highlightTokens(): void {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
@@ -63,9 +94,10 @@ export function PromptEditor(props: PromptEditorProps) {
     const decorations: Decorations = matchPromptTokens(model.getValue()).map((tok) => {
       const start = model.getPositionAt(tok.start);
       const end = model.getPositionAt(tok.end);
+      const cls = isUnknown(tok.text, known) ? "prompt-var-token--unknown" : "prompt-var-token";
       return {
         range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column),
-        options: { inlineClassName: "prompt-var-token" },
+        options: { inlineClassName: cls },
       };
     });
     collection.set(decorations);
@@ -83,20 +115,56 @@ export function PromptEditor(props: PromptEditorProps) {
     highlightTokens();
   };
 
+  // Insert {{token}} at the Monaco cursor when mounted; otherwise (Monaco still
+  // loading / fallback textarea under jsdom) append to the current value so the
+  // operator never loses the insert.
+  function insertToken(token: string): void {
+    const editor = editorRef.current;
+    if (editor) {
+      const selection = editor.getSelection();
+      if (selection) {
+        editor.executeEdits("insert-variable", [{ range: selection, text: token }]);
+        editor.focus();
+        return;
+      }
+    }
+    onChange(value + token);
+  }
+
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-300">
-      <ErrorBoundary fallback={<Fallback {...props} />}>
-        <Suspense fallback={<Fallback {...props} />}>
-          <MonacoEditor
-            height={`${Math.max(rows, 4) * 22}px`}
-            defaultLanguage="markdown"
-            value={value}
-            onChange={handleChange}
-            onMount={handleMount}
-            options={MONACO_OPTIONS}
-          />
-        </Suspense>
-      </ErrorBoundary>
+    <div className="space-y-1">
+      {variables && variables.length > 0 ? (
+        <div className="flex justify-end">
+          <VariablePalette variables={variables} onInsert={insertToken} />
+        </div>
+      ) : null}
+      <div className="overflow-hidden rounded-lg border border-slate-300">
+        <ErrorBoundary fallback={<Fallback {...props} />}>
+          <Suspense fallback={<Fallback {...props} />}>
+            <MonacoEditor
+              height={`${Math.max(rows, 4) * 22}px`}
+              defaultLanguage="markdown"
+              value={value}
+              onChange={handleChange}
+              onMount={handleMount}
+              options={MONACO_OPTIONS}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      </div>
+      {unknown.length > 0 ? (
+        <p className="text-xs font-medium text-amber-700">
+          unknown variable: {unknown.join(", ")} — will resolve to empty unless declared as a
+          custom variable.
+        </p>
+      ) : null}
+      {phiWarnings.length > 0 ? (
+        <p className="text-xs font-medium text-amber-700">
+          ⚠ {phiWarnings.map((n) => `{{${n}}}`).join(", ")} reveals health information and may be
+          spoken before the caller&apos;s identity is confirmed (or to voicemail). Avoid health
+          variables in this field.
+        </p>
+      ) : null}
     </div>
   );
 }
