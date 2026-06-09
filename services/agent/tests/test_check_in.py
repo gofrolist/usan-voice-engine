@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
+from livekit.agents import RunContext, function_tool
+
 from usan_agent import check_in
 from usan_agent.agent_config import (
     DEFAULT_AGENT_CONFIG,
@@ -12,6 +14,18 @@ from usan_agent.agent_config import (
 from usan_agent.settings import Settings
 
 _NOW = datetime(2026, 6, 8, 13, 15, 0, tzinfo=ZoneInfo("UTC"))  # a Monday
+
+
+@function_tool
+async def send_sms(ctx: RunContext[check_in.CheckInData]) -> str:
+    """Stub send_sms whose FunctionTool.id is "send_sms" (its function name).
+
+    Naming the function ``send_sms`` makes @function_tool derive ``.id == "send_sms"``
+    from the function name, so the guard tests can register a real send_sms in
+    _TOOL_REGISTRY ahead of Parts B/C/D without mutating any livekit-agents internals.
+    That way the template guard -- not the Part A registry filter -- is what's exercised.
+    """
+    return ""
 
 
 def _tools(enabled, sms=None) -> SimpleNamespace:
@@ -259,6 +273,34 @@ def test_select_tools_drops_send_sms_without_templates() -> None:
     ids = {t.id for t in tools}
     assert "send_sms" not in ids
     assert ids == {"log_wellness", "end_call"}
+
+
+def test_select_tools_drops_send_sms_when_in_registry_but_no_templates(monkeypatch) -> None:
+    # Real guard coverage: with send_sms IN _TOOL_REGISTRY (simulating Parts B/C/D) the
+    # registry filter no longer hides it, so the template guard alone must drop it when
+    # tools.sms has no templates.
+    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", send_sms)
+    sms_cfg = SimpleNamespace(templates=[])
+    ids = {t.id for t in check_in._select_tools(_tools(["log_wellness", "send_sms"], sms=sms_cfg))}
+    assert "send_sms" not in ids
+    assert ids == {"log_wellness", "end_call"}
+
+
+def test_select_tools_drops_send_sms_when_in_registry_but_sms_unset(monkeypatch) -> None:
+    # Same guard, sms entirely unset (None) -> still dropped even though it's registered.
+    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", send_sms)
+    ids = {t.id for t in check_in._select_tools(_tools(["log_wellness", "send_sms"], sms=None))}
+    assert "send_sms" not in ids
+    assert ids == {"log_wellness", "end_call"}
+
+
+def test_select_tools_keeps_send_sms_when_in_registry_with_templates(monkeypatch) -> None:
+    # Affirmative branch: send_sms registered AND tools.sms carries templates -> retained.
+    monkeypatch.setitem(check_in._TOOL_REGISTRY, "send_sms", send_sms)
+    sms_cfg = SimpleNamespace(templates=["You have a message."])
+    ids = {t.id for t in check_in._select_tools(_tools(["log_wellness", "send_sms"], sms=sms_cfg))}
+    assert "send_sms" in ids
+    assert ids == {"log_wellness", "send_sms", "end_call"}
 
 
 def test_select_tools_safe_when_tools_has_no_sms_attr() -> None:
