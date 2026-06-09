@@ -30,7 +30,7 @@ def test_catalog_categories_and_flags():
     by_name = {t.name: t for t in TOOL_CATALOG}
     assert by_name["log_wellness"].category == "logging"
     assert by_name["log_medication"].category == "logging"
-    assert by_name["get_today_meds"].category == "query"
+    assert by_name["get_today_meds"].category == "logging"
     assert by_name["flag_for_followup"].category == "safety"
     assert by_name["schedule_callback"].category == "safety"
     assert by_name["send_sms"].category == "messaging"

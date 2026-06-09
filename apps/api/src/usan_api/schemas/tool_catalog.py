@@ -17,8 +17,6 @@ This is a deliberate rollout property -- the two sides converge per the design's
 catalog<->registry sync test once every tool's callable lands (Parts B/C/D).
 """
 
-from typing import Literal
-
 from pydantic import BaseModel
 
 
@@ -28,9 +26,7 @@ class ToolSpec(BaseModel):
     name: str  # registry key, e.g. "flag_for_followup"
     label: str  # human label for the UI
     description: str  # what it does (shown in the editor)
-    # "logging" writes call data; "query" reads it back; "lifecycle"/"safety"/
-    # "messaging" gate call termination, human escalation, and outbound SMS.
-    category: Literal["logging", "query", "lifecycle", "safety", "messaging"]
+    category: str  # "logging" | "lifecycle" | "safety" | "messaging"
     # end_call is locked on (cannot be disabled): it drives the only graceful
     # report->goodbye->delete_room->shutdown path.
     always_on: bool = False
@@ -59,7 +55,7 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
         name="get_today_meds",
         label="Get today's medications",
         description="Read back the medications the elder is scheduled to take today.",
-        category="query",
+        category="logging",
     ),
     ToolSpec(
         name="flag_for_followup",

@@ -191,10 +191,7 @@ async def end_call(ctx: RunContext[CheckInData], reason: str = "check_in_complet
     return ""
 
 
-# name -> tool callable. A SUBSET of the admin schema's TOOL_NAMES during rollout:
-# flag_for_followup / schedule_callback / send_sms are valid catalog names (so they
-# validate + render in the editor) but their @function_tool callables land in Parts
-# B/C/D. Until then _select_tools drops them, so enabling one saves but is a no-op.
+# name -> tool callable; mirrors the admin schema's TOOL_NAMES.
 _TOOL_REGISTRY: dict[str, Any] = {
     "log_wellness": log_wellness,
     "log_medication": log_medication,
@@ -206,10 +203,7 @@ _TOOL_REGISTRY: dict[str, Any] = {
 def _select_tools(enabled: list[str]) -> list[Any]:
     """Resolve enabled tool names to callables, preserving order.
 
-    Any enabled name absent from _TOOL_REGISTRY is silently dropped. That covers both
-    unknown names (already rejected upstream by the admin schema) and catalog tools
-    whose agent-side callable has not landed yet (see _TOOL_REGISTRY note) -- enabling
-    such a tool is accepted by the API but is a no-op here until the registry catches up.
+    Unknown names (already rejected by the admin schema) are dropped defensively.
     end_call is always included: it drives report->goodbye->delete_room->shutdown, so
     removing it would leave a call unable to end gracefully.
     """
