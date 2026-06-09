@@ -35,9 +35,9 @@ def _reject_stray_braces_after_tokens(value: str, *, allow_legacy_slots: bool) -
     Strip every well-formed ``{{token}}`` (and, when ``allow_legacy_slots``, the two
     legacy single-brace slots) then reject any ``{``/``}`` that remains. Unknown
     ``{{var}}`` NAMES are intentionally NOT rejected here — they are surfaced as
-    non-fatal warnings on the save response (warn-don't-block). This is never
-    str.format, so the leftover-brace check only guards against typos in the short
-    one-line fields, not injection (substitution is token-scoped agent-side).
+    non-fatal warnings on the save response (warn-don't-block). Substitution is
+    token-scoped agent-side (never str.format), so the leftover-brace check only
+    guards against typos in the short one-line fields.
     """
     stripped = _TOKEN_RE.sub("", value)
     if allow_legacy_slots:
@@ -67,9 +67,11 @@ def unknown_tokens(text: str, known_names: frozenset[str] = frozenset()) -> list
 class PromptsConfig(BaseModel):
     # system_prompt and checkin_flow_instructions are large free-form behavior fields
     # that the agent passes verbatim to the LLM as instructions (pipeline.py /
-    # check_in.py) — never to str.format — so they allow braces and a generous cap to
-    # hold migrated prompts full of {{variable}} tokens. Only the inbound
-    # personalization template is str.format-ed (check_in._inbound_instructions).
+    # check_in.py). They allow braces and a generous cap to hold migrated prompts
+    # full of {{variable}} tokens. All prompt fields (including the inbound
+    # personalization template) are token-substituted via prompt_vars.substitute();
+    # legacy single-brace slots ({elder_name}, {last_check_in_line}) are str.replace-d,
+    # not str.format-ed.
     system_prompt: str = Field(min_length=1, max_length=24000)
     greeting: str = Field(min_length=1, max_length=1000)
     recording_disclosure: str = Field(min_length=1, max_length=1000)
@@ -82,7 +84,7 @@ class PromptsConfig(BaseModel):
     # Field-tiered braces (design §5.1). Short literal fields accept {{tokens}} but
     # reject a stray lone brace (a typo in a one-line string). system_prompt and
     # checkin_flow_instructions stay permissive (NOT listed here) — they carry large
-    # pasted prompts full of arbitrary braces and are never str.format-ed.
+    # pasted prompts full of arbitrary braces.
     @field_validator(
         "greeting",
         "recording_disclosure",

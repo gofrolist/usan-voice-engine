@@ -20,12 +20,10 @@ from usan_agent.prompt_vars import build_vars, substitute
 from usan_agent.sanitize import sanitize_prompt_value
 from usan_agent.settings import Settings
 
-# Control characters and the format-slot braces are stripped from any API-supplied
-# string before it reaches an LLM prompt (design spec §3 dynamic vars are caller
-# data, not trusted instructions). Removing "{"/"}" closes both a prompt-injection
-# vector and an str.format KeyError/IndexError on attacker-controlled slots.
-_NAME_MAX_LEN = 100
-_CONTEXT_MAX_LEN = 300
+# Medication field length caps — used by _do_get_today_meds / _format_times.
+# (Name/context caps for the old str.format inbound path were removed with
+# _inbound_instructions; values now go through prompt_vars.build_vars which applies
+# a single _INJECTED_VALUE_MAX_LEN=300 cap to all injected values.)
 _MED_NAME_MAX_LEN = 80
 _MED_DOSAGE_MAX_LEN = 40
 _MED_TIME_MAX_LEN = 20
@@ -240,29 +238,6 @@ def build_check_in_agent(
         instructions=substitute(cfg.prompts.checkin_flow_instructions, values),
         tools=_select_tools(cfg.tools.enabled),
     )
-
-
-def _inbound_instructions(template: str, dynamic_vars: dict[str, Any]) -> str:
-    """Render the inbound instructions from the resolved template, weaving in dynamic vars.
-
-    The dynamic vars are API-supplied (ultimately caller-derived) data, so each value
-    is sanitized before interpolation: it can introduce neither new format slots nor
-    fresh prompt instructions. Only the two allowed slots (elder_name,
-    last_check_in_line) are ever passed to .format — never admin-supplied kwargs.
-    """
-    elder_name = (
-        _sanitize_prompt_value(
-            dynamic_vars.get("elder_name") or "the caller", max_len=_NAME_MAX_LEN
-        )
-        or "the caller"
-    )
-    last_check_in = _sanitize_prompt_value(
-        dynamic_vars.get("last_check_in") or "", max_len=_CONTEXT_MAX_LEN
-    )
-    last_check_in_line = (
-        f"For context, their last check-in was {last_check_in}.\n" if last_check_in else ""
-    )
-    return template.format(elder_name=elder_name, last_check_in_line=last_check_in_line)
 
 
 def build_inbound_agent(
