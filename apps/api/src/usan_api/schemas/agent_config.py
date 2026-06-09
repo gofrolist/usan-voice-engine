@@ -170,6 +170,47 @@ class TimingConfig(BaseModel):
         return self
 
 
+# --- send_sms templates (Phase 3 §6.1) -------------------------------------
+# Operator-authored SMS bodies the LLM selects by key (never free text). A body
+# may reference ONLY non-PHI catalog variables: a PHI token (PHI_BUILTIN_NAMES)
+# hard-blocks save (HTTP 422), stricter than the greeting warn-only rule, because
+# SMS leaves our system unencrypted and carrier-visible (design §6.2). Token
+# detection reuses the Phase 2 _TOKEN_RE so the two layers agree on what a token is.
+class SmsTemplate(BaseModel):
+    key: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    label: str = Field(min_length=1, max_length=120)
+    body: str = Field(min_length=1, max_length=480)
+
+
+def _phi_tokens_in_body(body: str) -> list[str]:
+    """PHI catalog tokens used in an SMS body, de-duplicated in first-seen order."""
+    seen: list[str] = []
+    for name in _TOKEN_RE.findall(body):
+        if name in PHI_BUILTIN_NAMES and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _reject_phi_in_templates(templates: list[SmsTemplate]) -> None:
+    for tmpl in templates:
+        phi = _phi_tokens_in_body(tmpl.body)
+        if phi:
+            joined = ", ".join("{{" + n + "}}" for n in phi)
+            raise ValueError(
+                f"SMS template '{tmpl.key}' body references protected health information "
+                f"({joined}); SMS bodies may use non-PHI variables only"
+            )
+
+
+class SmsToolConfig(BaseModel):
+    templates: list[SmsTemplate] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _no_phi_in_bodies(self) -> SmsToolConfig:
+        _reject_phi_in_templates(self.templates)
+        return self
+
+
 class ToolsConfig(BaseModel):
     enabled: list[str] = Field(
         default_factory=lambda: [
@@ -182,11 +223,7 @@ class ToolsConfig(BaseModel):
             "end_call",
         ]
     )
-    # No `sms` field in Part A (on either copy). Part D adds `sms: SmsConfig | None = None`
-    # here AND on the agent copy (services/agent agent_config.ToolsConfig), together with
-    # the write-side `sms` block + SmsConfig (with the PHI hard-block). The agent's
-    # _select_tools reads `sms` defensively via getattr so it stays safe until Part D
-    # lands; configs published without an `sms` block deserialize cleanly on both sides.
+    sms: SmsToolConfig | None = None
 
     @field_validator("enabled")
     @classmethod
@@ -195,6 +232,13 @@ class ToolsConfig(BaseModel):
         if bad:
             raise ValueError(f"unknown tool(s): {', '.join(sorted(set(bad)))}")
         return v
+
+    @model_validator(mode="after")
+    def _sms_templates_no_phi(self) -> ToolsConfig:
+        # HARD BLOCK (design §6.2): a PHI token in any SMS body fails to save (422).
+        if self.sms is not None:
+            _reject_phi_in_templates(self.sms.templates)
+        return self
 
 
 class VoicemailDetectionConfig(BaseModel):

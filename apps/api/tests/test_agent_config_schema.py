@@ -251,3 +251,65 @@ def test_tools_accepts_all_seven_catalog_tools():
 
     names = [t.name for t in TOOL_CATALOG]
     assert ToolsConfig(enabled=names).enabled == names
+
+
+# --- send_sms template config (Phase 3 §6.1) -------------------------------
+from usan_api.schemas.agent_config import (  # noqa: E402
+    SmsTemplate,
+    SmsToolConfig,
+)
+
+
+def test_sms_template_accepts_non_phi_tokens():
+    cfg = ToolsConfig(
+        enabled=list(DEFAULT_AGENT_CONFIG.tools.enabled),
+        sms=SmsToolConfig(
+            templates=[
+                SmsTemplate(
+                    key="med_reminder",
+                    label="Med reminder",
+                    body="Hello {{first_name}}, this is your USAN reminder for {{current_date}}.",
+                )
+            ]
+        ),
+    )
+    assert cfg.sms is not None
+    assert cfg.sms.templates[0].key == "med_reminder"
+
+
+def test_sms_default_is_none():
+    assert ToolsConfig().sms is None
+
+
+@pytest.mark.parametrize(
+    "token", ["last_check_in", "last_check_in_line", "last_mood", "last_pain", "today_meds"]
+)
+def test_sms_template_phi_token_hard_blocks(token):
+    with pytest.raises(ValidationError) as exc:
+        SmsToolConfig(
+            templates=[SmsTemplate(key="bad", label="Bad", body="Your status: {{" + token + "}}")]
+        )
+    # the validator runs on ToolsConfig too:
+    with pytest.raises(ValidationError):
+        ToolsConfig(
+            sms={"templates": [{"key": "bad", "label": "Bad", "body": "x {{" + token + "}}"}]}
+        )
+    assert (
+        "protected health information" in str(exc.value).lower() or "phi" in str(exc.value).lower()
+    )
+
+
+def test_sms_template_key_slug_enforced():
+    with pytest.raises(ValidationError):
+        SmsTemplate(key="Bad Key!", label="x", body="hello")
+
+
+def test_sms_config_roundtrips_through_agent_config():
+    base = DEFAULT_AGENT_CONFIG.model_dump()
+    base["tools"] = {
+        "enabled": list(DEFAULT_AGENT_CONFIG.tools.enabled),
+        "sms": {"templates": [{"key": "a", "label": "A", "body": "Hi {{first_name}}"}]},
+    }
+    cfg = AgentConfig.model_validate(base)
+    assert cfg.tools.sms is not None
+    assert cfg.tools.sms.templates[0].key == "a"
