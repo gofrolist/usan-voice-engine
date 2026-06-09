@@ -28,7 +28,7 @@ async def send_sms(ctx: RunContext[check_in.CheckInData]) -> str:
     return ""
 
 
-def _tools(enabled, sms=None) -> SimpleNamespace:
+def _tools(enabled: list[str], sms: object = None) -> SimpleNamespace:
     # _select_tools takes a ToolsConfig-like object (.enabled + optional .sms).
     return SimpleNamespace(enabled=list(enabled), sms=sms)
 

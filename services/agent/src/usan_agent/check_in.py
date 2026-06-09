@@ -9,13 +9,13 @@ goodbye → delete_room → shutdown.
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from livekit.agents import Agent, RunContext, function_tool
 from loguru import logger
 
 from usan_agent import api_client
-from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig, ToolsConfig
+from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
 from usan_agent.prompt_vars import build_vars, substitute
 from usan_agent.sanitize import sanitize_prompt_value
 from usan_agent.settings import Settings
@@ -203,7 +203,22 @@ _TOOL_REGISTRY: dict[str, Any] = {
 }
 
 
-def _select_tools(tools: ToolsConfig) -> list[Any]:
+class _ToolsConfigLike(Protocol):
+    """Structural view of what _select_tools requires off a ToolsConfig.
+
+    Only ``.enabled`` is a hard requirement, so Part A's ``ToolsConfig`` (which exposes
+    just ``.enabled``) structurally satisfies this and so do the tests' ``SimpleNamespace``
+    objects. ``.sms`` is deliberately NOT declared here: it is optional forward-compat
+    surface (Part D adds it to ``ToolsConfig``) that ``_select_tools`` reads defensively via
+    ``getattr``. Annotating against this Protocol -- rather than the concrete ``ToolsConfig``
+    -- makes the ``getattr`` honest: the annotation no longer claims a ``.sms`` field that
+    today's ``ToolsConfig`` lacks, yet the guard stays safe once Part D adds it.
+    """
+
+    enabled: list[str]
+
+
+def _select_tools(tools: _ToolsConfigLike) -> list[Any]:
     """Resolve enabled tool names to callables, preserving order.
 
     Any enabled name absent from _TOOL_REGISTRY is silently dropped. That covers both
@@ -212,8 +227,9 @@ def _select_tools(tools: ToolsConfig) -> list[Any]:
     such a tool is accepted by the API but is a no-op here until the registry catches up.
     send_sms is a dead tool until at least one SMS template is configured, so it is
     dropped unless ``tools`` carries an ``sms`` config with templates. The ``sms`` field
-    is read via ``getattr`` because Part A's ``ToolsConfig`` has no ``sms`` field yet
-    (Part D adds it); the guard must stay safe until then. The drop is currently
+    is read via ``getattr`` because Part A's concrete ``ToolsConfig`` has no ``sms`` field
+    yet (Part D adds it) and the ``_ToolsConfigLike`` Protocol does not declare it; the
+    guard must stay safe until then. The drop is currently
     belt-and-braces (send_sms is not yet in _TOOL_REGISTRY, so the registry filter above
     already removes it) -- TODO(Part B/C/D): once send_sms lands in _TOOL_REGISTRY this
     guard becomes the sole gate; verify the template branches then. end_call is always
