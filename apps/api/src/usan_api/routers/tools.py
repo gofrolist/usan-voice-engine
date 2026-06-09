@@ -12,10 +12,12 @@ from usan_api.auth import require_service_token
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
 from usan_api.observability.custom_metrics import (
+    CALLBACK_REQUESTS_TOTAL,
     CALLS_TOTAL,
     FOLLOWUP_FLAGS_TOTAL,
     track_tool,
 )
+from usan_api.repositories import callback_requests as callback_requests_repo
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import follow_up_flags as follow_up_flags_repo
@@ -24,6 +26,7 @@ from usan_api.repositories import metrics as metrics_repo
 from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.repositories import wellness as wellness_repo
 from usan_api.schemas.tools import (
+    CallbackScheduledResponse,
     CallEndedResponse,
     EndCallRequest,
     FlagForFollowupRequest,
@@ -36,6 +39,7 @@ from usan_api.schemas.tools import (
     LogWellnessRequest,
     MedicationScheduleItem,
     MetricsAcceptedResponse,
+    ScheduleCallbackRequest,
     TodayMedsResponse,
     TranscriptLoggedResponse,
 )
@@ -128,6 +132,33 @@ async def log_medication(
     await db.commit()
     logger.bind(call_id=str(call.id)).info("Logged medication")
     return LoggedResponse(id=row.id)
+
+
+@router.post("/schedule_callback", response_model=CallbackScheduledResponse)
+@track_tool("schedule_callback")
+async def schedule_callback(
+    body: ScheduleCallbackRequest,
+    db: AsyncSession = Depends(get_db),
+    claims: dict[str, Any] = Depends(require_service_token),
+) -> CallbackScheduledResponse:
+    call = await _authorize_call(body.call_id, claims, db)
+    elder_id = _require_elder(call)
+    row = await callback_requests_repo.create_callback_request(
+        db,
+        call_id=call.id,
+        elder_id=elder_id,
+        requested_time_text=body.requested_time_text,
+        requested_at=body.requested_at,
+        notes=body.notes,
+    )
+    await db.commit()
+    # Increment AFTER commit so a crash mid-commit can't double-count (spec §7).
+    # No label carries requested_time_text/notes (free-text PHI) — bounded by design.
+    CALLBACK_REQUESTS_TOTAL.inc()
+    # Don't log requested_time_text/notes: free-text the LLM fills. Already persisted to
+    # the DB; the log keeps only call_id.
+    logger.bind(call_id=str(call.id)).info("Scheduled callback request")
+    return CallbackScheduledResponse(id=row.id)
 
 
 @router.post("/get_today_meds", response_model=TodayMedsResponse)

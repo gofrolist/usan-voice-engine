@@ -56,6 +56,13 @@ FOLLOWUP_FLAGS_TOTAL = Counter(
     labelnames=("severity", "category"),
 )
 
+# No labels: a single global counter of callback requests recorded by schedule_callback.
+# PHI-free by construction — requested_time_text / notes are NEVER label values (spec §9).
+CALLBACK_REQUESTS_TOTAL = Counter(
+    "usan_callback_requests",
+    "Callback requests created.",
+)
+
 
 def track_tool(tool: str) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
     """Decorate a tool route handler to record usan_tool_calls_total{tool,outcome}.
