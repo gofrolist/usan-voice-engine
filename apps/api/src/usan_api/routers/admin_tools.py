@@ -15,8 +15,9 @@ from usan_api.admin_actor import get_actor_email
 from usan_api.auth import require_admin_session
 from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
+from usan_api.repositories import callback_requests as callback_requests_repo
 from usan_api.repositories import follow_up_flags as follow_up_flags_repo
-from usan_api.schemas.admin_tools import FollowupFlagSummary
+from usan_api.schemas.admin_tools import CallbackRequestSummary, FollowupFlagSummary
 
 router = APIRouter(
     prefix="/v1/admin",
@@ -52,3 +53,15 @@ async def list_follow_up_flags(
         await db.rollback()
         raise
     return [FollowupFlagSummary.model_validate(r) for r in rows]
+
+
+@router.get("/callback-requests", response_model=list[CallbackRequestSummary])
+async def list_callback_requests(
+    status: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+) -> list[CallbackRequestSummary]:
+    # Paged + status-filtered in SQL (never select the whole table). Callback notes are
+    # PHI but stay in our DB; this endpoint is session-gated via the router dependency.
+    rows = await callback_requests_repo.list_callback_requests(db, status=status, limit=limit)
+    return [CallbackRequestSummary.model_validate(r) for r in rows]
