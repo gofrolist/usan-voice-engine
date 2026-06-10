@@ -138,10 +138,13 @@ groups:
           severity: page
         annotations:
           summary: >-
-            usan_dial_slots_free has been 0 for 10m — with
-            CONCURRENCY_GATE_ENABLED=true, autonomous dialing (schedules,
-            batches, retries) has stopped. Only meaningful while the gate is
-            enabled; silence during gate-off operation.
+            usan_dial_slots_free has been 0 for 10m. With
+            CONCURRENCY_GATE_ENABLED=true this means autonomous dialing
+            (schedules, batches, retries) has stopped. The gauge is exported
+            whether or not the gate is enabled (spec §7), so this alert is
+            meaningful ONLY while CONCURRENCY_GATE_ENABLED=true — with the
+            gate off the cap is not enforced; silence the alert during
+            gate-off operation.
 
 # Route every USAN alert to a single operator-owned contact point. The receiver
 # below is a PLACEHOLDER: leave `usan-operator` named here and fill its actual
