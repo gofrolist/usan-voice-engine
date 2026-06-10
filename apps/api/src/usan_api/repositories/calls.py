@@ -19,6 +19,22 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+# Every status a call can never leave. Guarded mutators re-check against this
+# under the row lock; C4's set_status enqueue gate (non-terminal -> terminal)
+# consumes it too (spec §2.1).
+_TERMINAL_STATUSES = frozenset(
+    {
+        CallStatus.COMPLETED,
+        CallStatus.VOICEMAIL_LEFT,
+        CallStatus.NO_ANSWER,
+        CallStatus.BUSY,
+        CallStatus.FAILED,
+        CallStatus.DNC_BLOCKED,
+        CallStatus.CANCELLED,
+    }
+)
+
+
 async def create_call(
     db: AsyncSession,
     *,
@@ -59,9 +75,13 @@ async def set_status(
     *,
     error: dict[str, Any] | None = None,
 ) -> Call | None:
-    call = await db.get(Call, call_id)
+    call = await db.get(Call, call_id, with_for_update=True)
     if call is None:
         return None
+    # Captured under the row lock, before assignment: C4 gates the call.completed
+    # enqueue on `_old_status not in _TERMINAL_STATUSES and status in _TERMINAL_STATUSES`
+    # (spec §2.1). Underscore-prefixed until C4 consumes it; write behavior unchanged.
+    _old_status = call.status
     call.status = status
     if error is not None:
         call.error = error
@@ -73,8 +93,14 @@ async def set_status(
 async def mark_answered(
     db: AsyncSession, call_id: uuid.UUID, *, sip_call_id: str | None
 ) -> Call | None:
-    call = await db.get(Call, call_id)
-    if call is None:
+    """Guarded transition to IN_PROGRESS (spec §2.1): the WHOLE write — not just
+    the status — is gated on a pre-answer status under the row lock, so a late
+    answer event can never resurrect a room_finished-completed call back to
+    IN_PROGRESS and pin an in-flight slot (the pre-existing zombie bug). RINGING
+    is never assigned today; kept as dead-state tolerance.
+    """
+    call = await db.get(Call, call_id, with_for_update=True)
+    if call is None or call.status not in (CallStatus.DIALING, CallStatus.RINGING):
         return None
     call.status = CallStatus.IN_PROGRESS
     call.answered_at = _utcnow()
@@ -93,8 +119,16 @@ async def mark_dial_failure(
     end_reason: str,
     error: dict[str, Any] | None = None,
 ) -> Call | None:
-    call = await db.get(Call, call_id)
-    if call is None:
+    """Guarded dial-failure transition (spec §2.1): DIALING-only — deliberately
+    narrower than §2.1's "(queued/dialing)" prose, because §10.7 pins "stale
+    mark_dial_failure after a reclaim_stuck_dialing re-queue is a no-op" (a
+    QUEUED match would clobber the fresh re-queued attempt) and every caller
+    (livekit_dispatch's dispatch_and_dial / _dial_and_classify paths) operates
+    on a row it claimed into DIALING. Already-terminal rows return None
+    (callers verified tolerant).
+    """
+    call = await db.get(Call, call_id, with_for_update=True)
+    if call is None or call.status is not CallStatus.DIALING:
         return None
     call.status = status
     call.ended_at = _utcnow()
@@ -106,20 +140,29 @@ async def mark_dial_failure(
     return call
 
 
-async def _latest_by_room(db: AsyncSession, livekit_room: str) -> Call | None:
+async def _latest_by_room(
+    db: AsyncSession, livekit_room: str, *, for_update: bool = False
+) -> Call | None:
     # Room names are uuid4 so a collision is astronomically unlikely; take the most
     # recent match rather than scalar_one_or_none(), which would 500 on a duplicate.
-    result = await db.execute(
+    # for_update=True locks the row so a guarded mutator's status check holds (§2.1).
+    stmt = (
         select(Call)
         .where(Call.livekit_room == livekit_room)
         .order_by(Call.created_at.desc())
         .limit(1)
     )
+    if for_update:
+        stmt = stmt.with_for_update()
+    result = await db.execute(stmt)
     return result.scalars().first()
 
 
 async def mark_completed_if_in_progress(db: AsyncSession, livekit_room: str) -> Call | None:
-    call = await _latest_by_room(db, livekit_room)
+    """Guarded transition (spec §2.1): the row lock makes the IN_PROGRESS check
+    atomic, so the loser of a webhook-vs-outcome race re-reads the terminal
+    status and returns None instead of double-transitioning."""
+    call = await _latest_by_room(db, livekit_room, for_update=True)
     if call is None or call.status is not CallStatus.IN_PROGRESS:
         return None
     call.status = CallStatus.COMPLETED
@@ -164,7 +207,9 @@ async def set_recording_status(db: AsyncSession, livekit_room: str, status: str)
 
 
 async def mark_voicemail_left_if_in_progress(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
-    call = await db.get(Call, call_id)
+    """Guarded transition (spec §2.1): IN_PROGRESS check held under the row lock —
+    the loser of the voicemail-vs-room_finished race returns None."""
+    call = await db.get(Call, call_id, with_for_update=True)
     if call is None or call.status is not CallStatus.IN_PROGRESS:
         return None
     call.status = CallStatus.VOICEMAIL_LEFT
@@ -487,10 +532,11 @@ async def complete_call_if_in_progress(
 ) -> Call | None:
     """Mark an in-progress call COMPLETED with a caller-supplied end_reason.
 
-    Gated on IN_PROGRESS so it is idempotent and races the room_finished webhook
-    safely: whichever marks the call COMPLETED first wins, the other no-ops.
+    Gated on IN_PROGRESS under the row lock (spec §2.1) so it is idempotent and
+    races the room_finished webhook safely: whichever marks the call COMPLETED
+    first wins, the other re-reads the terminal status and no-ops.
     """
-    call = await db.get(Call, call_id)
+    call = await db.get(Call, call_id, with_for_update=True)
     if call is None or call.status is not CallStatus.IN_PROGRESS:
         return None
     call.status = CallStatus.COMPLETED
@@ -508,9 +554,10 @@ async def mark_failed_if_active(
 ) -> Call | None:
     """Transition a still-active call to FAILED. No-op (returns None) if the call
     already reached IN_PROGRESS or any terminal state, so a crash handler never
-    clobbers a committed outcome.
+    clobbers a committed outcome. The check holds under the row lock (spec §2.1),
+    so it cannot race a concurrent mark_dial_failure into a double transition.
     """
-    call = await db.get(Call, call_id)
+    call = await db.get(Call, call_id, with_for_update=True)
     if call is None or call.status not in _ACTIVE_STATUSES:
         return None
     call.status = CallStatus.FAILED
