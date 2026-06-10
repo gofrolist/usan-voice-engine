@@ -98,6 +98,51 @@ groups:
         annotations:
           summary: One or more queued SMS messages failed to send in the last 15m.
 
+      - uid: usan-dial-slots-exhausted
+        title: Autonomous dial slots exhausted
+        condition: C
+        # FOR 10m: a momentarily-full dial budget is normal under load; ten
+        # sustained minutes of zero free slots means autonomous dialing has
+        # stalled — for a wellness-check product, not dialing is a page.
+        for: 10m
+        # Same no-data/exec-error rationale as the rules above: the gauge is
+        # absent until the retry orchestrator's first cycle (fresh deploy,
+        # restart) — never page on that; evaluation errors must surface.
+        noDataState: OK
+        execErrState: Alerting
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              editorMode: code
+              expr: usan_dial_slots_free
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 1
+        labels:
+          severity: page
+        annotations:
+          summary: >-
+            usan_dial_slots_free has been 0 for 10m — with
+            CONCURRENCY_GATE_ENABLED=true, autonomous dialing (schedules,
+            batches, retries) has stopped. Only meaningful while the gate is
+            enabled; silence during gate-off operation.
+
 # Route every USAN alert to a single operator-owned contact point. The receiver
 # below is a PLACEHOLDER: leave `usan-operator` named here and fill its actual
 # address in at deploy time (edit the contactPoints block or use the Grafana UI).
