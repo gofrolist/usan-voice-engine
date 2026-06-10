@@ -101,7 +101,8 @@ async def _truncate_and_dispose(engine: AsyncEngine) -> None:
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "TRUNCATE call_batch_targets, call_batches, call_schedules, "
+                    "TRUNCATE webhook_deliveries, webhook_endpoints, "
+                    "call_batch_targets, call_batches, call_schedules, "
                     "agent_profile_versions, agent_profiles, admin_audit_log, "
                     "admin_users, follow_up_flags, callback_requests, sms_messages, "
                     "calls, dnc_list, elders "
