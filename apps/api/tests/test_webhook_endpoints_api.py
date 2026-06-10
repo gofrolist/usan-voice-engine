@@ -245,6 +245,25 @@ def test_test_ping_enqueues_real_pipeline_row(
     assert r.status_code == 409
 
 
+def test_test_ping_429_over_pending_cap(client, operator_headers, monkeypatch, async_database_url):
+    # The same pending-backlog backpressure redeliver has (§8.4): a test ping is
+    # one more enqueue, so a leaked operator key must not be able to grow an
+    # unbounded backlog through /test either.
+    monkeypatch.setenv("WEBHOOK_DELIVERY_ENABLED", "true")
+    get_settings.cache_clear()
+
+    endpoint_id = _create(client, operator_headers)["id"]
+
+    async def _backlog(db: AsyncSession) -> None:
+        for _ in range(100):
+            await _seed_delivery(db, endpoint_id)
+
+    asyncio.run(_run_db(async_database_url, _backlog))
+
+    r = client.post(f"/v1/webhook-endpoints/{endpoint_id}/test", headers=operator_headers)
+    assert r.status_code == 429
+
+
 def test_deliveries_list_paged_filtered(client, operator_headers, async_database_url):
     endpoint_id = _create(client, operator_headers)["id"]
 

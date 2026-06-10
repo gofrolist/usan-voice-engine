@@ -88,7 +88,7 @@ async def pending_counts(db: AsyncSession) -> dict[uuid.UUID, int]:
 
 
 async def count_pending_for_endpoint(db: AsyncSession, endpoint_id: uuid.UUID) -> int:
-    """Pending count for one endpoint (the redeliver 100-row backpressure cap, §8.4)."""
+    """Pending count for one endpoint (the redeliver/test 100-row enqueue cap, §8.4)."""
     result = await db.execute(
         select(func.count())
         .select_from(WebhookDelivery)

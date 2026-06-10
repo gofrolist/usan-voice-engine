@@ -31,9 +31,10 @@ from usan_api.webhook_events import WEBHOOK_EVENTS
 MAX_WEBHOOK_ENDPOINTS = 10
 # Operator label; PHI-free by convention.
 MAX_DESCRIPTION_LENGTH = 500
-# Redeliver backpressure: 429 when the endpoint already has this many pending
-# rows (bounds re-arm storms from a leaked operator key, spec §4).
-MAX_PENDING_FOR_REDELIVER = 100
+# Enqueue backpressure, shared by redeliver AND /test: 429 when the endpoint
+# already has this many pending rows (bounds re-arm/ping storms from a leaked
+# operator key, spec §4/§8.4).
+MAX_PENDING_FOR_ENQUEUE = 100
 
 
 def _normalized_events(v: list[str]) -> list[str]:

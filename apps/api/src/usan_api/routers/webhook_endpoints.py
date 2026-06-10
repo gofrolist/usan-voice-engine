@@ -31,7 +31,7 @@ from usan_api.repositories import admin_audit as audit_repo
 from usan_api.repositories import webhook_endpoints as endpoints_repo
 from usan_api.repositories import webhook_outbox as outbox_repo
 from usan_api.schemas.webhook_endpoints import (
-    MAX_PENDING_FOR_REDELIVER,
+    MAX_PENDING_FOR_ENQUEUE,
     MAX_WEBHOOK_ENDPOINTS,
     CreateWebhookEndpointRequest,
     EnqueuedDeliveryResponse,
@@ -194,6 +194,12 @@ async def send_test_ping(  # NOT `test_*`: ruff PT028 would read it as a pytest 
     endpoint = await _get_endpoint_or_404(db, endpoint_id)
     if not endpoint.enabled:
         raise HTTPException(status_code=409, detail="endpoint is disabled")
+    # Same backpressure as redeliver (§8.4): a ping is one more enqueue, so a
+    # leaked operator key must not grow an unbounded backlog through /test.
+    if await outbox_repo.count_pending_for_endpoint(db, endpoint.id) >= MAX_PENDING_FOR_ENQUEUE:
+        raise HTTPException(
+            status_code=429, detail="endpoint already has too many pending deliveries"
+        )
     # The ping row rides the REAL pipeline: outbox, claim, SSRF re-check,
     # signing, retry ladder (spec §4).
     delivery = await outbox_repo.enqueue_ping(db, endpoint_id=endpoint.id)
@@ -239,7 +245,7 @@ async def redeliver_delivery(
     if endpoint is None or not endpoint.enabled:
         raise HTTPException(status_code=409, detail="endpoint is disabled")
     # Backpressure: bounds re-arm storms from a leaked operator key (§4/§8.4).
-    if await outbox_repo.count_pending_for_endpoint(db, endpoint.id) >= MAX_PENDING_FOR_REDELIVER:
+    if await outbox_repo.count_pending_for_endpoint(db, endpoint.id) >= MAX_PENDING_FOR_ENQUEUE:
         raise HTTPException(
             status_code=429, detail="endpoint already has too many pending deliveries"
         )
