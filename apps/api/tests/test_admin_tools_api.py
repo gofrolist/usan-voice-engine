@@ -205,18 +205,31 @@ def test_flag_transition_matrix(client, mock_dispatch, admin_session):
 
 
 def test_flag_transition_idempotent_noop(client, mock_dispatch, admin_session):
-    _elder_id, _call_id, flag_id = _seed_flag(client)
+    _elder_id, _call_id, flag_id = _seed_flag(client, reason="secret noop reason")
 
     first = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "acknowledged"})
     assert first.status_code == 200, first.text
     stamps = (first.json()["status_updated_at"], first.json()["status_updated_by"])
     audits = _audit_count(client, "follow_up_flag.update")
+    # Success legs write only the .update row — never a noop_read one.
+    assert _audit_count(client, "follow_up_flag.noop_read") == 0
 
-    # (a) ack -> ack replay: 200, stamps byte-identical, no new audit row.
+    # (a) ack -> ack replay: 200, stamps byte-identical, no new .update audit row
+    # — but the body is still a PHI read (reason + elder_name), so a PHI-free
+    # noop_read audit row lands in the same request (spec §6.2).
     replay = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "acknowledged"})
     assert replay.status_code == 200, replay.text
     assert (replay.json()["status_updated_at"], replay.json()["status_updated_by"]) == stamps
     assert _audit_count(client, "follow_up_flag.update") == audits
+    noop_rows = client.get("/v1/admin/audit?action=follow_up_flag.noop_read").json()
+    assert len(noop_rows) == 1
+    entry = noop_rows[0]
+    assert entry["detail"] == {"status": "acknowledged", "noop": True}
+    assert entry["entity_type"] == "follow_up_flag"
+    assert entry["entity_id"] == str(flag_id)
+    blob = str(entry).lower()
+    assert "secret" not in blob
+    assert "noop reason" not in blob
 
     resolved = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "resolved"})
     assert resolved.status_code == 200, resolved.text
@@ -224,11 +237,14 @@ def test_flag_transition_idempotent_noop(client, mock_dispatch, admin_session):
     audits = _audit_count(client, "follow_up_flag.update")
 
     # (b) resolved -> resolved replay: the likelier real-world double-click
-    # (terminal state) — same idempotent contract.
+    # (terminal state) — same idempotent contract, same audited PHI read.
     replay = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "resolved"})
     assert replay.status_code == 200, replay.text
     assert (replay.json()["status_updated_at"], replay.json()["status_updated_by"]) == stamps
     assert _audit_count(client, "follow_up_flag.update") == audits
+    noop_rows = client.get("/v1/admin/audit?action=follow_up_flag.noop_read").json()
+    assert len(noop_rows) == 2
+    assert any(r["detail"] == {"status": "resolved", "noop": True} for r in noop_rows)
 
 
 def test_flag_transition_backward_409(client, mock_dispatch, admin_session):
@@ -312,17 +328,31 @@ def test_callback_transition_matrix(client, admin_session, async_database_url):
 
 
 def test_callback_transition_idempotent_noop(client, admin_session, async_database_url):
-    cb_id = _seed_callback(async_database_url)
+    cb_id = _seed_callback(async_database_url, notes="secret callback noop note")
 
     first = client.patch(f"/v1/admin/callback-requests/{cb_id}", json={"status": "acknowledged"})
     assert first.status_code == 200, first.text
     stamps = (first.json()["status_updated_at"], first.json()["status_updated_by"])
     audits = _audit_count(client, "callback_request.update")
+    # Success legs write only the .update row — never a noop_read one.
+    assert _audit_count(client, "callback_request.noop_read") == 0
 
+    # ack -> ack replay: idempotent 200, no new .update audit row — but the body
+    # is still a PHI read (notes + elder_name), so a PHI-free noop_read audit row
+    # lands in the same request (spec §6.2).
     replay = client.patch(f"/v1/admin/callback-requests/{cb_id}", json={"status": "acknowledged"})
     assert replay.status_code == 200, replay.text
     assert (replay.json()["status_updated_at"], replay.json()["status_updated_by"]) == stamps
     assert _audit_count(client, "callback_request.update") == audits
+    noop_rows = client.get("/v1/admin/audit?action=callback_request.noop_read").json()
+    assert len(noop_rows) == 1
+    entry = noop_rows[0]
+    assert entry["detail"] == {"status": "acknowledged", "noop": True}
+    assert entry["entity_type"] == "callback_request"
+    assert entry["entity_id"] == str(cb_id)
+    blob = str(entry).lower()
+    assert "secret" not in blob
+    assert "noop note" not in blob
 
     resolved = client.patch(f"/v1/admin/callback-requests/{cb_id}", json={"status": "resolved"})
     assert resolved.status_code == 200, resolved.text
@@ -333,6 +363,9 @@ def test_callback_transition_idempotent_noop(client, admin_session, async_databa
     assert replay.status_code == 200, replay.text
     assert (replay.json()["status_updated_at"], replay.json()["status_updated_by"]) == stamps
     assert _audit_count(client, "callback_request.update") == audits
+    noop_rows = client.get("/v1/admin/audit?action=callback_request.noop_read").json()
+    assert len(noop_rows) == 2
+    assert any(r["detail"] == {"status": "resolved", "noop": True} for r in noop_rows)
 
 
 def test_callback_transition_backward_409(client, admin_session, async_database_url):

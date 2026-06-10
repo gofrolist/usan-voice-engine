@@ -262,7 +262,23 @@ async def update_follow_up_flag(
         if fresh is None:
             raise HTTPException(status_code=404, detail="flag not found")
         if fresh.status == body.status:
-            # Idempotent 200 no-op; no audit row, no metric, stamps untouched.
+            # Idempotent 200 no-op: stamps untouched, no .update row, transition
+            # metric NOT incremented. The response body is still a PHI read
+            # (reason + elder_name), so it writes a PHI-free noop_read audit row
+            # (spec §6.2) — same commit-with-rollback guard as the siblings.
+            try:
+                await admin_audit.record(
+                    db,
+                    actor_email=actor,
+                    action="follow_up_flag.noop_read",
+                    entity_type="follow_up_flag",
+                    entity_id=str(flag_id),
+                    detail={"status": fresh.status, "noop": True},  # status string ONLY
+                )
+                await db.commit()
+            except SQLAlchemyError:
+                await db.rollback()
+                raise
             return await _flag_response(db, fresh)
         logger.bind(
             flag_id=flag_id, actor=actor, from_status=fresh.status, to_status=body.status
@@ -308,7 +324,23 @@ async def update_callback_request(
         if fresh is None:
             raise HTTPException(status_code=404, detail="request not found")
         if fresh.status == body.status:
-            # Idempotent 200 no-op; no audit row, no metric, stamps untouched.
+            # Idempotent 200 no-op: stamps untouched, no .update row, transition
+            # metric NOT incremented. The response body is still a PHI read
+            # (notes + elder_name), so it writes a PHI-free noop_read audit row
+            # (spec §6.2) — same commit-with-rollback guard as the siblings.
+            try:
+                await admin_audit.record(
+                    db,
+                    actor_email=actor,
+                    action="callback_request.noop_read",
+                    entity_type="callback_request",
+                    entity_id=str(request_id),
+                    detail={"status": fresh.status, "noop": True},  # status string ONLY
+                )
+                await db.commit()
+            except SQLAlchemyError:
+                await db.rollback()
+                raise
             return await _callback_response(db, fresh)
         logger.bind(
             request_id=request_id, actor=actor, from_status=fresh.status, to_status=body.status
