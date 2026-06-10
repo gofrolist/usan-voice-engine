@@ -1,8 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
-import type { AdminCallSummary } from "../../types/api";
+import type { AdminCallDetail, AdminCallSummary } from "../../types/api";
 
 export const PAGE_SIZE = 50;
+
+// CallStatus values where the call has not finished. Transcript segments are
+// bulk-inserted and recordings finalized post-call, so empty transcript/recording
+// on one of these statuses means "not yet", not "none" (spec §5.3).
+const NON_TERMINAL_CALL_STATUSES = new Set(["queued", "dialing", "ringing", "in_progress"]);
+
+export function isCallInProgress(status: string): boolean {
+  return NON_TERMINAL_CALL_STATUSES.has(status);
+}
 
 export interface CallsFilters {
   elderId?: string;
@@ -26,5 +35,15 @@ export function useCalls(filters: CallsFilters, limit: number, offset: number) {
   return useQuery<AdminCallSummary[]>({
     queryKey: ["admin-calls", filters, limit, offset],
     queryFn: () => api.get<AdminCallSummary[]>(`/v1/admin/calls?${params.toString()}`),
+  });
+}
+
+// Each detail fetch re-signs a bearer recording URL and writes audit rows server-side,
+// so this query must NOT opt into focus-refetch — the global default
+// refetchOnWindowFocus: false (queryClient.ts) stands here (spec §5.3).
+export function useCall(id: string) {
+  return useQuery<AdminCallDetail>({
+    queryKey: ["admin-call", id],
+    queryFn: () => api.get<AdminCallDetail>(`/v1/admin/calls/${id}`),
   });
 }
