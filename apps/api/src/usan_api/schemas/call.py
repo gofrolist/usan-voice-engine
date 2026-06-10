@@ -12,6 +12,10 @@ from usan_api.db.models import Call, Transcript
 # verbatim as LiveKit agent-dispatch metadata, so it must stay small.
 MAX_DYNAMIC_VARS_BYTES = 8192
 
+# The materializer owns these prefixes (spec §2.2 invariant 3): a squatted key could
+# otherwise suppress or substitute a wellness call (§5.3 step 5 verifies ownership).
+RESERVED_KEY_PREFIXES = ("sched:", "batch:")
+
 
 class CreateCallRequest(BaseModel):
     elder_id: uuid.UUID
@@ -23,6 +27,13 @@ class CreateCallRequest(BaseModel):
     def _cap_dynamic_vars(cls, v: dict[str, Any]) -> dict[str, Any]:
         if len(json.dumps(v)) > MAX_DYNAMIC_VARS_BYTES:
             raise ValueError(f"dynamic_vars must serialize to <= {MAX_DYNAMIC_VARS_BYTES} bytes")
+        return v
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def _reject_reserved_namespace(cls, v: str) -> str:
+        if v.startswith(RESERVED_KEY_PREFIXES):
+            raise ValueError("idempotency_key prefixes 'sched:'/'batch:' are reserved")
         return v
 
 
