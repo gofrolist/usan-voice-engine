@@ -25,6 +25,7 @@ from usan_api.routers import (
     dnc,
     elders,
     runtime,
+    schedules,
     tools,
     webhooks,
 )
@@ -127,6 +128,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(elders.router)
     app.include_router(dnc.router)
+    app.include_router(schedules.router)
     app.include_router(calls.router)
     app.include_router(webhooks.router)
     app.include_router(tools.router)
