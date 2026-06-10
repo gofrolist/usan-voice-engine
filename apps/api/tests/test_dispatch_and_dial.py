@@ -219,6 +219,29 @@ async def test_dispatch_and_dial_requeues_outside_quiet_hours(monkeypatch, sessi
 
 
 @pytest.mark.asyncio
+async def test_requeue_for_quiet_hours_refuses_non_dialing_webhook_race(session_factory):
+    """The dial-time re-check's re-queue is guarded on DIALING: a row whose
+    outcome a racing webhook already wrote (e.g. COMPLETED) between claim and
+    re-queue must NOT flip back to QUEUED — the guarded transition claims
+    nothing and the terminal outcome is preserved."""
+    call_id, _ = await _seed_dialing_retry(session_factory, room="usan-outbound-race")
+    async with session_factory() as db:  # the webhook's terminal commit wins the race
+        await db.execute(update(Call).where(Call.id == call_id).values(status=CallStatus.COMPLETED))
+        await db.commit()
+
+    fresh_clamp = datetime(2026, 6, 11, 13, 0, tzinfo=UTC)
+    async with session_factory() as db:
+        requeued = await calls_repo.requeue_for_quiet_hours(db, call_id, scheduled_at=fresh_clamp)
+        assert requeued is None  # the guard claimed nothing
+        await db.commit()
+
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.COMPLETED  # webhook outcome preserved
+    assert call.scheduled_at is None  # no fresh clamp written
+
+
+@pytest.mark.asyncio
 async def test_dispatch_and_dial_inside_quiet_hours_proceeds(monkeypatch, session_factory):
     """Regression guard: inside [09:00, 21:00) elder-local the dial proceeds."""
     fake = _fake_api()
