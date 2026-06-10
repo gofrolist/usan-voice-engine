@@ -12,6 +12,7 @@ from usan_api.builtin_vars import resolve_builtin_vars
 from usan_api.db.base import CallStatus
 from usan_api.db.models import Call, Elder
 from usan_api.db.session import get_session_factory
+from usan_api.observability.custom_metrics import DIAL_REQUEUED_TOTAL
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
@@ -364,6 +365,8 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
             if allowed > now:
                 await calls_repo.requeue_for_quiet_hours(db, call_id, scheduled_at=allowed)
                 await db.commit()
+                # After the commit: a crash between write and commit must not count.
+                DIAL_REQUEUED_TOTAL.labels(reason="quiet_hours").inc()
                 logger.bind(call_id=str(call_id)).warning(
                     "Dial outside quiet hours; re-queued with fresh clamp"
                 )

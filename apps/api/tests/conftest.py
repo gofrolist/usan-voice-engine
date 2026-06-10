@@ -48,6 +48,19 @@ def counter_value(counter, **labels) -> float:
     return 0.0
 
 
+def gauge_value(gauge) -> float:
+    """Read an unlabeled Gauge's current value via the public collect() API.
+
+    Same collect()-based discipline as counter_value: an unlabeled Gauge exposes
+    exactly one sample whose name equals the family name.
+    """
+    for metric in gauge.collect():
+        for sample in metric.samples:
+            if sample.name == metric.name and sample.labels == {}:
+                return sample.value
+    return 0.0
+
+
 @pytest.fixture(scope="session")
 def database_url() -> str:
     with PostgresContainer(

@@ -7,13 +7,24 @@ Metrics register against the process-global default registry at import time, so
 they are created exactly once per process (module import is cached). Labels are
 a small, bounded, PHI-FREE set — never put call_id, elder id, phone number, or
 free-text reasons in a label (unbounded cardinality and a PHI leak; spec §6/§15).
+
+Increment-after-commit discipline (batch/scheduler spec §7): counters that
+mirror a DB state transition are incremented only AFTER that transition's
+commit, so a crash between write and commit can never double-count.
+
+Structurally impossible usan_materialized_calls_total label combinations —
+never emitted (batch/scheduler spec §7):
+- result="skipped_elder_deleted" with source="schedule": deleting an elder
+  CASCADE-deletes their schedules, so a schedule row never outlives its elder.
+- result="skipped_window" or result="rescheduled" with source="batch": batch
+  targets have no next_run_at, hence no window to miss or reschedule past.
 """
 
 import functools
 from collections.abc import Awaitable, Callable
 from typing import ParamSpec, TypeVar
 
-from prometheus_client import Counter
+from prometheus_client import Counter, Gauge
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -70,6 +81,53 @@ SMS_MESSAGES_TOTAL = Counter(
     "usan_sms_messages",
     "SMS messages by terminal status.",
     labelnames=("status",),
+)
+
+# source: schedule|batch ; result: created|replayed|dnc_blocked|skipped_window|
+# skipped_invalid_timezone|skipped_daily_cap|skipped_elder_deleted|rescheduled|
+# key_conflict. Incremented per materialization decision, after commit. See the
+# module docstring for the structurally impossible source x result combinations.
+MATERIALIZED_CALLS_TOTAL = Counter(
+    "usan_materialized_calls",
+    "Schedule/batch materialization decisions.",
+    labelnames=("source", "result"),
+)
+
+# event: created|started|completed|cancelled — incremented after each batch
+# lifecycle transition commits.
+BATCH_EVENTS_TOTAL = Counter(
+    "usan_batch_events",
+    "Batch lifecycle transitions.",
+    labelnames=("event",),
+)
+
+# final_status: the bounded 7-value settled-chain outcome set (spec §6.2) —
+# incremented by the finalizer, after commit.
+BATCH_TARGETS_FINALIZED_TOTAL = Counter(
+    "usan_batch_targets_finalized",
+    "Batch targets reaching a settled chain outcome.",
+    labelnames=("final_status",),
+)
+
+# reason: quiet_hours — the dial-time TCPA re-check re-queued a claimed dial
+# instead of dialing it (incremented after the re-queue commit).
+DIAL_REQUEUED_TOTAL = Counter(
+    "usan_dial_requeued",
+    "Claimed dials re-queued instead of dialed.",
+    labelnames=("reason",),
+)
+
+# Set every retry-poller cycle (all flag states — pre-enable observability):
+# the §5.4 recency-bounded count of dialing/ringing/in_progress calls.
+IN_FLIGHT_CALLS = Gauge(
+    "usan_in_flight_calls",
+    "Recency-bounded dialing/ringing/in_progress calls (gate input).",
+)
+
+# Set every retry-poller cycle alongside IN_FLIGHT_CALLS.
+DIAL_SLOTS_FREE = Gauge(
+    "usan_dial_slots_free",
+    "max_concurrent_calls - reserved - in_flight, floor 0. Alert: ==0 for 10m.",
 )
 
 

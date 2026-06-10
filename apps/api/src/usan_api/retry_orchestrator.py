@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from usan_api import background, livekit_dispatch
 from usan_api.db.session import get_session_factory
+from usan_api.observability.custom_metrics import DIAL_SLOTS_FREE, IN_FLIGHT_CALLS
 from usan_api.repositories import calls as calls_repo
 from usan_api.settings import Settings
 
@@ -68,6 +69,11 @@ async def poll_once(
             db, now=moment, max_age_s=settings.outbound_max_call_duration_s + 120
         )
         free = max(0, settings.max_concurrent_calls - settings.reserved_concurrency - in_flight)
+        # Export the gauges every cycle, in all flag states (spec §5.4(2)/§7):
+        # they live here — not in the scheduler, which may be disabled while the
+        # gate is live — so the dial-slot picture is truthful pre-enable too.
+        IN_FLIGHT_CALLS.set(in_flight)
+        DIAL_SLOTS_FREE.set(free)
         claimed: list[uuid.UUID]
         if settings.autonomous_dialing_paused:
             logger.bind(component="retry_poller").warning(
