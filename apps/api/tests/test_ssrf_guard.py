@@ -15,46 +15,51 @@ from usan_api.ssrf_guard import SsrfBlocked, resolve_public_or_raise, validate_w
 
 
 @pytest.mark.parametrize(
-    "url",
+    ("url", "match"),
     [
         # scheme
-        "http://hooks.example.com/x",
+        ("http://hooks.example.com/x", "scheme must be https"),
         # IP literals — rejected outright, public included (§8.1: the rule is
         # "host must be a DNS name", NOT "host must not be private"; an
         # is_private-based implementation must fail the two public literals)
-        "https://192.168.1.1/",
-        "https://[::1]/",
-        "https://93.184.216.34/",
-        "https://[2606:2800:220:1:248:1893:25c8:1946]/",
+        ("https://192.168.1.1/", "not an IP literal"),
+        ("https://[::1]/", "not an IP literal"),
+        ("https://93.184.216.34/", "not an IP literal"),
+        ("https://[2606:2800:220:1:248:1893:25c8:1946]/", "not an IP literal"),
         # bracketed IPv6 decoys
-        "https://[fe80::1]/",
-        "https://[fd00::1]/",
-        "https://[::ffff:169.254.169.254]/",
-        # inet_aton decoy literal forms (bare decimal / hex / dotted hex / octal)
-        "https://2130706433/",
-        "https://0x7f000001/",
-        "https://0x7f.0.0.1/",
-        "https://0177.0.0.1/",
+        ("https://[fe80::1]/", "not an IP literal"),
+        ("https://[fd00::1]/", "not an IP literal"),
+        ("https://[::ffff:169.254.169.254]/", "not an IP literal"),
+        # inet_aton decoy literal forms (bare decimal / hex / dotted hex /
+        # octal). The match pins the DECOY branch: the two single-label forms
+        # (bare-decimal, plain hex) would otherwise be shadowed by the
+        # single-label rejection and the decoy branch could silently rot.
+        ("https://2130706433/", "numeric IP decoy literal"),
+        ("https://0x7f000001/", "numeric IP decoy literal"),
+        ("https://0x7f.0.0.1/", "numeric IP decoy literal"),
+        ("https://0177.0.0.1/", "numeric IP decoy literal"),
         # hostname denylist (normalized: lowercase, trailing dot stripped)
-        "https://localhost/x",
-        "https://foo.localhost/",
-        "https://printer.local/",
-        "https://foo.internal/",
-        "https://metadata.google.internal/",
-        "https://metadata.google.internal./computeMetadata",
-        "https://METADATA.GOOGLE.INTERNAL/",
-        "https://host.home.arpa/",
+        ("https://localhost/x", "internal hostname"),
+        ("https://foo.localhost/", "internal hostname"),
+        ("https://printer.local/", "internal hostname"),
+        ("https://foo.internal/", "internal hostname"),
+        ("https://metadata.google.internal/", "internal hostname"),
+        ("https://metadata.google.internal./computeMetadata", "internal hostname"),
+        ("https://METADATA.GOOGLE.INTERNAL/", "internal hostname"),
+        ("https://host.home.arpa/", "internal hostname"),
         # single-label host
-        "https://intranet/",
+        ("https://intranet/", "single-label hostname"),
         # userinfo / fragment / port / length
-        "https://user:pass@hooks.example.com/",
-        "https://hooks.example.com/x#frag",
-        "https://hooks.example.com:8080/",
-        "https://hooks.example.com/" + "a" * 2050,
+        ("https://user:pass@hooks.example.com/", "must not contain userinfo"),
+        ("https://hooks.example.com/x#frag", "must not contain a fragment"),
+        ("https://hooks.example.com:8080/", "port must be 443 or 8443"),
+        ("https://hooks.example.com/" + "a" * 2050, "longer than 2048 characters"),
     ],
 )
-def test_validate_webhook_url_rejects(url: str):
-    with pytest.raises(ValueError):  # noqa: PT011 - each message names its rule
+def test_validate_webhook_url_rejects(url: str, match: str):
+    # match= pins each row to ITS rule's stable message — a bare ValueError
+    # would let one rejection branch shadow another (review fix).
+    with pytest.raises(ValueError, match=match):
         validate_webhook_url(url)
 
 
