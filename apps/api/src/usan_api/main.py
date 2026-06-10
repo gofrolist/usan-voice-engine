@@ -7,7 +7,13 @@ from loguru import logger
 from pydantic import BaseModel
 from starlette.middleware.base import RequestResponseEndpoint
 
-from usan_api import background, retention, retry_orchestrator, schedule_orchestrator
+from usan_api import (
+    background,
+    retention,
+    retry_orchestrator,
+    schedule_orchestrator,
+    webhook_delivery,
+)
 from usan_api.db.session import dispose_engine, get_session_factory
 from usan_api.logging_config import configure_logging
 from usan_api.observability.instrumentation import setup_metrics
@@ -71,6 +77,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         poller_tasks.append(asyncio.create_task(retention.run_poller(settings, stop)))
     if settings.scheduler_poller_enabled:
         poller_tasks.append(asyncio.create_task(schedule_orchestrator.run_poller(settings, stop)))
+    # The webhook delivery poller ALWAYS starts (spec §5.1): WEBHOOK_DELIVERY_ENABLED
+    # gates only the claim+POST half of each cycle; the housekeeping half (crash-residue
+    # sweep, 7-day expiry, 30-day prune) and the pending-depth gauge must run even with
+    # the flag off so a flag-off backlog is swept, expired, and visible.
+    # Test-suite note: every `client`-fixture test therefore runs this poller live.
+    # That is safe because (a) flag-off means the delivery half never claims rows, and
+    # (b) the task holds THIS lifespan-time Settings snapshot — a per-test
+    # setenv("WEBHOOK_DELIVERY_ENABLED", "true") flips per-request settings but never
+    # the running poller, so enqueued ping rows stay deterministically 'pending'. Its
+    # first cycle runs real housekeeping SQL against the shared test DB; harmless,
+    # since sweep/expire/prune only touch rows older than their thresholds.
+    poller_tasks.append(asyncio.create_task(webhook_delivery.run_poller(settings, stop)))
     try:
         yield
     finally:

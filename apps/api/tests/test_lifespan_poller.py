@@ -3,11 +3,32 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from usan_api import retry_orchestrator, schedule_orchestrator
+from usan_api import retry_orchestrator, schedule_orchestrator, webhook_delivery
 from usan_api.main import create_app
 from usan_api.settings import get_settings
 
 TEST_SECRET = "a" * 32
+
+
+@pytest.fixture(autouse=True)
+def webhook_poller_state(monkeypatch):
+    """Fake webhook_delivery.run_poller for EVERY lifespan entry in this module.
+
+    The webhook delivery poller is started unconditionally by lifespan, so
+    without this fake each test here would run the REAL poller against the
+    bogus postgresql://u:p@host/db URL and ERROR-spam via its per-cycle
+    try/except. The two webhook-poller tests below assert against the
+    recorded state.
+    """
+    state: dict = {"started": False, "stop": None}
+
+    async def _fake_run_poller(settings, stop):
+        state["started"] = True
+        state["stop"] = stop
+        await stop.wait()  # block until shutdown signals stop
+
+    monkeypatch.setattr(webhook_delivery, "run_poller", _fake_run_poller)
+    return state
 
 
 def _set_env(monkeypatch):
@@ -117,3 +138,42 @@ def test_lifespan_skips_scheduler_poller_by_default(monkeypatch):
         assert c.get("/health").status_code == 200
 
     assert started["v"] is False  # scheduler poller never started
+
+
+def test_lifespan_always_starts_webhook_poller(monkeypatch, webhook_poller_state):
+    """The webhook delivery poller starts unconditionally — no flag env set at all."""
+    _set_env(monkeypatch)
+    monkeypatch.delenv("WEBHOOK_DELIVERY_ENABLED", raising=False)
+    monkeypatch.setenv("RETRY_POLLER_ENABLED", "true")
+    retry_state: dict = {"stop": None}
+
+    async def _fake_retry_poller(settings, stop):
+        retry_state["stop"] = stop
+        await stop.wait()
+
+    monkeypatch.setattr(retry_orchestrator, "run_poller", _fake_retry_poller)
+    get_settings.cache_clear()
+
+    app = create_app()
+    with TestClient(app) as c:
+        assert c.get("/health").status_code == 200
+        assert webhook_poller_state["started"] is True
+
+    assert isinstance(webhook_poller_state["stop"], asyncio.Event)
+    assert webhook_poller_state["stop"] is retry_state["stop"]  # all pollers share one stop event
+    assert webhook_poller_state["stop"].is_set()  # shutdown set the stop event
+
+
+def test_webhook_poller_starts_even_with_flag_off(monkeypatch, webhook_poller_state):
+    """WEBHOOK_DELIVERY_ENABLED=false gates delivery only — the task still starts (§5.1)."""
+    _set_env(monkeypatch)
+    monkeypatch.setenv("WEBHOOK_DELIVERY_ENABLED", "false")
+    monkeypatch.setenv("RETRY_POLLER_ENABLED", "false")
+    get_settings.cache_clear()
+
+    app = create_app()
+    with TestClient(app) as c:
+        assert c.get("/health").status_code == 200
+        assert webhook_poller_state["started"] is True  # flag-off still starts the task
+
+    assert webhook_poller_state["stop"].is_set()  # shutdown set the stop event
