@@ -9,20 +9,26 @@ import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from usan_api import phi_audit, recording_urls
 from usan_api.admin_actor import get_actor_email
 from usan_api.auth import require_admin_session
+from usan_api.client_ip import client_ip
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
 from usan_api.masking import mask_phone
 from usan_api.repositories import admin_audit
 from usan_api.repositories import admin_calls as admin_calls_repo
-from usan_api.schemas.admin_calls import AdminCallSummary
-from usan_api.schemas.call import parse_origin
+from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import transcripts as transcripts_repo
+from usan_api.schemas.admin_calls import AdminCallDetail, AdminCallSummary
+from usan_api.schemas.call import TranscriptSegment, parse_origin
+from usan_api.settings import Settings, get_settings
 
 router = APIRouter(
     prefix="/v1/admin",
@@ -114,3 +120,82 @@ async def list_calls(
         await db.rollback()
         raise
     return [_summary(call, elder_name, phone) for call, elder_name, phone in rows]
+
+
+@router.get("/calls/{call_id}", response_model=AdminCallDetail)
+async def get_call_detail(
+    call_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    actor: str = Depends(get_actor_email),
+) -> AdminCallDetail:
+    """Call detail + transcript + TTL-clamped presigned recording URL (spec §4.2).
+
+    Mirrors operator ``get_call``'s helper order; every detail GET is one audit
+    row plus the locked-sink lines — per-access granularity is the point (§6).
+    """
+    call = await calls_repo.get_call(db, call_id)
+    if call is None:
+        raise HTTPException(status_code=404, detail="call not found")
+    # Real client IP (X-Forwarded-For first hop behind Caddy), so the PHI access
+    # trail names the nurse's workstation rather than the proxy container.
+    client_host = client_ip(request)
+    # Admin-plane TTL ceiling: a signed URL is IP-unbound (it defeats the CIDR gate
+    # once issued), so exposure is capped at ADMIN_RECORDING_URL_MAX_TTL_S. The
+    # helper emits the locked-sink "Recording URL accessed" line with actor bound.
+    url = await recording_urls.presigned_recording_url(
+        call,
+        settings,
+        client_host=client_host,
+        actor=actor,
+        max_ttl_s=recording_urls.ADMIN_RECORDING_URL_MAX_TTL_S,
+    )
+    ttl_s = (
+        min(settings.recording_signed_url_ttl_s, recording_urls.ADMIN_RECORDING_URL_MAX_TTL_S)
+        if url
+        else None
+    )
+    transcript = await transcripts_repo.list_for_call(db, call_id)
+    if transcript:
+        # PHI access audit (spec §6.1): only when non-empty (operator-plane parity);
+        # segment count, client host, and actor — never the content itself.
+        phi_audit.log_transcript_accessed(
+            call_id=call_id, client=client_host, actor=actor, segments=len(transcript)
+        )
+    elder = await elders_repo.get_elder(db, call.elder_id) if call.elder_id is not None else None
+    # PHI read -> audit row in the same commit; detail carries counts/flags only,
+    # never names/phones/content. Guarded so a transient DB error rolls the
+    # session back instead of leaving it dirty (matches calls.list above).
+    try:
+        await admin_audit.record(
+            db,
+            actor_email=actor,
+            action="calls.get",
+            entity_type="call",
+            entity_id=str(call_id),
+            detail={
+                "segments": len(transcript),
+                "has_recording": call.recording_uri is not None,
+            },
+        )
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        raise
+    summary = _summary(
+        call,
+        elder.name if elder is not None else None,
+        elder.phone_e164 if elder is not None else None,
+    )
+    return AdminCallDetail(
+        **summary.model_dump(),
+        livekit_room=call.livekit_room,
+        parent_call_id=call.parent_call_id,
+        scheduled_at=call.scheduled_at,
+        answered_at=call.answered_at,
+        recording_status=call.recording_status,
+        presigned_recording_url=url,
+        recording_url_ttl_s=ttl_s,
+        transcript=[TranscriptSegment.from_model(t) for t in transcript],
+    )
