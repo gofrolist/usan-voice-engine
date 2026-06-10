@@ -142,6 +142,30 @@ def test_schedules_and_batches_routes_throttled_pre_auth(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_is_operator_route_matches_webhook_planes():
+    from usan_api.ratelimit import _is_operator_route
+
+    assert _is_operator_route("POST", "/v1/webhook-endpoints")
+    assert _is_operator_route("GET", "/v1/webhook-endpoints/abc/deliveries")
+    assert _is_operator_route("PATCH", "/v1/webhook-endpoints/abc")
+    assert _is_operator_route("POST", "/v1/webhook-deliveries/abc/redeliver")
+
+
+def test_webhook_routes_throttled_pre_auth(monkeypatch):
+    # Mirror of test_schedules_and_batches_routes_throttled_pre_auth: the webhook
+    # endpoint/delivery operator routes must be throttled pre-auth too — the limiter
+    # runs in middleware, before routing and auth, so an unauthenticated flood is
+    # bounded even on these routes.
+    app = _app_with_env(monkeypatch, RATE_LIMIT_ENABLED="true", RATE_LIMIT_DEFAULT="2/minute")
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        codes = [client.get("/v1/webhook-endpoints").status_code for _ in range(5)]
+        assert 429 in codes
+        assert codes.index(429) >= 2  # the first two (the budget) were not throttled
+    finally:
+        get_settings.cache_clear()
+
+
 def test_admin_responses_are_no_store(client, admin_session):
     # Transcript JSON and live bearer recording URLs must never be written to a
     # shared nurse workstation's HTTP cache (spec §8): every /v1/admin/* response
