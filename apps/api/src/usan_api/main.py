@@ -2,9 +2,10 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from loguru import logger
 from pydantic import BaseModel
+from starlette.middleware.base import RequestResponseEndpoint
 
 from usan_api import background, retention, retry_orchestrator, schedule_orchestrator
 from usan_api.db.session import dispose_engine, get_session_factory
@@ -117,6 +118,16 @@ def create_app() -> FastAPI:
         openapi_url=openapi_url,
     )
     _install_rate_limiting(app, settings)
+
+    @app.middleware("http")
+    async def _admin_no_store(request: Request, call_next: RequestResponseEndpoint) -> Response:
+        # Transcript JSON and live bearer recording URLs must never be written to a
+        # shared workstation's HTTP cache (spec §8). Neither the API nor Caddy sets
+        # cache headers otherwise; scoped to the admin plane only.
+        response = await call_next(request)
+        if request.url.path.startswith("/v1/admin/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
