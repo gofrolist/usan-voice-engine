@@ -146,6 +146,23 @@ class Settings(BaseSettings):
     )
     autonomous_dialing_paused: bool = Field(default=False, alias="AUTONOMOUS_DIALING_PAUSED")
 
+    # --- Outbound event webhooks (Phase A3, webhooks design §5.1). The deliberate
+    # WEBHOOK_DELIVERY_ prefix keeps this namespace disjoint from the INBOUND
+    # LiveKit-verification WEBHOOK_MAX_AGE_S above. Ship-inert: the flag defaults
+    # False, gating only the delivery half of the always-on poller (housekeeping
+    # runs regardless). No startup cross-field validator is needed — signing
+    # secrets are per-endpoint rows, so flag-on alone is a valid configuration.
+    webhook_delivery_enabled: bool = Field(default=False, alias="WEBHOOK_DELIVERY_ENABLED")
+    webhook_delivery_poll_interval_s: int = Field(
+        default=10, ge=5, le=300, alias="WEBHOOK_DELIVERY_POLL_INTERVAL_S"
+    )
+    webhook_delivery_timeout_s: int = Field(
+        default=10, ge=1, le=60, alias="WEBHOOK_DELIVERY_TIMEOUT_S"
+    )
+    webhook_delivery_circuit_breaker_threshold: int = Field(
+        default=10, ge=1, le=100, alias="WEBHOOK_DELIVERY_CIRCUIT_BREAKER_THRESHOLD"
+    )
+
     @model_validator(mode="after")
     def _reserved_below_max(self) -> Settings:
         # The gate computes max - reserved - in_flight; reserved >= max means the
