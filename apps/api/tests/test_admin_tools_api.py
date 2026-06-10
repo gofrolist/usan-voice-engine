@@ -540,3 +540,73 @@ def test_flags_audit_detail_gains_offset_and_severity(client, mock_dispatch, adm
     blob = str(entry).lower()
     assert "secret" not in blob
     assert phone not in blob
+
+
+# --- C4: GET /v1/admin/queues/summary — PHI-free counts, no audit row (spec §4.5) ---
+
+
+def test_queues_summary_counts_match_seeds(
+    client, mock_dispatch, admin_session, async_database_url
+):
+    # 2 open flags (1 urgent), 1 acknowledged flag, 1 resolved flag.
+    _seed_flag(client, severity="urgent")
+    _seed_flag(client, severity="routine")
+    _e, _c, ack_flag = _seed_flag(client, severity="routine")
+    r = client.patch(f"/v1/admin/follow-up-flags/{ack_flag}", json={"status": "acknowledged"})
+    assert r.status_code == 200, r.text
+    _e, _c, res_flag = _seed_flag(client, severity="routine")
+    r = client.patch(f"/v1/admin/follow-up-flags/{res_flag}", json={"status": "resolved"})
+    assert r.status_code == 200, r.text
+
+    # 1 open callback, 1 acknowledged callback.
+    _seed_callback(async_database_url)
+    ack_cb = _seed_callback(async_database_url)
+    r = client.patch(f"/v1/admin/callback-requests/{ack_cb}", json={"status": "acknowledged"})
+    assert r.status_code == 200, r.text
+
+    r = client.get("/v1/admin/queues/summary")
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "flags_open": 2,
+        "flags_open_urgent": 1,
+        "flags_acknowledged": 1,
+        "callbacks_open": 1,
+        "callbacks_acknowledged": 1,
+    }
+
+
+def test_queues_summary_viewer_readable_no_audit_no_phi(
+    client, mock_dispatch, admin_session, async_database_url
+):
+    elder_id, phone = _create_elder_with_phone(client)
+    call_id = _enqueue(client, elder_id)
+    _flag_call(client, call_id, reason="secret summary reason")
+    _seed_callback(async_database_url, notes="secret summary callback note")
+
+    _as_viewer(client, async_database_url)
+    audits_before = len(client.get("/v1/admin/audit").json())
+
+    r = client.get("/v1/admin/queues/summary")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) == {
+        "flags_open",
+        "flags_open_urgent",
+        "flags_acknowledged",
+        "callbacks_open",
+        "callbacks_acknowledged",
+    }
+    assert all(isinstance(v, int) for v in body.values())
+    # Counts only — never a name, phone, or reason/notes string (spec §4.5).
+    text_lower = r.text.lower()
+    assert "ada" not in text_lower
+    assert "secret" not in text_lower
+    assert phone not in r.text
+
+    # Deliberately UN-audited: PHI-free aggregate backing tab badges, may be
+    # refetched often (spec §4.5) — the audit row count must not move.
+    assert len(client.get("/v1/admin/audit").json()) == audits_before
+
+
+def test_queues_summary_requires_session(client):
+    assert client.get("/v1/admin/queues/summary").status_code == 401

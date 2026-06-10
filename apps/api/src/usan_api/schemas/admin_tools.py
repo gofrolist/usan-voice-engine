@@ -18,6 +18,20 @@ class QueueStatusUpdateRequest(BaseModel):
     status: Literal["acknowledged", "resolved"]  # "open" is not a settable target -> 422
 
 
+class QueuesSummary(BaseModel):
+    """PHI-free ops-queue counts backing the UI tab badges (spec §4.5).
+
+    Counts only — never a name, phone, reason, or notes string. The serving
+    endpoint is deliberately un-audited (see routers/admin_tools.py).
+    """
+
+    flags_open: int
+    flags_open_urgent: int
+    flags_acknowledged: int
+    callbacks_open: int
+    callbacks_acknowledged: int
+
+
 class FollowupFlagSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

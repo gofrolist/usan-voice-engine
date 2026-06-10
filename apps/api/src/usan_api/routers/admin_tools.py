@@ -29,6 +29,7 @@ from usan_api.repositories import sms_messages as sms_repo
 from usan_api.schemas.admin_tools import (
     CallbackRequestSummary,
     FollowupFlagSummary,
+    QueuesSummary,
     QueueStatusUpdateRequest,
     SmsMessageSummary,
 )
@@ -202,6 +203,26 @@ async def list_sms_messages(
         await db.rollback()
         raise
     return [SmsMessageSummary.model_validate(r) for r in rows]
+
+
+# --- PHI-free queue counts (spec §4.5) -----------------------------------------
+
+
+@router.get("/queues/summary", response_model=QueuesSummary)
+async def queues_summary(db: AsyncSession = Depends(get_db)) -> QueuesSummary:
+    # PHI-free aggregate (counts only) backing the UI tab badges; may be
+    # refetched often. Deliberately UN-audited: no admin_audit row, no commit,
+    # no sink line (spec §4.5) — HTTP metrics already account for usage.
+    # Viewer-readable: the router-level require_admin_session is the only gate.
+    flag_counts = await follow_up_flags_repo.count_by_status(db)
+    callback_counts = await callback_requests_repo.count_by_status(db)
+    return QueuesSummary(
+        flags_open=flag_counts.get("open", 0),
+        flags_open_urgent=await follow_up_flags_repo.count_open_urgent(db),
+        flags_acknowledged=flag_counts.get("acknowledged", 0),
+        callbacks_open=callback_counts.get("open", 0),
+        callbacks_acknowledged=callback_counts.get("acknowledged", 0),
+    )
 
 
 # --- Ops-queue status transitions (spec §4.3) ---------------------------------
