@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import type { AdminCallSummary } from "../types/api";
 
 const getMock = vi.fn();
@@ -67,7 +67,17 @@ function renderPage(initialEntry = "/calls") {
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
-          <Route path="/calls" element={<CallsPage />} />
+          <Route
+            path="/calls"
+            element={
+              <>
+                <CallsPage />
+                {/* Deep-link probe: elder_id arrives via the URL while the page
+                    stays mounted (queue rows / call detail link here). */}
+                <Link to="/calls?elder_id=22222222-2222-2222-2222-222222222222">ELDER LINK</Link>
+              </>
+            }
+          />
           <Route path="/calls/:id" element={<div>DETAIL</div>} />
         </Routes>
       </MemoryRouter>
@@ -118,6 +128,18 @@ describe("CallsPage", () => {
     await user.selectOptions(screen.getByLabelText("Status"), "completed");
     await waitFor(() => {
       expect(lastUrl()).toContain("status=completed");
+      expect(lastUrl()).toContain("offset=0");
+    });
+
+    // The elder filter is URL-driven (deep links) — changing it while the page
+    // stays mounted must also restart paging, or the new elder's (shorter)
+    // result set can land beyond its last page.
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(lastUrl()).toContain("offset=50"));
+
+    await user.click(screen.getByText("ELDER LINK"));
+    await waitFor(() => {
+      expect(lastUrl()).toContain("elder_id=22222222-2222-2222-2222-222222222222");
       expect(lastUrl()).toContain("offset=0");
     });
   });
