@@ -22,7 +22,7 @@ mutators stays cheap).
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import webhook_events
@@ -67,3 +67,88 @@ async def enqueue_ping(db: AsyncSession, *, endpoint_id: uuid.UUID) -> WebhookDe
     await db.flush()
     await db.refresh(row)
     return row
+
+
+async def pending_counts(db: AsyncSession) -> dict[uuid.UUID, int]:
+    """Per-endpoint pending backlog for the endpoint list (spec §4/§9).
+
+    Absent key == zero pending — callers default missing endpoints to 0.
+    """
+    result = await db.execute(
+        select(WebhookDelivery.endpoint_id, func.count())
+        .where(WebhookDelivery.status == "pending")
+        .group_by(WebhookDelivery.endpoint_id)
+    )
+    return {endpoint_id: int(count) for endpoint_id, count in result.all()}
+
+
+async def count_pending_for_endpoint(db: AsyncSession, endpoint_id: uuid.UUID) -> int:
+    """Pending count for one endpoint (the redeliver 100-row backpressure cap, §8.4)."""
+    result = await db.execute(
+        select(func.count())
+        .select_from(WebhookDelivery)
+        .where(
+            WebhookDelivery.endpoint_id == endpoint_id,
+            WebhookDelivery.status == "pending",
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def get_delivery(db: AsyncSession, delivery_id: uuid.UUID) -> WebhookDelivery | None:
+    return await db.get(WebhookDelivery, delivery_id)
+
+
+async def list_deliveries(
+    db: AsyncSession,
+    *,
+    endpoint_id: uuid.UUID,
+    status: str | None = None,
+    event: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[WebhookDelivery]:
+    """Newest-first page for the operator debugging surface (spec §4).
+
+    Ordered ``(created_at, id) DESC`` to match ``idx_webhook_deliveries_endpoint``;
+    the id tiebreak is load-bearing because fan-out inserts share one transaction
+    timestamp. ``limit`` clamped to 1..100.
+    """
+    stmt = select(WebhookDelivery).where(WebhookDelivery.endpoint_id == endpoint_id)
+    if status is not None:
+        stmt = stmt.where(WebhookDelivery.status == status)
+    if event is not None:
+        stmt = stmt.where(WebhookDelivery.event == event)
+    stmt = (
+        stmt.order_by(WebhookDelivery.created_at.desc(), WebhookDelivery.id.desc())
+        .limit(max(1, min(limit, 100)))
+        .offset(max(offset, 0))
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def redeliver(db: AsyncSession, delivery_id: uuid.UUID) -> uuid.UUID | None:
+    """Guarded SQL reset back into the pipeline (spec §4).
+
+    The status predicate is load-bearing: a Python status check would race the
+    poller's in-flight claim of a row that just flipped to pending. Returns the
+    id, or None when the row is missing or already pending (router 409s).
+    ``next_attempt_at = now()`` makes the row immediately due.
+    """
+    result = await db.execute(
+        update(WebhookDelivery)
+        .where(
+            WebhookDelivery.id == delivery_id,
+            WebhookDelivery.status.in_(("delivered", "failed")),
+        )
+        .values(
+            status="pending",
+            attempts=0,
+            next_attempt_at=func.now(),
+            response_code=None,
+            last_error=None,
+        )
+        .returning(WebhookDelivery.id)
+    )
+    return result.scalar_one_or_none()
