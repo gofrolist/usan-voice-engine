@@ -102,7 +102,7 @@ async def test_list_callback_requests_filters_by_status(session_factory):
         open_rows = await cb_repo.list_callback_requests(
             db, status="open", elder_id=elder_id, limit=50
         )
-        assert [r.id for r in open_rows] == [row.id]
+        assert [r.id for (r, _, _) in open_rows] == [row.id]
 
         resolved_rows = await cb_repo.list_callback_requests(
             db, status="resolved", elder_id=elder_id, limit=50
@@ -125,7 +125,7 @@ async def test_list_callback_requests_filters_by_elder(session_factory):
         await db.commit()
 
         mine = await cb_repo.list_callback_requests(db, elder_id=elder_id)
-        assert [r.id for r in mine] == [row.id]
+        assert [r.id for (r, _, _) in mine] == [row.id]
 
         theirs = await cb_repo.list_callback_requests(db, elder_id=other_elder_id)
         assert theirs == []
@@ -233,6 +233,35 @@ async def test_update_status_guarded_state_machine(session_factory):
         assert untouched.status_updated_at == first_stamp
         assert untouched.status_updated_by == "nurse@usan.org"
         await db.commit()
+
+
+async def test_list_callback_requests_returns_elder_join_tuples(session_factory):
+    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    async with session_factory() as db:
+        row = await _create_request(db, call_id, elder_id)
+        await db.commit()
+
+        elder = await elders_repo.get_elder(db, elder_id)
+        assert elder is not None
+
+        [(req, elder_name, phone)] = await cb_repo.list_callback_requests(db, elder_id=elder_id)
+        assert req.id == row.id
+        assert elder_name == "Callback Elder"
+        assert phone == elder.phone_e164
+
+
+async def test_list_callback_requests_offset_newest_first(session_factory):
+    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    async with session_factory() as db:
+        rows = [await _create_request(db, call_id, elder_id) for _ in range(3)]
+        await db.commit()
+        newest_first = [r.id for r in reversed(rows)]
+
+        # Ordering unchanged by C3: still newest-first (no urgent-first here).
+        page0 = await cb_repo.list_callback_requests(db, elder_id=elder_id)
+        assert [r.id for (r, _, _) in page0] == newest_first
+        page1 = await cb_repo.list_callback_requests(db, elder_id=elder_id, offset=1)
+        assert [r.id for (r, _, _) in page1] == newest_first[1:]
 
 
 async def test_count_by_status_groups(session_factory):

@@ -24,6 +24,10 @@ class FollowupFlagSummary(BaseModel):
     id: int
     call_id: uuid.UUID
     elder_id: uuid.UUID
+    # C3 elder identity (spec §4.4): a nurse seeing "urgent / medical / chest
+    # pain" must not need an audited transcript read just to learn WHO.
+    elder_name: str | None  # outer-join; None if the elder row was deleted
+    masked_phone: str  # computed by the router via masking.mask_phone — never the raw phone
     severity: str
     category: str
     reason: str | None
@@ -40,6 +44,9 @@ class CallbackRequestSummary(BaseModel):
     id: int
     call_id: uuid.UUID
     elder_id: uuid.UUID
+    # C3 elder identity (spec §4.4); see FollowupFlagSummary.
+    elder_name: str | None
+    masked_phone: str  # computed by the router via masking.mask_phone — never the raw phone
     requested_time_text: str
     requested_at: datetime | None
     notes: str | None

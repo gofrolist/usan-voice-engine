@@ -84,8 +84,11 @@ def test_follow_up_flags_list_and_filter(client, mock_dispatch, admin_session):
 
     open_rows = client.get("/v1/admin/follow-up-flags?status=open").json()
     assert any(f["id"] == flag_id for f in open_rows)
-    closed_rows = client.get("/v1/admin/follow-up-flags?status=closed").json()
-    assert all(f["id"] != flag_id for f in closed_rows)
+    resolved_rows = client.get("/v1/admin/follow-up-flags?status=resolved").json()
+    assert all(f["id"] != flag_id for f in resolved_rows)
+    # C3 deliberate change (spec §4.4): junk status is a typed 422, no longer a
+    # silent 200-empty.
+    assert client.get("/v1/admin/follow-up-flags?status=closed").status_code == 422
 
     # Over-cap limit rejected by Query(le=...).
     assert client.get("/v1/admin/follow-up-flags?limit=100000").status_code == 422
@@ -431,3 +434,109 @@ def test_transition_metric_after_commit_not_noop(
         counter_value(ADMIN_QUEUE_TRANSITIONS_TOTAL, queue="callback_request", to_status="resolved")
         == cb_before + 1
     )
+
+
+# --- C3: queue list enrichment — elder identity, severity, urgent-first, offset (spec §4.4) ---
+
+
+def _create_elder_with_phone(client) -> tuple[str, str]:
+    phone = f"+1555{str(uuid.uuid4().int)[:7]}"
+    r = client.post(
+        "/v1/elders",
+        json={"name": "Ada", "phone_e164": phone, "timezone": "UTC", "metadata": {}},
+        headers=_OP,
+    )
+    assert r.status_code == 201
+    return r.json()["id"], phone
+
+
+def _flag_call(
+    client, call_id: str, *, severity="urgent", category="medical", reason="reported chest pain"
+) -> int:
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={"call_id": call_id, "severity": severity, "category": category, "reason": reason},
+        headers={"Authorization": f"Bearer {_service_token(call_id)}"},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def test_flags_list_elder_identity_and_workflow_fields(client, mock_dispatch, admin_session):
+    elder_id, phone = _create_elder_with_phone(client)
+    call_id = _enqueue(client, elder_id)
+    flag_id = _flag_call(client, call_id)
+
+    r = client.get(f"/v1/admin/follow-up-flags?elder_id={elder_id}")
+    assert r.status_code == 200, r.text
+    me = next(f for f in r.json() if f["id"] == flag_id)
+    assert me["elder_name"] == "Ada"
+    assert me["masked_phone"] == "***" + phone[-4:]
+    # Workflow stamps are NULL before any transition...
+    assert me["status_updated_at"] is None
+    assert me["status_updated_by"] is None
+    # ...and the raw phone NEVER appears in the body (spec §9).
+    assert phone not in r.text
+
+    # After a C2 PATCH transition the stamps are populated.
+    patched = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "acknowledged"})
+    assert patched.status_code == 200, patched.text
+    r = client.get(f"/v1/admin/follow-up-flags?elder_id={elder_id}")
+    me = next(f for f in r.json() if f["id"] == flag_id)
+    assert me["status_updated_at"] is not None
+    assert me["status_updated_by"] == "admin@example.com"
+    assert phone not in r.text
+
+
+def test_flags_list_severity_filter_and_urgent_first_http(client, mock_dispatch, admin_session):
+    elder_id, _phone = _create_elder_with_phone(client)
+    call_id = _enqueue(client, elder_id)
+    # The urgent flag is seeded FIRST (oldest) yet must sort before the newer
+    # routine flags: (severity='urgent') DESC, created_at DESC, id DESC.
+    urgent_id = _flag_call(client, call_id, severity="urgent")
+    routine_ids = [_flag_call(client, call_id, severity="routine") for _ in range(2)]
+
+    rows = client.get(f"/v1/admin/follow-up-flags?elder_id={elder_id}").json()
+    assert [f["id"] for f in rows] == [urgent_id, *reversed(routine_ids)]
+
+    base = f"/v1/admin/follow-up-flags?elder_id={elder_id}"
+    urgent_only = client.get(f"{base}&severity=urgent").json()
+    assert [f["id"] for f in urgent_only] == [urgent_id]
+    routine_only = client.get(f"{base}&severity=routine").json()
+    assert {f["id"] for f in routine_only} == set(routine_ids)
+
+
+def test_flags_list_status_junk_422(client, admin_session):
+    # Deliberate change (spec §4.4): junk used to 200-empty; the typed Literal 422s.
+    assert client.get("/v1/admin/follow-up-flags?status=bogus").status_code == 422
+    assert client.get("/v1/admin/follow-up-flags?severity=high").status_code == 422
+
+
+def test_flags_list_offset_paging(client, mock_dispatch, admin_session):
+    elder_id, _phone = _create_elder_with_phone(client)
+    call_id = _enqueue(client, elder_id)
+    ids = [_flag_call(client, call_id, severity="routine") for _ in range(3)]
+    newest_first = list(reversed(ids))
+
+    base = f"/v1/admin/follow-up-flags?elder_id={elder_id}"
+    assert [f["id"] for f in client.get(base).json()] == newest_first
+    assert [f["id"] for f in client.get(f"{base}&offset=1").json()] == newest_first[1:]
+    assert client.get(f"{base}&offset=-1").status_code == 422
+
+
+def test_flags_audit_detail_gains_offset_and_severity(client, mock_dispatch, admin_session):
+    elder_id, phone = _create_elder_with_phone(client)
+    call_id = _enqueue(client, elder_id)
+    _flag_call(client, call_id, reason="secret audit reason")
+
+    r = client.get(f"/v1/admin/follow-up-flags?elder_id={elder_id}&severity=urgent&offset=0")
+    assert r.status_code == 200, r.text
+    rows = client.get("/v1/admin/audit?action=follow_up_flags.list").json()
+    assert rows, "follow-up-flags read must write an audit entry"
+    entry = rows[0]
+    assert entry["detail"]["offset"] == 0
+    assert entry["detail"]["severity"] == "urgent"
+    # Still PHI-free: never the reason text or the elder's phone.
+    blob = str(entry).lower()
+    assert "secret" not in blob
+    assert phone not in blob

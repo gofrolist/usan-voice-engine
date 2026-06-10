@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api.db.models import CallbackRequest
+from usan_api.db.models import CallbackRequest, Elder
 
 # Bound the list read: callback requests accumulate per call/elder over time.
 # Default cap mirrors the sibling follow_up_flags repo (MAX_FLAGS_LIMIT=500);
@@ -48,17 +48,28 @@ async def list_callback_requests(
     status: str | None = None,
     elder_id: uuid.UUID | None = None,
     limit: int = 100,
-) -> list[CallbackRequest]:
-    """Most-recent callback requests, optionally filtered by status/elder (newest first)."""
+    offset: int = 0,
+) -> list[tuple[CallbackRequest, str | None, str | None]]:
+    """Callback requests + elder name/phone via outerjoin (admin read model, §4.4).
+
+    Newest first (ordering unchanged by C3 — no urgent-first here).
+    """
     limit = max(1, min(limit, MAX_CALLBACKS_LIMIT))
-    stmt = select(CallbackRequest)
+    offset = max(0, offset)
+    stmt = select(CallbackRequest, Elder.name, Elder.phone_e164).outerjoin(
+        Elder, CallbackRequest.elder_id == Elder.id
+    )
     if status is not None:
         stmt = stmt.where(CallbackRequest.status == status)
     if elder_id is not None:
         stmt = stmt.where(CallbackRequest.elder_id == elder_id)
-    stmt = stmt.order_by(CallbackRequest.created_at.desc(), CallbackRequest.id.desc()).limit(limit)
+    stmt = (
+        stmt.order_by(CallbackRequest.created_at.desc(), CallbackRequest.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return [(row[0], row[1], row[2]) for row in result.all()]
 
 
 async def get_request(db: AsyncSession, request_id: int) -> CallbackRequest | None:
