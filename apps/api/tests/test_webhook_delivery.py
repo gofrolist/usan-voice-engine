@@ -173,6 +173,18 @@ async def _get_endpoint(factory, endpoint_id: uuid.UUID) -> WebhookEndpoint:
         return row
 
 
+async def test_build_client_pins_timeout_and_no_redirects():
+    # The production client config (spec §5.3/§8.2): every other test swaps
+    # _build_client for a MockTransport, so without this pin the settings
+    # timeout and the load-bearing follow_redirects=False could silently rot.
+    client = webhook_delivery._build_client(_settings(WEBHOOK_DELIVERY_TIMEOUT_S="7"))
+    try:
+        assert client.follow_redirects is False
+        assert client.timeout == httpx.Timeout(7)
+    finally:
+        await client.aclose()
+
+
 async def test_delivers_signed_post_2xx(session_factory, monkeypatch):
     # consecutive_failures=5 makes the reset assertion non-vacuous: with a
     # zero-seeded endpoint the reset_failures wiring could be deleted and a
