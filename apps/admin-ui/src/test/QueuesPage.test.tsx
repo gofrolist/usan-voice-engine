@@ -172,6 +172,18 @@ describe("QueuesPage", () => {
     });
   });
 
+  it("junk offset URL values clamp to 0 instead of reaching the server", async () => {
+    flags = [flagRow()];
+    const first = renderPage("/queues?offset=abc");
+    await waitFor(() => expect(flagsUrls().at(-1)).toContain("offset=0"));
+    first.unmount();
+
+    // Non-integer numerics are junk too — forwarded they'd surface as a raw 422.
+    getMock.mockClear();
+    renderPage("/queues?offset=1.5");
+    await waitFor(() => expect(flagsUrls().at(-1)).toContain("offset=0"));
+  });
+
   it("tab labels carry summary counts", async () => {
     renderPage();
 

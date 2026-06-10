@@ -226,7 +226,10 @@ export function QueuesPage() {
   const statusParam = STATUS_VALUES.has(rawStatus) ? rawStatus : "open";
   const rawSeverity = searchParams.get("severity") ?? "";
   const severityParam = SEVERITY_VALUES.has(rawSeverity) ? rawSeverity : "";
-  const offset = Math.max(0, Number(searchParams.get("offset")) || 0);
+  // Junk offsets (?offset=abc, ?offset=1.5) clamp to 0 here instead of being
+  // forwarded to the server as a raw 422 — same boundary rule as tab/status.
+  const rawOffset = Number(searchParams.get("offset"));
+  const offset = Number.isInteger(rawOffset) && rawOffset > 0 ? rawOffset : 0;
 
   const status = statusParam === "all" ? undefined : (statusParam as QueueStatus);
   const severity = severityParam || undefined;
