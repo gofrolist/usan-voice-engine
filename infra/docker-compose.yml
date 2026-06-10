@@ -225,6 +225,18 @@ services:
       PHI_RETENTION_DAYS: ${PHI_RETENTION_DAYS:-}
       RETRY_POLLER_ENABLED: ${RETRY_POLLER_ENABLED:-true}
       RETRY_POLL_INTERVAL_S: ${RETRY_POLL_INTERVAL_S:-30}
+      # Batch & scheduled calling (spec 2026-06-10). Rollout sequence (spec §10.3):
+      # enable the gate first and watch the gauges for a day, then the scheduler,
+      # then a <=5-target batch. Dev defaults BOTH feature flags ON for local
+      # testing; the prod overlay re-pins them OFF so the deploy ships inert.
+      SCHEDULER_POLLER_ENABLED: ${SCHEDULER_POLLER_ENABLED:-true}
+      SCHEDULER_POLL_INTERVAL_S: ${SCHEDULER_POLL_INTERVAL_S:-60}
+      SCHEDULER_BATCH_SIZE: ${SCHEDULER_BATCH_SIZE:-50}
+      CONCURRENCY_GATE_ENABLED: ${CONCURRENCY_GATE_ENABLED:-true}
+      MAX_CONCURRENT_CALLS: ${MAX_CONCURRENT_CALLS:-8}
+      RESERVED_CONCURRENCY: ${RESERVED_CONCURRENCY:-2}
+      MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY: ${MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY:-2}
+      AUTONOMOUS_DIALING_PAUSED: ${AUTONOMOUS_DIALING_PAUSED:-false}
       # Recording (Plan 4b): blank disables it; the api signs read URLs for this bucket.
       GCS_BUCKET: ${GCS_BUCKET:-}
       RECORDING_SIGNED_URL_TTL_S: ${RECORDING_SIGNED_URL_TTL_S:-3600}

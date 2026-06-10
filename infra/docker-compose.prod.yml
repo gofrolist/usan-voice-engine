@@ -37,6 +37,12 @@ services:
       # gateway, NOT 127.0.0.1 (which is the container's own loopback). Overrides
       # the base file's ${LIVEKIT_URL} (still used by dev, which stays on bridge).
       LIVEKIT_URL: ws://host.docker.internal:7880
+      # Batch & scheduled calling: ship inert (spec §10.1). The base file defaults
+      # both feature flags ON for dev, so re-pin them OFF here — a stale VM .env
+      # then interpolates the safe defaults. Flip via /opt/usan/infra/.env —
+      # refresh the VM .env BEFORE the v* tag deploy (the deploy never re-fetches it).
+      SCHEDULER_POLLER_ENABLED: ${SCHEDULER_POLLER_ENABLED:-false}
+      CONCURRENCY_GATE_ENABLED: ${CONCURRENCY_GATE_ENABLED:-false}
     # Map host.docker.internal -> the docker bridge gateway so this bridge container
     # can reach the host-networked livekit (Linux Docker >= 20.10). Plan 4e C3.
     extra_hosts:
