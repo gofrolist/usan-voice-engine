@@ -291,9 +291,11 @@ async def poll_once(
 
 
 async def run_poller(settings: Settings, stop: asyncio.Event) -> None:
-    """Loop ``poll_once`` until ``stop`` is set — byte-for-byte the schedule
-    orchestrator's loop discipline: per-cycle exceptions are logged, never
-    fatal; the interval sleep is a cancellable wait on ``stop``.
+    """Loop ``poll_once`` until ``stop`` is set — the schedule orchestrator's
+    loop discipline (per-cycle exceptions are logged, never fatal; the interval
+    sleep is a cancellable wait on ``stop``) with ONE deliberate deviation:
+    the per-cycle ERROR logs ``type(exc).__name__`` only, never a traceback
+    (spec §9 — exception text can embed endpoint URLs with tokens).
     """
     log = logger.bind(component="webhook_delivery")
     log.info(
@@ -314,8 +316,10 @@ async def run_poller(settings: Settings, stop: asyncio.Event) -> None:
             # backlog (flag off / nothing due) from logging every cycle.
             if any(value for key, value in stats.items() if key != "pending"):
                 log.info("Webhook delivery cycle work: {stats}", stats=stats)
-        except Exception:
-            log.opt(exception=True).error("Webhook delivery poll cycle failed")
+        except Exception as exc:
+            # Type name ONLY (spec §9) — never a traceback or str(exc), either
+            # of which can embed the endpoint URL and its query-string tokens.
+            log.bind(err=type(exc).__name__).error("Webhook delivery poll cycle failed")
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=settings.webhook_delivery_poll_interval_s)
     log.info("Webhook delivery poller stopped")

@@ -606,6 +606,41 @@ async def test_housekeeping_skipped_unless_requested(session_factory, monkeypatc
     assert stats["expired"] == 0
 
 
+async def test_run_poller_cycle_failure_logs_type_name_only(monkeypatch):
+    # Spec §9: the per-cycle try/except ERROR carries type(exc).__name__ ONLY —
+    # no traceback, no str(exc) (which can embed the endpoint URL + tokens).
+    monkeypatch.setattr(webhook_delivery, "get_session_factory", lambda: None)
+
+    async def _boom(*args: Any, **kwargs: Any) -> dict[str, int]:
+        raise RuntimeError(f"SENTINEL-EXC-TEXT cycle bug for {URL}")
+
+    monkeypatch.setattr(webhook_delivery, "poll_once", _boom)
+
+    records: list[Any] = []
+    handler_id = logger.add(records.append, level=0)
+    stop = asyncio.Event()
+    try:
+        task = asyncio.create_task(webhook_delivery.run_poller(_settings(), stop))
+        for _ in range(100):
+            if any(m.record["level"].name == "ERROR" for m in records):
+                break
+            await asyncio.sleep(0.02)
+        stop.set()
+        await asyncio.wait_for(task, timeout=5)
+    finally:
+        logger.remove(handler_id)
+
+    errors = [m for m in records if m.record["level"].name == "ERROR"]
+    assert errors
+    first = errors[0]
+    assert first.record["extra"]["err"] == "RuntimeError"
+    assert first.record["exception"] is None  # no traceback attached
+    for message in records:
+        assert "SENTINEL-EXC-TEXT" not in str(message)
+        assert "PHIPHI" not in str(message)
+        assert "hooks.example.com" not in str(message)
+
+
 def test_housekeeping_due_helper():
     # The §10.10 hourly-cadence pin, as a pure function.
     t = 1000.0
