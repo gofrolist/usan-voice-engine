@@ -221,3 +221,35 @@ async def test_set_default_self_reassignment_is_idempotent(session_factory):
         await db.commit()
         assert result is not None
         assert result.is_default_outbound is True
+
+
+async def test_is_live_profile_requires_active_and_published(session_factory):
+    async with session_factory() as db:
+        p = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        pid = p.id
+        await db.commit()
+
+    # Unpublished ACTIVE profile: an override pointing here would silently fall
+    # through in resolve_agent_config, so it must not be considered live.
+    async with session_factory() as db:
+        assert await repo.is_live_profile(db, pid) is False
+
+    async with session_factory() as db:
+        await repo.publish(db, pid, note=None, actor_email="op")
+        await db.commit()
+
+    # Published ACTIVE profile is live.
+    async with session_factory() as db:
+        assert await repo.is_live_profile(db, pid) is True
+
+    async with session_factory() as db:
+        await repo.archive_profile(db, pid)
+        await db.commit()
+
+    # Published-then-archived profile is no longer live.
+    async with session_factory() as db:
+        assert await repo.is_live_profile(db, pid) is False
+
+    # Unknown UUID is not live.
+    async with session_factory() as db:
+        assert await repo.is_live_profile(db, uuid.uuid4()) is False
