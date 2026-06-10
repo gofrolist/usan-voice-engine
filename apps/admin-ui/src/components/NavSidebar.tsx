@@ -24,6 +24,13 @@ const GROUPS: NavGroup[] = [
     ],
   },
   {
+    heading: "Operate",
+    items: [
+      { to: "/calls", label: "Calls" },
+      { to: "/queues", label: "Queues" },
+    ],
+  },
+  {
     heading: "System",
     items: [
       { to: "/audit", label: "Audit" },
