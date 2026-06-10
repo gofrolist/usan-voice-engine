@@ -7,8 +7,15 @@ the admin endpoint is session-gated and audited (see routers/admin_tools.py).
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+
+class QueueStatusUpdateRequest(BaseModel):
+    """PATCH body for the ops-queue transitions (spec §4.3)."""
+
+    status: Literal["acknowledged", "resolved"]  # "open" is not a settable target -> 422
 
 
 class FollowupFlagSummary(BaseModel):
@@ -21,6 +28,9 @@ class FollowupFlagSummary(BaseModel):
     category: str
     reason: str | None
     status: str
+    status_updated_at: datetime | None = None  # NULL = never transitioned past 'open'
+    status_updated_by: str | None = None  # admin actor email; defaults keep the legacy
+    # from_attributes stubs in test_admin_tools_schemas.py valid
     created_at: datetime
 
 
@@ -34,6 +44,8 @@ class CallbackRequestSummary(BaseModel):
     requested_at: datetime | None
     notes: str | None
     status: str
+    status_updated_at: datetime | None = None  # NULL = never transitioned past 'open'
+    status_updated_by: str | None = None  # admin actor email
     created_at: datetime
 
 

@@ -68,9 +68,14 @@ def test_list_callback_requests(client, admin_session, async_database_url):
         "requested_at",
         "notes",
         "status",
+        "status_updated_at",
+        "status_updated_by",
         "created_at",
     }
     assert one["status"] == "open"
+    # C2 workflow stamps: NULL until the first transition (no backfill needed).
+    assert one["status_updated_at"] is None
+    assert one["status_updated_by"] is None
 
 
 def test_list_callback_requests_filters_by_status(client, admin_session, async_database_url):

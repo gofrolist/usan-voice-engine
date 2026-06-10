@@ -83,6 +83,16 @@ SMS_MESSAGES_TOTAL = Counter(
     labelnames=("status",),
 )
 
+# queue: follow_up_flag|callback_request ; to_status: acknowledged|resolved —
+# bounded PHI-free labels (never the reason/notes text). Incremented only AFTER
+# the transition's commit (house discipline above); idempotent same-status
+# no-ops never increment.
+ADMIN_QUEUE_TRANSITIONS_TOTAL = Counter(
+    "usan_admin_queue_transitions",
+    "Admin ops-queue status transitions.",
+    labelnames=("queue", "to_status"),
+)
+
 # source: schedule|batch ; result: created|replayed|dnc_blocked|skipped_window|
 # skipped_invalid_timezone|skipped_daily_cap|skipped_elder_deleted|rescheduled|
 # key_conflict. Incremented per materialization decision, after commit. See the
