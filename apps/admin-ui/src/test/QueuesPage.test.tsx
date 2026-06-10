@@ -332,6 +332,82 @@ describe("QueuesPage", () => {
     await waitFor(() => expect(flagsUrls().length).toBeGreaterThan(before));
   });
 
+  // Callbacks-tab behavioral coverage mirroring the flags-tab tests above —
+  // the tab shares QueueTable/hooks plumbing but wires its own endpoint,
+  // mutation hook and ConfirmDialog copy.
+  it("callbacks tab renders requested time and notes", async () => {
+    callbacks = [cbRow({ notes: "prefers the afternoon" })];
+    renderPage("/queues?tab=callbacks");
+
+    expect(await screen.findByText("tomorrow after lunch")).toBeInTheDocument();
+    expect(screen.getByText("prefers the afternoon")).toBeInTheDocument();
+  });
+
+  it("callbacks acknowledge PATCHes the callback-requests endpoint", async () => {
+    const user = userEvent.setup();
+    callbacks = [cbRow({ id: 7, status: "open" })];
+    patchMock.mockResolvedValue(cbRow({ id: 7, status: "acknowledged" }));
+    renderPage("/queues?tab=callbacks");
+
+    await user.click(await screen.findByRole("button", { name: "Acknowledge" }));
+
+    expect(patchMock).toHaveBeenCalledWith("/v1/admin/callback-requests/7", {
+      status: "acknowledged",
+    });
+  });
+
+  it("callbacks resolve goes through ConfirmDialog", async () => {
+    const user = userEvent.setup();
+    callbacks = [cbRow({ id: 7, status: "open" })];
+    patchMock.mockResolvedValue(cbRow({ id: 7, status: "resolved" }));
+    renderPage("/queues?tab=callbacks");
+
+    await user.click(await screen.findByRole("button", { name: "Resolve" }));
+
+    // Resolution is one-way — nothing is sent until the dialog confirms.
+    const dialog = await screen.findByRole("dialog");
+    expect(patchMock).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole("button", { name: "Resolve" }));
+    await waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith("/v1/admin/callback-requests/7", {
+        status: "resolved",
+      }),
+    );
+  });
+
+  it("callbacks 409 refetches and toasts", async () => {
+    const user = userEvent.setup();
+    const { ApiError } = await import("../lib/api");
+    callbacks = [cbRow({ id: 7, status: "open" })];
+    patchMock.mockRejectedValue(new ApiError(409, "illegal transition: resolved -> acknowledged"));
+    renderPage("/queues?tab=callbacks");
+
+    const ack = await screen.findByRole("button", { name: "Acknowledge" });
+    const before = callbacksUrls().length;
+    await user.click(ack);
+
+    await waitFor(() => {
+      expect(pushToastMock).toHaveBeenCalledWith(
+        "Status changed elsewhere — list refreshed",
+        "info",
+      );
+      // The 409 invalidates the callbacks list — the GET fires again.
+      expect(callbacksUrls().length).toBeGreaterThan(before);
+    });
+  });
+
+  it("callbacks viewer sees no actions", async () => {
+    callbacks = [cbRow({ id: 7, status: "open" })];
+    role = "viewer";
+    renderPage("/queues?tab=callbacks");
+
+    await screen.findByText("tomorrow after lunch");
+    // Hidden, not disabled: viewers get no mutation affordances at all.
+    expect(screen.queryByRole("button", { name: "Acknowledge" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Resolve" })).toBeNull();
+  });
+
   it("empty copy: all-clear on the default Open view, filtered copy otherwise", async () => {
     flags = [];
     const first = renderPage();
