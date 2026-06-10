@@ -14,6 +14,7 @@ from usan_api.ratelimit import OperatorRateLimitMiddleware
 from usan_api.repositories import admin_users as admin_users_repo
 from usan_api.routers import (
     admin_audit,
+    admin_calls,
     admin_elders,
     admin_profiles,
     admin_tool_catalog,
@@ -128,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_variable_catalog.router)
     app.include_router(admin_tool_catalog.router)
     app.include_router(admin_tools.router)
+    app.include_router(admin_calls.router)
     app.include_router(auth.router)
     app.include_router(elders.router)
     app.include_router(dnc.router)
