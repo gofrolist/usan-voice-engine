@@ -144,6 +144,33 @@ async def test_mark_failed_if_active_vs_dial_failure_single_winner(factories):
     assert call.status is CallStatus.NO_ANSWER  # one terminal outcome — the lock holder's
 
 
+async def test_requeue_for_quiet_hours_vs_terminal_commit_single_winner(factories):
+    # Dial-time quiet-hours requeue racing a terminal dial outcome (§2.1/§10.7
+    # interleaving): the requeue must block on the row lock, re-read the
+    # committed terminal status, and no-op — resurrecting the row to QUEUED
+    # would re-dial a settled call and emit a duplicate call.completed on its
+    # next terminal transition.
+    factory_a, factory_b = factories
+    call_id = await _seed_call(factory_a, status=CallStatus.DIALING)
+
+    result_a, result_b = await _race(
+        factory_a,
+        factory_b,
+        lambda db: calls_repo.mark_dial_failure(
+            db, call_id, CallStatus.NO_ANSWER, end_reason="sip_no_answer"
+        ),
+        lambda db: calls_repo.requeue_for_quiet_hours(
+            db, call_id, scheduled_at=datetime(2026, 6, 11, 15, 0, tzinfo=UTC)
+        ),
+    )
+
+    assert result_a is not None
+    assert result_b is None  # the requeue loser re-reads the terminal status
+    call = await _get_call(factory_a, call_id)
+    assert call.status is CallStatus.NO_ANSWER  # terminal commit wins; no resurrection
+    assert call.end_reason == "sip_no_answer"
+
+
 async def test_mark_answered_after_terminal_is_noop_no_zombie(factories):
     # The pre-existing zombie bug (spec §2.1): a late mark_answered must never
     # resurrect a room_finished-completed call to IN_PROGRESS and pin a slot.

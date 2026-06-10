@@ -449,9 +449,10 @@ async def requeue_for_quiet_hours(
     db: AsyncSession, call_id: uuid.UUID, *, scheduled_at: datetime
 ) -> Call | None:
     """Flip a claimed DIALING row back to QUEUED with a fresh clamp (dial-time
-    quiet-hours re-check, spec §2.3). Guarded on DIALING so it never clobbers an
-    outcome written by a racing webhook."""
-    call = await db.get(Call, call_id)
+    quiet-hours re-check, spec §2.3). Guarded on DIALING UNDER THE ROW LOCK
+    (the §2.1 hardening, same as mark_dial_failure) so it never clobbers — or
+    resurrects — a terminal outcome committed by a racing webhook."""
+    call = await db.get(Call, call_id, with_for_update=True)
     if call is None or call.status is not CallStatus.DIALING:
         return None
     call.status = CallStatus.QUEUED
