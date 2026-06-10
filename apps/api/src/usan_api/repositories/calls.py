@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from loguru import logger
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,7 @@ from usan_api import quiet_hours
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, CallBatch, CallBatchTarget, Elder
 from usan_api.retry_policy import next_retry_delay
+from usan_api.schemas.call import RESERVED_KEY_PREFIXES  # single source (spec §2.2 invariant 3)
 
 
 def _utcnow() -> datetime:
@@ -307,6 +308,64 @@ async def count_queued_due(db: AsyncSession, *, now: datetime) -> int:
         )
     )
     return int(result.scalar_one())
+
+
+async def count_autonomous_roots(
+    db: AsyncSession, *, elder_id: uuid.UUID, day_start: datetime, day_end: datetime
+) -> int:
+    """Roots with a reserved-prefix key whose scheduled_at falls inside the elder-local
+    day bounds (daily repetition cap, spec §5.3 step 1; served by idx_calls_elder).
+
+    The LIKE patterns derive from RESERVED_KEY_PREFIXES — only materializer-owned
+    roots count toward the cap; retry children carry no key and ad-hoc calls carry
+    no reserved prefix, so neither eats the elder's daily autonomous budget.
+    """
+    result = await db.execute(
+        select(func.count())
+        .select_from(Call)
+        .where(
+            Call.elder_id == elder_id,
+            or_(*(Call.idempotency_key.like(f"{prefix}%") for prefix in RESERVED_KEY_PREFIXES)),
+            Call.scheduled_at >= day_start,
+            Call.scheduled_at < day_end,
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def create_materialized_root(
+    db: AsyncSession,
+    *,
+    elder_id: uuid.UUID,
+    status: CallStatus,
+    idempotency_key: str,
+    scheduled_at: datetime | None,
+    dynamic_vars: dict[str, Any],
+    profile_override: uuid.UUID | None,
+) -> Call:
+    """Insert one materializer-owned chain root (spec §5.3 step 4) in the caller's
+    transaction (flush only — the caller commits call + bookkeeping atomically).
+
+    A livekit_room is minted only for QUEUED rows; DNC_BLOCKED rows mirror
+    enqueue_call's gate (terminal, no room, no scheduled_at — the deterministic
+    key is still consumed). Raises IntegrityError on a duplicate idempotency_key:
+    callers SAVEPOINT-wrap and take the verified replay path (§5.3 step 5).
+    """
+    call = Call(
+        elder_id=elder_id,
+        direction=CallDirection.OUTBOUND,
+        status=status,
+        idempotency_key=idempotency_key,
+        scheduled_at=scheduled_at,
+        dynamic_vars=dict(dynamic_vars),
+        profile_override=profile_override,
+        attempt=1,
+        livekit_room=f"usan-outbound-{uuid.uuid4()}" if status is CallStatus.QUEUED else None,
+    )
+    db.add(call)
+    await db.flush()
+    await db.refresh(call)
+    return call
 
 
 async def requeue_for_quiet_hours(
