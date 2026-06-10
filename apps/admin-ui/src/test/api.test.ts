@@ -50,4 +50,18 @@ describe("api wrapper", () => {
     expect(result).toBeUndefined();
     expect(json).not.toHaveBeenCalled();
   });
+
+  it("sends PATCH with a JSON body", async () => {
+    const fetch = mockFetch({ status: 200, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetch);
+
+    await api.patch("/v1/admin/follow-up-flags/1", { status: "acknowledged" });
+
+    expect(fetch).toHaveBeenCalledWith("/v1/admin/follow-up-flags/1", {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "acknowledged" }),
+    });
+  });
 });
