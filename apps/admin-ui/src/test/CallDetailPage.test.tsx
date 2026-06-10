@@ -53,6 +53,16 @@ function detail(over: Partial<AdminCallDetail> = {}): AdminCallDetail {
   };
 }
 
+// Route-by-URL mock (QueuesPage.test.tsx pattern): the page must hit this
+// call's admin detail endpoint — any other GET is a bug, not a silent success.
+function respondWith(d: AdminCallDetail) {
+  getMock.mockImplementation((url: string) =>
+    url === `/v1/admin/calls/${CALL_ID}`
+      ? Promise.resolve(d)
+      : Promise.reject(new Error(`unexpected GET ${url}`)),
+  );
+}
+
 function renderPage(id = CALL_ID) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -100,7 +110,7 @@ describe("CallDetailPage", () => {
   });
 
   it("renders the header card: elder link, masked phone, call facts", async () => {
-    getMock.mockResolvedValue(detail());
+    respondWith(detail());
     renderPage();
 
     // Elder name links to this elder's filtered calls list.
@@ -120,10 +130,31 @@ describe("CallDetailPage", () => {
   });
 
   it("links a retry child to its parent call as 'attempt N — view parent'", async () => {
-    getMock.mockResolvedValue(detail({ attempt: 2, parent_call_id: PARENT_ID }));
+    respondWith(detail({ attempt: 2, parent_call_id: PARENT_ID }));
     renderPage();
 
     const parentLink = await screen.findByRole("link", { name: "attempt 2 — view parent" });
     expect(parentLink).toHaveAttribute("href", `/calls/${PARENT_ID}`);
+  });
+
+  it("renders transcript segments from the detail payload", async () => {
+    respondWith(
+      detail({
+        transcript: [
+          {
+            role: "assistant",
+            content: "Good morning, Edna. How are you feeling today?",
+            tool_name: null,
+            tool_args: null,
+            started_at: "2026-06-09T10:00:05Z",
+            ended_at: "2026-06-09T10:00:09Z",
+          },
+        ],
+      }),
+    );
+    renderPage();
+
+    const segment = await screen.findByText("Good morning, Edna. How are you feeling today?");
+    expect(segment.closest("[data-role]")).toHaveAttribute("data-role", "assistant");
   });
 });

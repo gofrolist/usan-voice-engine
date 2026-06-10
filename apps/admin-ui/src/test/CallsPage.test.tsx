@@ -51,6 +51,16 @@ function lastUrl(): string {
   return getMock.mock.calls.at(-1)?.[0] as string;
 }
 
+// Route-by-URL mock (QueuesPage.test.tsx pattern): the page must hit the
+// admin calls list endpoint — any other GET is a bug, not a silent success.
+function respondWith(data: unknown | (() => unknown)) {
+  getMock.mockImplementation((url: string) =>
+    url.startsWith("/v1/admin/calls?")
+      ? Promise.resolve(typeof data === "function" ? (data as () => unknown)() : data)
+      : Promise.reject(new Error(`unexpected GET ${url}`)),
+  );
+}
+
 function renderPage(initialEntry = "/calls") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -73,7 +83,7 @@ afterEach(() => vi.clearAllMocks());
 
 describe("CallsPage", () => {
   it("renders masked phone, elder name and origin badges", async () => {
-    getMock.mockResolvedValue([
+    respondWith([
       call({
         elder_name: "Edna Moore",
         origin: { source: "schedule", id: "s1", ordinal: "2026-06-09" },
@@ -98,7 +108,7 @@ describe("CallsPage", () => {
 
   it("filter change resets offset to 0", async () => {
     const user = userEvent.setup();
-    getMock.mockImplementation(() => Promise.resolve(rows(50)));
+    respondWith(() => rows(50));
     renderPage();
     await screen.findByRole("table");
 
@@ -113,7 +123,7 @@ describe("CallsPage", () => {
   });
 
   it("To date is sent exclusive (+1 day) as a local-midnight instant", async () => {
-    getMock.mockResolvedValue(rows(3));
+    respondWith(rows(3));
     renderPage();
     await screen.findByRole("table");
 
@@ -130,7 +140,7 @@ describe("CallsPage", () => {
   });
 
   it("From date is sent as a local-midnight instant", async () => {
-    getMock.mockResolvedValue(rows(3));
+    respondWith(rows(3));
     renderPage();
     await screen.findByRole("table");
 
@@ -141,7 +151,7 @@ describe("CallsPage", () => {
   });
 
   it("honors elder_id from the URL", async () => {
-    getMock.mockResolvedValue(rows(1));
+    respondWith(rows(1));
     renderPage("/calls?elder_id=7f0e8b9a-1111-2222-3333-444455556666");
 
     await waitFor(() =>
@@ -150,7 +160,7 @@ describe("CallsPage", () => {
   });
 
   it("hasNext heuristic: full page enables Next, short page disables it", async () => {
-    getMock.mockResolvedValue(rows(50));
+    respondWith(rows(50));
     const first = renderPage();
     await screen.findByRole("table");
 
@@ -159,7 +169,7 @@ describe("CallsPage", () => {
     expect(screen.getByText("1–50")).toBeInTheDocument();
     first.unmount();
 
-    getMock.mockResolvedValue(rows(3));
+    respondWith(rows(3));
     renderPage();
     await screen.findByRole("table");
     expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
@@ -168,7 +178,7 @@ describe("CallsPage", () => {
 
   it("row click navigates to detail", async () => {
     const user = userEvent.setup();
-    getMock.mockResolvedValue([call({ elder_name: "Edna Moore" })]);
+    respondWith([call({ elder_name: "Edna Moore" })]);
     renderPage();
 
     await user.click(await screen.findByText("Edna Moore"));
@@ -191,7 +201,7 @@ describe("CallsPage", () => {
   });
 
   it("shows the empty state when no calls match", async () => {
-    getMock.mockResolvedValue([]);
+    respondWith([]);
     renderPage();
 
     expect(await screen.findByText("No calls match these filters")).toBeInTheDocument();
