@@ -2,7 +2,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -129,3 +129,53 @@ async def test_dispatch_and_dial_delegates_to_dial_when_ok(monkeypatch, session_
 
     fake.agent_dispatch.create_dispatch.assert_awaited_once()
     assert delegated == [call_id]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_and_dial_marks_elder_missing_failed_not_silent(
+    monkeypatch, session_factory
+):
+    """Elder deleted after claim (ON DELETE SET NULL): the row must go FAILED
+    (elder_missing), not stay DIALING for reclaim_stuck_dialing to re-queue
+    forever (spec §2.3(2))."""
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    call_id, _ = await _seed_dialing_retry(session_factory, room="usan-outbound-em")
+    async with session_factory() as db:
+        await db.execute(update(Call).where(Call.id == call_id).values(elder_id=None))
+        await db.commit()
+
+    await livekit_dispatch.dispatch_and_dial(call_id, _settings())
+
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.FAILED
+    assert call.end_reason == "elder_missing"
+    assert call.ended_at is not None
+    fake.agent_dispatch.create_dispatch.assert_not_awaited()
+    fake.sip.create_sip_participant.assert_not_awaited()
+    # Elder gone => schedule_retry returns None => the chain settles here.
+    assert await _count_children(session_factory, call_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_and_dial_missing_room_marks_failed(monkeypatch, session_factory):
+    """Same guard, livekit_room=None: FAILED(elder_missing), never silent."""
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    call_id, _ = await _seed_dialing_retry(session_factory, room=None)
+
+    await livekit_dispatch.dispatch_and_dial(call_id, _settings())
+
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.FAILED
+    assert call.end_reason == "elder_missing"
+    assert call.ended_at is not None
+    fake.agent_dispatch.create_dispatch.assert_not_awaited()
+    fake.sip.create_sip_participant.assert_not_awaited()
+    assert await _count_children(session_factory, call_id) == 0

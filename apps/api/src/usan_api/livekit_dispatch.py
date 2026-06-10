@@ -310,8 +310,22 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
     try:
         async with factory() as db:
             call = await calls_repo.get_call(db, call_id)
-            if call is None or call.elder_id is None or not call.livekit_room:
-                logger.bind(call_id=str(call_id)).warning("dispatch_and_dial: call not dialable")
+            if call is None:
+                logger.bind(call_id=str(call_id)).warning("dispatch_and_dial: call not found")
+                return
+            if call.elder_id is None or not call.livekit_room:
+                # ON DELETE SET NULL leaves the row DIALING forever otherwise:
+                # reclaim_stuck_dialing re-queues it, the poller re-claims it — an
+                # infinite loop pinning one in-flight slot (spec §2.3). Fail it
+                # terminally; schedule_retry refuses elder-less parents, so the
+                # chain settles here.
+                await calls_repo.mark_dial_failure(
+                    db, call_id, CallStatus.FAILED, end_reason="elder_missing"
+                )
+                await db.commit()
+                logger.bind(call_id=str(call_id)).warning(
+                    "dispatch_and_dial: elder missing; FAILED"
+                )
                 return
             elder = await elders_repo.get_elder(db, call.elder_id)
             if elder is None:
