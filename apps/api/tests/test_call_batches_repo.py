@@ -380,6 +380,53 @@ async def test_cancel_batch_marks_pending_cancelled_and_is_guarded(session_facto
             await batches_repo.cancel_batch(db, batch, now=NOW)
 
 
+async def test_cancel_batch_completed_race_is_status_guarded(session_factory):
+    """A cancel racing the phase-6 ``running -> completed`` commit must NOT flip
+    the completed batch to cancelled: the batch-status transition is guarded in
+    SQL, never decided on the (stale) in-memory object."""
+    batch_id, _ = await _create_batch(session_factory, n_targets=1)
+    await _set_batch(session_factory, batch_id, status="running", started_at=NOW)
+
+    async with session_factory() as db:
+        batch = await batches_repo.get_batch(db, batch_id)  # loads status="running"
+        assert batch is not None
+        assert batch.status == "running"
+        # Concurrent transaction (the drained-batch finalizer) commits completed.
+        await _set_batch(session_factory, batch_id, status="completed", completed_at=NOW)
+        with pytest.raises(ValueError, match="completed"):
+            await batches_repo.cancel_batch(db, batch, now=NOW + timedelta(minutes=1))
+        await db.rollback()
+
+    async with session_factory() as db:
+        fresh = await batches_repo.get_batch(db, batch_id)
+        assert fresh is not None
+        assert fresh.status == "completed"  # never resurrected to cancelled
+        assert fresh.cancelled_at is None
+
+
+async def test_cancel_batch_cancelled_race_stays_idempotent(session_factory):
+    """Two concurrent cancels: the loser's guarded UPDATE claims nothing and the
+    call degrades to the documented idempotent no-op — ``cancelled_at`` is never
+    re-stamped by the loser."""
+    batch_id, _ = await _create_batch(session_factory, n_targets=1)
+    await _set_batch(session_factory, batch_id, status="running", started_at=NOW)
+
+    async with session_factory() as db:
+        batch = await batches_repo.get_batch(db, batch_id)  # stale: still "running"
+        assert batch is not None
+        assert batch.status == "running"
+        # The other request's cancel commits first.
+        await _set_batch(session_factory, batch_id, status="cancelled", cancelled_at=NOW)
+        assert await batches_repo.cancel_batch(db, batch, now=NOW + timedelta(minutes=5)) == []
+        await db.commit()
+
+    async with session_factory() as db:
+        fresh = await batches_repo.get_batch(db, batch_id)
+        assert fresh is not None
+        assert fresh.status == "cancelled"
+        assert fresh.cancelled_at == NOW  # the winner's stamp, untouched
+
+
 async def test_open_batches_and_complete_drained(session_factory):
     # Running batch with every target settled -> completed + completed_at.
     drained_id, _ = await _create_batch(session_factory, n_targets=3)

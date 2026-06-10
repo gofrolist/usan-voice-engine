@@ -273,17 +273,28 @@ async def cancel_batch(db: AsyncSession, batch: CallBatch, *, now: datetime) -> 
     """Cancel a batch: ``cancelled`` + ``cancelled_at``, all ``pending`` targets
     flipped ``cancelled`` in the same transaction (spec §5.6).
 
-    Guards: ``completed`` raises ValueError (router maps to 409); an already
-    ``cancelled`` batch is an idempotent no-op returning ``[]``. Returns the
-    materialized targets' root call ids for the caller's guarded chain-tip
-    cancel; materialized targets themselves stay put for the finalizer.
+    The batch-status transition is guarded in SQL — ``UPDATE … WHERE status IN
+    ('scheduled','running') RETURNING`` — never decided on the (possibly stale)
+    in-memory row, so a cancel racing the phase-6 ``running -> completed``
+    commit can never resurrect a completed batch. Guards: ``completed`` raises
+    ValueError (router maps to 409); an already ``cancelled`` batch is an
+    idempotent no-op returning ``[]``. Returns the materialized targets' root
+    call ids for the caller's guarded chain-tip cancel; materialized targets
+    themselves stay put for the finalizer.
     """
-    if batch.status == "completed":
-        raise ValueError("batch is already completed and cannot be cancelled")
-    if batch.status == "cancelled":
-        return []
-    batch.status = "cancelled"
-    batch.cancelled_at = now
+    claimed = await db.execute(
+        update(CallBatch)
+        .where(CallBatch.id == batch.id, CallBatch.status.in_(("scheduled", "running")))
+        .values(status="cancelled", cancelled_at=now)
+        .returning(CallBatch.id)
+        .execution_options(synchronize_session=False)
+    )
+    # Sync the ORM copy with the row the guarded UPDATE saw (claim or miss).
+    await db.refresh(batch)
+    if claimed.scalar_one_or_none() is None:
+        if batch.status == "completed":
+            raise ValueError("batch is already completed and cannot be cancelled")
+        return []  # already cancelled — idempotent no-op
     await db.execute(
         update(CallBatchTarget)
         .where(CallBatchTarget.batch_id == batch.id, CallBatchTarget.status == "pending")
