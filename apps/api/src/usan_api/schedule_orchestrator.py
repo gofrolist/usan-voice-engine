@@ -2,11 +2,12 @@
 
 This module holds the shared single-Call materializer (spec §5.3) used by the
 poll cycle's schedule phase (3) and batch-target phase (4), plus the poll loop
-itself: ``poll_once`` runs the six-phase cycle of spec §5.2 and ``run_poller``
-is byte-for-byte the retry orchestrator's loop discipline, wired in main.py
-lifespan as the third poller after the retry and retention pollers. Phases
-1/4/5/6 (finalizer, slot-budgeted batch-target materialization, sweep,
-completion) are no-op placeholders until the batch-target half lands.
+itself: ``poll_once`` runs the six-phase cycle of spec §5.2 — finalize settled
+batch targets, trigger due batches, materialize due schedules, materialize
+batch targets under the slot budget, sweep cancelled batches' queued chain
+tips, stamp drained batches — and ``run_poller`` is byte-for-byte the retry
+orchestrator's loop discipline, wired in main.py lifespan as the third poller
+after the retry and retention pollers.
 
 Correctness rests on the spec §2.2 invariants, not on in-process state:
 ``scheduled_at IS NOT NULL`` marks a poller-owned row (retry child or
@@ -37,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from usan_api import quiet_hours, schedule_windows
 from usan_api.db.base import CallStatus
-from usan_api.db.models import Call, CallSchedule, Elder
+from usan_api.db.models import Call, CallBatch, CallBatchTarget, CallSchedule, Elder
 from usan_api.db.session import get_session_factory
 from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import call_schedules as schedules_repo
@@ -47,8 +48,18 @@ from usan_api.settings import Settings
 
 # Bounded per-cycle working set for the batch trigger (house pattern: 500-cap reads).
 _TRIGGER_BATCHES_LIMIT = 500
+# Bounded open-batch working set for the finalizer/sweep phases (same house pattern;
+# the phase-6 completed_at stamp is the exit condition that keeps the set small).
+_OPEN_BATCHES_LIMIT = 500
 # Invalid-timezone fail-closed retry cadence: observable, never hot-loops (spec §5.2).
 _INVALID_TZ_RETRY = timedelta(hours=1)
+# §6.2 chain-settled test: a chain whose tip is in any of these is still live.
+_UNSETTLED_TIP_STATUSES = frozenset(
+    {CallStatus.QUEUED, CallStatus.DIALING, CallStatus.RINGING, CallStatus.IN_PROGRESS}
+)
+# Batch dial windows with a NULL days_of_week apply every day (mirrors the
+# call_schedules server default of 127).
+_EVERY_DAY_MASK = schedule_windows.days_to_mask(schedule_windows.DAY_NAMES)
 
 
 def _utcnow() -> datetime:
@@ -177,9 +188,41 @@ async def poll_once(
 async def _finalize_settled_targets(
     factory: async_sessionmaker[AsyncSession], *, now: datetime
 ) -> int:
-    """Phase 1 — finalize settled batch targets (spec §5.2, §6.2). Implemented
-    with the batch-target phases; a no-op here so ``poll_once``'s shape is final."""
-    return 0
+    """Phase 1 — settle finished batch-target chains (spec §5.2, §6.2).
+
+    Chain-settled ⇔ the chain tip's status is terminal (∉ queued/dialing/
+    ringing/in_progress) AND the tip has no child row — sound because every
+    terminal transition and its ``schedule_retry`` share one commit (§6.2):
+    after that commit the child either exists or never will. The denormalized
+    ``final_status`` is the tip's status verbatim (completed / no_answer /
+    voicemail_left / busy / failed / dnc_blocked / cancelled). One commit per
+    open batch keeps transactions short.
+    """
+    async with factory() as db:
+        batch_ids = [b.id for b in await batches_repo.open_batches(db, limit=_OPEN_BATCHES_LIMIT)]
+    finalized = 0
+    for batch_id in batch_ids:
+        async with factory() as db:
+            for target in await batches_repo.list_materialized_targets(db, batch_id):
+                if target.call_id is None:  # defensive: materialized implies a linked root
+                    continue
+                tip = await calls_repo.get_chain_tip(db, target.call_id)
+                if tip is None or tip.status in _UNSETTLED_TIP_STATUSES:
+                    continue
+                if await calls_repo.has_child(db, tip.id):
+                    continue
+                if await batches_repo.finalize_target(
+                    db, target, final_status=tip.status.value, now=now
+                ):
+                    finalized += 1
+                    logger.bind(
+                        component="schedule_poller",
+                        batch_id=str(batch_id),
+                        target_index=target.target_index,
+                        final_status=tip.status.value,
+                    ).info("Batch target finalized")
+            await db.commit()
+    return finalized
 
 
 async def _trigger_due_batches(factory: async_sessionmaker[AsyncSession], *, now: datetime) -> int:
@@ -361,26 +404,168 @@ async def _materialize_batch_targets(
     factory: async_sessionmaker[AsyncSession], settings: Settings, *, now: datetime
 ) -> int:
     """Phase 4 — slot-budgeted batch-target materialization (spec §5.2).
-    Implemented with the batch-target phases; a no-op here so ``poll_once``'s
-    shape is final."""
-    return 0
+
+    The slot budget — ``max_concurrent_calls − reserved_concurrency − in_flight
+    − queued_due`` — is INTRINSIC: it applies regardless of
+    ``CONCURRENCY_GATE_ENABLED``, which governs only the retry poller's *claim*
+    path. The budget is soft pacing that keeps the due queue shallow so batch
+    progress reporting reflects reality; the claim gate remains the hard cap.
+    Per-batch ``max_concurrency`` (enforced in ``claim_next_pending_target``)
+    and this budget are materialization throttles, NOT dial caps — retry
+    children of already-materialized chains dial whenever due, bounded only by
+    the global gate. Phase 3 runs first and unthrottled: the daily wellness
+    call outranks campaign traffic, so a due schedule cohort consumes slots
+    before any batch target is considered (deliberate priority).
+    """
+    async with factory() as db:  # one txn: count + budget share a snapshot
+        in_flight = await calls_repo.count_in_flight(
+            db, now=now, max_age_s=settings.outbound_max_call_duration_s + 120
+        )
+        queued_due = await calls_repo.count_queued_due(db, now=now)
+    slots = max(
+        0, settings.max_concurrent_calls - settings.reserved_concurrency - in_flight - queued_due
+    )
+    processed = 0
+    for _ in range(min(settings.scheduler_batch_size, slots)):
+        async with factory() as db:  # ONE target per transaction (spec §5.2)
+            target = await batches_repo.claim_next_pending_target(db)
+            if target is None:
+                break
+            await _materialize_one_target(db, settings, target, now=now)
+            await db.commit()
+        processed += 1
+    return processed
+
+
+async def _materialize_one_target(
+    db: AsyncSession, settings: Settings, target: CallBatchTarget, *, now: datetime
+) -> None:
+    """Run the spec §5.2 phase-4 branch matrix for one claimed pending target.
+
+    Every branch settles or links the claimed row in the caller's transaction
+    (call insert + target flip commit atomically, §5.3) — a claimed target is
+    never left pending with work done.
+    """
+    log = logger.bind(
+        component="schedule_poller",
+        batch_id=str(target.batch_id),
+        target_index=target.target_index,
+    )
+    elder = await db.get(Elder, target.elder_id) if target.elder_id is not None else None
+    if elder is None:
+        # FK SET NULL orphaned the target (spec §3.3): a deleted elder must not
+        # silently shrink the batch — skip observably.
+        await batches_repo.mark_target_skipped(db, target, reason="elder_deleted", now=now)
+        log.info("Batch target skipped: elder deleted")
+        return
+    batch = await db.get(CallBatch, target.batch_id)
+    try:
+        dial_at = quiet_hours.next_allowed(now, elder.timezone)
+        if (
+            batch is not None
+            and batch.window_start_local is not None
+            and batch.window_end_local is not None
+        ):
+            # Push the clamp into the batch window/day-mask (first attempts only,
+            # §6.1; next_run_at re-intersects with quiet hours).
+            dial_at = schedule_windows.next_run_at(
+                dial_at,
+                elder.timezone,
+                window_start=batch.window_start_local,
+                window_end=batch.window_end_local,
+                days_mask=batch.days_of_week if batch.days_of_week is not None else _EVERY_DAY_MASK,
+            )
+        # The PUSHED dial day: the daily cap counts the day the call will actually
+        # happen, never `now`'s day — a window-pushed target must not dodge the
+        # harassment cap (spec §5.3 step 1).
+        local_day = schedule_windows.local_date(dial_at, elder.timezone)
+    except ValueError:
+        # Invalid timezone (or a window that can no longer fire): fail CLOSED —
+        # never risk a TCPA-hour dial on corrupt state.
+        await batches_repo.mark_target_skipped(db, target, reason="invalid_timezone", now=now)
+        log.opt(exception=True).error("Batch target failed closed: invalid timezone")
+        return
+    profile_override = target.profile_override  # target override wins over batch default (§5.3)
+    if profile_override is None and batch is not None:
+        profile_override = batch.profile_override
+    outcome = await materialize_call(
+        db,
+        settings,
+        elder=elder,
+        idempotency_key=f"batch:{target.batch_id}:{target.target_index}",
+        scheduled_at=dial_at,
+        local_day=local_day,
+        dynamic_vars=target.dynamic_vars,
+        profile_override=profile_override,
+    )
+    if outcome.result in ("created", "replayed", "dnc_blocked") and outcome.call is not None:
+        await batches_repo.mark_target_materialized(db, target, call_id=outcome.call.id, now=now)
+        bound = log.bind(call_id=str(outcome.call.id))
+        if outcome.result == "dnc_blocked":
+            # Terminal row consumed the key; the finalizer settles the target
+            # done/dnc_blocked next cycle (§5.3 step 3) — never silent.
+            bound.warning("Batch target materialized as DNC_BLOCKED")
+        else:
+            bound.info("Batch target materialized: {r}", r=outcome.result)
+    elif outcome.result == "skipped_daily_cap":
+        await batches_repo.mark_target_skipped(db, target, reason="daily_cap", now=now)
+        log.info("Batch target skipped: daily autonomous-call cap reached on the dial day")
+    else:  # key_conflict
+        await batches_repo.mark_target_skipped(db, target, reason="key_conflict", now=now)
+        log.error("Batch target idempotency-key conflict; skipped, no call linked")
 
 
 async def _sweep_cancelled_batches(
     factory: async_sessionmaker[AsyncSession], *, now: datetime
 ) -> int:
-    """Phase 5 — backstop sweep of cancelled batches' QUEUED chain tips (spec
-    §5.2; the primary guard is the cancellation-aware ``schedule_retry``).
-    Implemented with the batch-target phases."""
-    return 0
+    """Phase 5 — backstop sweep (spec §5.2, §5.6): guarded-cancel QUEUED chain
+    tips of open cancelled batches.
+
+    The PRIMARY guard is the cancellation-aware ``schedule_retry`` (suppresses
+    post-cancel children in the parent's terminal commit); this sweep only
+    closes the narrow cancel-vs-terminal-transition commit race. In-flight tips
+    are never torn down — they finish naturally and the finalizer settles them
+    with their truthful outcome. (``now`` is unused: the guarded tip flip needs
+    no clock; the parameter keeps the six phase signatures uniform.)
+    """
+    async with factory() as db:
+        cancelled_ids = [
+            batch.id
+            for batch in await batches_repo.open_batches(db, limit=_OPEN_BATCHES_LIMIT)
+            if batch.status == "cancelled"
+        ]
+    swept = 0
+    for batch_id in cancelled_ids:
+        async with factory() as db:
+            targets = await batches_repo.list_materialized_targets(db, batch_id)
+            roots = [t.call_id for t in targets if t.call_id is not None]
+            flipped = await calls_repo.cancel_queued_tips(db, roots)
+            await db.commit()
+        if flipped:
+            logger.bind(component="schedule_poller", batch_id=str(batch_id)).info(
+                "Sweep cancelled {n} queued chain tip(s)", n=flipped
+            )
+        swept += flipped
+    return swept
 
 
 async def _complete_drained_batches(
     factory: async_sessionmaker[AsyncSession], *, now: datetime
 ) -> int:
-    """Phase 6 — stamp drained batches completed (spec §5.2). Implemented with
-    the batch-target phases."""
-    return 0
+    """Phase 6 — stamp drained batches (spec §5.2): ``running`` with zero open
+    targets → ``completed`` + ``completed_at``; ``cancelled`` with zero open
+    targets → ``completed_at`` only (status preserved). The stamp removes the
+    batch from the open working set permanently — phases 1/5 never revisit
+    drained history (§9 cancelled-batch drain bookkeeping)."""
+    async with factory() as db:
+        drained = await batches_repo.complete_drained_batches(db, now=now)
+        stamped = [(batch.id, batch.status) for batch in drained]
+        await db.commit()
+    for batch_id, status in stamped:
+        logger.bind(component="schedule_poller", batch_id=str(batch_id), status=status).info(
+            "Batch drained: completed_at stamped"
+        )
+    return len(stamped)
 
 
 async def run_poller(settings: Settings, stop: asyncio.Event) -> None:

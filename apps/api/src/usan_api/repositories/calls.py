@@ -542,6 +542,15 @@ async def get_chain_tip(db: AsyncSession, root_call_id: uuid.UUID) -> Call | Non
     return current
 
 
+async def has_child(db: AsyncSession, call_id: uuid.UUID) -> bool:
+    """True when a retry child row exists for ``call_id`` — a single indexed
+    probe via ``uq_calls_parent_call_id``; the finalizer's §6.2 "no child" test
+    (after a terminal transition's commit, either the child exists or it never
+    will, so this probe is race-free within one snapshot)."""
+    result = await db.execute(select(Call.id).where(Call.parent_call_id == call_id).limit(1))
+    return result.scalar_one_or_none() is not None
+
+
 async def cancel_queued_tips(db: AsyncSession, root_call_ids: Sequence[uuid.UUID]) -> int:
     """Guarded UPDATE: each chain's tip ``queued -> cancelled`` (the first writer
     of the CANCELLED enum value). Never touches ``dialing``/``in_progress`` rows —
