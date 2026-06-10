@@ -280,10 +280,13 @@ async def mark_attempt_failed(
     return result.scalar_one_or_none() is not None
 
 
-# Spec §5.4: a crash on a row already at attempts=4 leaves it pending but
-# unclaimable (the attempts < 4 predicate) — sweep it to failed after a
+# Spec §5.4: an attempts=4 pending row is unclaimable (the attempts < 4 claim
+# predicate) yet still 'pending'. Two paths leave one behind: a crash
+# mid-terminal-attempt, or a breaker/disable SKIP of an already-claimed
+# terminal-rung row (deliver_one step 1) — both settle to failed here after a
 # 10-minute grace (a live worker may still be mid-POST). COALESCE so a genuine
-# last error type is never overwritten by the sentinel (review L4d).
+# last error type is never overwritten by the sentinel (review L4d): the bare
+# 'crash_residual' label only ever marks rows that recorded no attempt outcome.
 _SWEEP_SQL = text(
     """
     UPDATE webhook_deliveries
@@ -316,7 +319,8 @@ _PRUNE_SQL = text(
 
 
 async def sweep_crash_residue(db: AsyncSession, *, now: datetime) -> int:
-    """Fail crash-orphaned attempts=4 pending rows; returns the swept count."""
+    """Fail unclaimable attempts=4 pending rows (crash residue AND terminal-rung
+    breaker/disable skips — see _SWEEP_SQL); returns the swept count."""
     result = cast("CursorResult[Any]", await db.execute(_SWEEP_SQL, {"now": now}))
     return int(result.rowcount or 0)
 

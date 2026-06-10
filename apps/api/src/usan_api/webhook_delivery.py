@@ -111,8 +111,11 @@ async def deliver_one(
         endpoint = await db.get(WebhookEndpoint, claimed.endpoint_id)
         if endpoint is None or not endpoint.enabled:
             # Breaker tripped mid-cycle (or endpoint deleted): skip without
-            # POSTing — the already-bumped lease re-offers the row if the
-            # operator re-enables (spec §5.3 step 1).
+            # POSTing. At attempts < 4 the already-bumped lease re-offers the
+            # row if the operator re-enables (spec §5.3 step 1); a row skipped
+            # on its TERMINAL rung (attempts=4) is unclaimable (the claim's
+            # attempts < 4 predicate) and is settled to failed by the hourly
+            # attempts=4 sweep (§5.4) — operator redeliver re-arms it.
             return _OUTCOME_SKIPPED
         url = endpoint.url
         secret = endpoint.secret
@@ -206,7 +209,9 @@ async def _deliver_group(
         if outcome == _OUTCOME_SKIPPED:
             # Breaker tripped mid-cycle: every later row in this group would
             # skip too — stop the group early (spec §5.2). Skipped rows stay
-            # pending; their bumped leases re-offer them on re-enable.
+            # pending; below the terminal rung their bumped leases re-offer
+            # them on re-enable, while attempts=4 skips settle to failed via
+            # the hourly sweep (see deliver_one).
             break
     return counts
 
