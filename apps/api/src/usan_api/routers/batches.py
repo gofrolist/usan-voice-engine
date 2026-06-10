@@ -26,6 +26,7 @@ from usan_api.auth import require_operator_token
 from usan_api.client_ip import client_ip
 from usan_api.db.models import CallBatch, Elder
 from usan_api.db.session import get_db
+from usan_api.observability.custom_metrics import BATCH_EVENTS_TOTAL
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import calls as calls_repo
@@ -158,6 +159,9 @@ async def create_batch(
             raise  # not the key race (e.g. an elder vanished mid-flight)
         del exc
         return await _replay_or_conflict(db, existing, digest, response)
+    # Increment-after-commit (spec §7); replays above return without counting —
+    # the concurrent POST that actually created the batch already counted it.
+    BATCH_EVENTS_TOTAL.labels(event="created").inc()
     _audit(request, batch.id, "batch_created", targets=len(body.targets))
     return BatchSummaryResponse.from_model(batch, BatchCounts(pending=len(body.targets)))
 
@@ -199,12 +203,17 @@ async def cancel_batch(
     In-flight calls are never torn down. Idempotent: re-cancelling returns 200
     unchanged; a completed batch is a 409."""
     batch = await _get_or_404(db, batch_id)
+    was_cancelled = batch.status == "cancelled"
     try:
         root_call_ids = await batches_repo.cancel_batch(db, batch, now=datetime.now(UTC))
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     cancelled_calls = await calls_repo.cancel_queued_tips(db, root_call_ids)
     await db.commit()
+    if not was_cancelled:
+        # Increment-after-commit (spec §7); an idempotent re-cancel is not a
+        # lifecycle transition and never double-counts.
+        BATCH_EVENTS_TOTAL.labels(event="cancelled").inc()
     await db.refresh(batch)
     _audit(
         request,

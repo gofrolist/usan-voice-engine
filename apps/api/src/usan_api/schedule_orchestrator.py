@@ -40,6 +40,11 @@ from usan_api import quiet_hours, schedule_windows
 from usan_api.db.base import CallStatus
 from usan_api.db.models import Call, CallBatch, CallBatchTarget, CallSchedule, Elder
 from usan_api.db.session import get_session_factory
+from usan_api.observability.custom_metrics import (
+    BATCH_EVENTS_TOTAL,
+    BATCH_TARGETS_FINALIZED_TOTAL,
+    MATERIALIZED_CALLS_TOTAL,
+)
 from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import call_schedules as schedules_repo
 from usan_api.repositories import calls as calls_repo
@@ -202,6 +207,7 @@ async def _finalize_settled_targets(
         batch_ids = [b.id for b in await batches_repo.open_batches(db, limit=_OPEN_BATCHES_LIMIT)]
     finalized = 0
     for batch_id in batch_ids:
+        settled: list[str] = []
         async with factory() as db:
             for target in await batches_repo.list_materialized_targets(db, batch_id):
                 if target.call_id is None:  # defensive: materialized implies a linked root
@@ -215,6 +221,7 @@ async def _finalize_settled_targets(
                     db, target, final_status=tip.status.value, now=now
                 ):
                     finalized += 1
+                    settled.append(tip.status.value)
                     logger.bind(
                         component="schedule_poller",
                         batch_id=str(batch_id),
@@ -222,6 +229,8 @@ async def _finalize_settled_targets(
                         final_status=tip.status.value,
                     ).info("Batch target finalized")
             await db.commit()
+        for final_status in settled:  # increment-after-commit (spec §7)
+            BATCH_TARGETS_FINALIZED_TOTAL.labels(final_status=final_status).inc()
     return finalized
 
 
@@ -235,6 +244,7 @@ async def _trigger_due_batches(factory: async_sessionmaker[AsyncSession], *, now
         batch_ids = [batch.id for batch in batches]
         await db.commit()
     for batch_id in batch_ids:
+        BATCH_EVENTS_TOTAL.labels(event="started").inc()  # increment-after-commit (spec §7)
         logger.bind(component="schedule_poller", batch_id=str(batch_id)).info(
             "Batch triggered: scheduled -> running"
         )
@@ -256,21 +266,25 @@ async def _materialize_due_schedules(
             claimed = await schedules_repo.claim_due_schedules(db, now=now, limit=1)
             if not claimed:
                 break
-            await _materialize_one_schedule(db, settings, claimed[0], now=now)
+            result = await _materialize_one_schedule(db, settings, claimed[0], now=now)
             await db.commit()
+        # Increment-after-commit (spec §7): a crash before the commit above
+        # re-runs the row without ever having counted it — never a double count.
+        MATERIALIZED_CALLS_TOTAL.labels(source="schedule", result=result).inc()
         processed += 1
     return processed
 
 
 async def _materialize_one_schedule(
     db: AsyncSession, settings: Settings, schedule: CallSchedule, *, now: datetime
-) -> None:
+) -> str:
     """Run the exhaustive §5.2 phase-3 branch matrix for one claimed schedule.
 
     EVERY branch writes ``last_result``/``last_result_at`` AND advances
     ``next_run_at`` — a branch that forgets the advance re-claims the same row
     every cycle forever (§5.3 step 5). The call insert and this bookkeeping
-    commit atomically in the caller.
+    commit atomically in the caller. Returns the recorded result so the caller
+    can mirror it into the materialization counter AFTER that commit (spec §7).
     """
     log = logger.bind(component="schedule_poller", schedule_id=str(schedule.id))
     elder = await db.get(Elder, schedule.elder_id)
@@ -306,7 +320,7 @@ async def _materialize_one_schedule(
                 ),
             )
             log.info("Schedule rescheduled: next_run_at was stale for the current window")
-            return
+            return "rescheduled"
 
         next_occurrence = schedule_windows.next_run_at(
             end_utc,
@@ -322,7 +336,7 @@ async def _materialize_one_schedule(
                 db, schedule, result="skipped_window", now=now, next_run_at=next_occurrence
             )
             log.warning("Schedule window already ended; occurrence skipped observably")
-            return
+            return "skipped_window"
 
         outcome = await materialize_call(
             db,
@@ -347,11 +361,12 @@ async def _materialize_one_schedule(
         log.opt(exception=True).error(
             "Schedule materialization failed closed (invalid timezone); retrying hourly"
         )
-        return
+        return "skipped_invalid_timezone"
 
     await _record_materialize_outcome(
         db, schedule, outcome, now=now, next_occurrence=next_occurrence, today=today, log=log
     )
+    return outcome.result
 
 
 async def _record_materialize_outcome(
@@ -431,20 +446,24 @@ async def _materialize_batch_targets(
             target = await batches_repo.claim_next_pending_target(db)
             if target is None:
                 break
-            await _materialize_one_target(db, settings, target, now=now)
+            result = await _materialize_one_target(db, settings, target, now=now)
             await db.commit()
+        # Increment-after-commit (spec §7), mirroring the phase-3 discipline.
+        MATERIALIZED_CALLS_TOTAL.labels(source="batch", result=result).inc()
         processed += 1
     return processed
 
 
 async def _materialize_one_target(
     db: AsyncSession, settings: Settings, target: CallBatchTarget, *, now: datetime
-) -> None:
+) -> str:
     """Run the spec §5.2 phase-4 branch matrix for one claimed pending target.
 
     Every branch settles or links the claimed row in the caller's transaction
     (call insert + target flip commit atomically, §5.3) — a claimed target is
-    never left pending with work done.
+    never left pending with work done. Returns the bounded decision result so
+    the caller can mirror it into the materialization counter AFTER that
+    commit (spec §7).
     """
     log = logger.bind(
         component="schedule_poller",
@@ -457,7 +476,7 @@ async def _materialize_one_target(
         # silently shrink the batch — skip observably.
         await batches_repo.mark_target_skipped(db, target, reason="elder_deleted", now=now)
         log.info("Batch target skipped: elder deleted")
-        return
+        return "skipped_elder_deleted"
     batch = await db.get(CallBatch, target.batch_id)
     try:
         dial_at = quiet_hours.next_allowed(now, elder.timezone)
@@ -484,7 +503,7 @@ async def _materialize_one_target(
         # never risk a TCPA-hour dial on corrupt state.
         await batches_repo.mark_target_skipped(db, target, reason="invalid_timezone", now=now)
         log.opt(exception=True).error("Batch target failed closed: invalid timezone")
-        return
+        return "skipped_invalid_timezone"
     profile_override = target.profile_override  # target override wins over batch default (§5.3)
     if profile_override is None and batch is not None:
         profile_override = batch.profile_override
@@ -513,6 +532,7 @@ async def _materialize_one_target(
     else:  # key_conflict
         await batches_repo.mark_target_skipped(db, target, reason="key_conflict", now=now)
         log.error("Batch target idempotency-key conflict; skipped, no call linked")
+    return outcome.result
 
 
 async def _sweep_cancelled_batches(
@@ -562,6 +582,11 @@ async def _complete_drained_batches(
         stamped = [(batch.id, batch.status) for batch in drained]
         await db.commit()
     for batch_id, status in stamped:
+        if status == "completed":
+            # Increment-after-commit (spec §7). Only the running -> completed
+            # transition counts: a drained CANCELLED batch keeps its status and
+            # already counted its `cancelled` event at the cancel endpoint.
+            BATCH_EVENTS_TOTAL.labels(event="completed").inc()
         logger.bind(component="schedule_poller", batch_id=str(batch_id), status=status).info(
             "Batch drained: completed_at stamped"
         )
