@@ -41,6 +41,35 @@ class CallOutcomeRequest(BaseModel):
     outcome: Literal["voicemail_left"]
 
 
+class CallOrigin(BaseModel):
+    source: Literal["schedule", "batch"]
+    id: uuid.UUID
+    ordinal: str | int  # local_date for schedules, target_index for batches
+
+
+def parse_origin(idempotency_key: str | None) -> CallOrigin | None:
+    """Derived, read-only provenance from the materializer's reserved key namespace
+    (spec §4.3). Malformed values return None — never raise on stored data."""
+    if idempotency_key is None:
+        return None
+    parts = idempotency_key.split(":", 2)
+    if len(parts) != 3:
+        return None
+    prefix, raw_id, raw_ordinal = parts
+    try:
+        owner_id = uuid.UUID(raw_id)
+    except ValueError:
+        return None
+    if prefix == "sched" and raw_ordinal:
+        return CallOrigin(source="schedule", id=owner_id, ordinal=raw_ordinal)
+    if prefix == "batch":
+        try:
+            return CallOrigin(source="batch", id=owner_id, ordinal=int(raw_ordinal))
+        except ValueError:
+            return None
+    return None
+
+
 class TranscriptSegment(BaseModel):
     role: str
     content: str
@@ -75,6 +104,9 @@ class CallResponse(BaseModel):
     presigned_recording_url: str | None
     transcript: list[TranscriptSegment] = Field(default_factory=list)
     created_at: datetime
+    # Derived provenance (spec §4.3): parsed from this call's own reserved-namespace
+    # idempotency_key; None for operator keys and retry children (chain walk applies).
+    origin: CallOrigin | None = None
 
     @classmethod
     def from_model(
@@ -98,6 +130,7 @@ class CallResponse(BaseModel):
             presigned_recording_url=presigned_recording_url,
             transcript=[TranscriptSegment.from_model(t) for t in transcript],
             created_at=call.created_at,
+            origin=parse_origin(call.idempotency_key),
         )
 
 
