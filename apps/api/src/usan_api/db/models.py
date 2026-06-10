@@ -1,18 +1,20 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
     Numeric,
     SmallInteger,
     Text,
+    Time,
     text,
 )
 from sqlalchemy import Enum as SAEnum
@@ -404,6 +406,130 @@ class SmsMessage(Base):
     telnyx_message_id: Mapped[str | None] = mapped_column(Text, unique=True)
     error: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class CallSchedule(Base):
+    __tablename__ = "call_schedules"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    # CASCADE: a schedule is meaningless without its elder; calls.elder_id SET NULLs
+    # independently, so call history survives (spec §3.1). UNIQUE: one schedule per
+    # elder — it is *the* daily wellness call.
+    elder_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("elders.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    # Elder-local wall clock; the elder's timezone column is the single source of truth.
+    window_start_local: Mapped[time] = mapped_column(Time, nullable=False)
+    window_end_local: Mapped[time] = mapped_column(Time, nullable=False)
+    # Bitmask, bit 0=Mon … bit 6=Sun; 127 = all seven days.
+    days_of_week: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default=text("127")
+    )
+    dynamic_vars: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    profile_override: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_profiles.id", ondelete="SET NULL")
+    )
+    # Computed in Python (zoneinfo); never SQL tz math.
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_materialized_date: Mapped[date | None] = mapped_column(Date)
+    last_result: Mapped[str | None] = mapped_column(Text)
+    last_result_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class CallBatch(Base):
+    __tablename__ = "call_batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    # Operator label; PHI-free by convention (spec §8).
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(Text, unique=True)
+    # sha256 of the canonical payload (spec §4.2 replay guard).
+    payload_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'scheduled'"))
+    trigger_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Optional per-elder-local dial window (both NULL or both set, CHECK-enforced).
+    window_start_local: Mapped[time | None] = mapped_column(Time)
+    window_end_local: Mapped[time | None] = mapped_column(Time)
+    days_of_week: Mapped[int | None] = mapped_column(SmallInteger)
+    # Materialization throttle, NOT a dial cap (spec §5.2).
+    max_concurrency: Mapped[int | None] = mapped_column(SmallInteger)
+    profile_override: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_profiles.id", ondelete="SET NULL")
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Also stamped on drained cancelled batches (bounded poller working set).
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class CallBatchTarget(Base):
+    __tablename__ = "call_batch_targets"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("call_batches.id", ondelete="CASCADE"), nullable=False
+    )
+    # Position in the submitted array (UNIQUE (batch_id, target_index) in 0012).
+    target_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    # SET NULL (not CASCADE): a deleted elder must not silently shrink the batch;
+    # the poller marks the orphan target skipped/elder_deleted instead (spec §3.3).
+    elder_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("elders.id", ondelete="SET NULL")
+    )
+    dynamic_vars: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    profile_override: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_profiles.id", ondelete="SET NULL")
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+    # elder_deleted | invalid_timezone | key_conflict | daily_cap
+    skip_reason: Mapped[str | None] = mapped_column(Text)
+    # Root attempt; SET NULL keeps the target's audit row if the call is purged.
+    call_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("calls.id", ondelete="SET NULL")
+    )
+    # Denormalized terminal CallStatus of the LAST attempt (spec §6.2).
+    final_status: Mapped[str | None] = mapped_column(Text)
+    materialized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
