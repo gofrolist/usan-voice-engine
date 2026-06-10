@@ -215,6 +215,13 @@ async def end_call(
     return CallEndedResponse(status=final.status.value)
 
 
+# Hard per-call ceiling on queued texts, counted across ALL statuses (sent rows
+# spend the budget too). The /v1/tools/* paths are exempt from the global rate
+# limiter, so without this a confused or hijacked LLM could queue unbounded
+# carrier traffic to the elder's phone within a single call.
+MAX_SMS_PER_CALL = 3
+
+
 @router.post("/send_sms", response_model=SmsQueuedResponse)
 @track_tool("send_sms")
 async def send_sms(
@@ -229,6 +236,8 @@ async def send_sms(
         raise HTTPException(status_code=409, detail="elder record not found")
     if not elder.phone_e164:
         raise HTTPException(status_code=409, detail="elder has no phone number")
+    if await sms_repo.count_for_call(db, call.id) >= MAX_SMS_PER_CALL:
+        raise HTTPException(status_code=409, detail="per-call SMS limit reached")
 
     resolved = await profiles_repo.resolve_agent_config(
         db,

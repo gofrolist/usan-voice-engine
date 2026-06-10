@@ -32,7 +32,7 @@ def _patch_factory(request: pytest.FixtureRequest, monkeypatch, url: str) -> Non
     )
 
 
-async def _seed_pending(url: str) -> uuid.UUID:
+async def _seed_pending(url: str, count: int = 1) -> uuid.UUID:
     engine = create_async_engine(url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
@@ -45,14 +45,15 @@ async def _seed_pending(url: str) -> uuid.UUID:
                 direction=CallDirection.OUTBOUND,
                 status=CallStatus.IN_PROGRESS,
             )
-            await sms_repo.create_sms_message(
-                db,
-                call_id=call.id,
-                elder_id=elder.id,
-                to_number=phone,
-                template_key="t",
-                body="hi",
-            )
+            for i in range(count):
+                await sms_repo.create_sms_message(
+                    db,
+                    call_id=call.id,
+                    elder_id=elder.id,
+                    to_number=phone,
+                    template_key=f"t{i}",
+                    body="hi",
+                )
             await db.commit()
             return call.id
     finally:
@@ -144,3 +145,95 @@ def test_flush_marks_failed_on_send_error(client, async_database_url, monkeypatc
     assert rows[0].status == "failed"
     assert rows[0].error["reason"] == "send_failed"
     get_settings.cache_clear()
+
+
+def _patch_factory_failing_commit(
+    request: pytest.FixtureRequest, monkeypatch, url: str, *, fail_on_call: int
+) -> None:
+    """Like _patch_factory, but the Nth session.commit() raises (transient DB error)."""
+    engine = create_async_engine(url, poolclass=NullPool)
+    request.addfinalizer(lambda: asyncio.run(engine.dispose()))
+    real_factory = async_sessionmaker(engine, expire_on_commit=False)
+    calls = {"n": 0}
+
+    def factory():
+        session = real_factory()
+        real_commit = session.commit
+
+        async def commit():
+            calls["n"] += 1
+            if calls["n"] == fail_on_call:
+                raise RuntimeError("simulated commit failure")
+            await real_commit()
+
+        session.commit = commit  # type: ignore[method-assign]
+        return session
+
+    monkeypatch.setattr(sms_outbox, "get_session_factory", lambda: factory)
+
+
+def test_flush_commits_per_row_so_partial_progress_survives(
+    client, async_database_url, monkeypatch, request
+):
+    # Two pending rows; the commit after the SECOND row fails. Per-row commits mean
+    # row 1's `sent` status must survive — a single end-of-loop commit would roll
+    # back BOTH rows after their Telnyx sends had already been dispatched, and the
+    # next flush would re-send every message (review HIGH: duplicate SMS delivery).
+    # The duplicate window must be at most the one row whose commit failed.
+    monkeypatch.setenv("TELNYX_MESSAGING_ENABLED", "true")
+    monkeypatch.setenv("TELNYX_MESSAGING_API_KEY", "KEY")
+    monkeypatch.setenv("TELNYX_MESSAGING_PROFILE_ID", "mp1")
+    monkeypatch.setenv("TELNYX_FROM_NUMBER", "+15551230000")
+    from usan_api.settings import get_settings
+
+    get_settings.cache_clear()
+
+    async def _fake_send(settings, *, to_number, body):
+        return f"msg-{uuid.uuid4().hex[:6]}"
+
+    monkeypatch.setattr(telnyx_messaging, "send_sms", _fake_send)
+    _patch_factory_failing_commit(request, monkeypatch, async_database_url, fail_on_call=2)
+
+    from usan_api.observability.custom_metrics import SMS_MESSAGES_TOTAL
+
+    before = _counter_value(SMS_MESSAGES_TOTAL, status="sent")
+    call_id = asyncio.run(_seed_pending(async_database_url, count=2))
+    # Must not raise: flush runs as a fire-and-forget background task.
+    asyncio.run(sms_outbox.flush_pending_sms(call_id))
+    rows = asyncio.run(_status_of(async_database_url, call_id))
+    statuses = sorted(r.status for r in rows)
+    assert statuses == ["pending", "sent"]
+    # The metric fires only AFTER a successful commit: exactly one increment, even
+    # though both rows' Telnyx sends succeeded.
+    assert _counter_value(SMS_MESSAGES_TOTAL, status="sent") == before + 1
+    get_settings.cache_clear()
+
+
+def test_flush_never_raises_on_unexpected_error(client, async_database_url, monkeypatch, request):
+    # An error before the per-row loop (e.g. the pending-rows query) used to
+    # propagate into FastAPI's BackgroundTasks runner, which swallows it silently —
+    # rows stuck pending, nothing logged. flush_pending_sms must catch everything
+    # itself and surface the failure via its own (PHI-free) log line.
+    _patch_factory(request, monkeypatch, async_database_url)
+    invoked = {"n": 0}
+
+    async def _boom(db, call_id):
+        invoked["n"] += 1
+        raise RuntimeError("db exploded")
+
+    monkeypatch.setattr(sms_outbox.sms_repo, "get_pending_for_call", _boom)
+
+    from loguru import logger as loguru_logger
+
+    records: list = []
+    handler_id = loguru_logger.add(records.append, level="ERROR")
+    try:
+        asyncio.run(sms_outbox.flush_pending_sms(uuid.uuid4()))  # must not raise
+    finally:
+        loguru_logger.remove(handler_id)
+    assert invoked["n"] == 1  # the failure actually came from the patched query
+    crash = next(m for m in records if "SMS flush crashed" in m.record["message"])
+    # PHI rule: only the exception TYPE is logged, never str(exc) (an asyncpg/httpx
+    # message can embed SQL params or URLs tied to elder phone numbers).
+    assert crash.record["extra"]["err"] == "RuntimeError"
+    assert "db exploded" not in str(crash)

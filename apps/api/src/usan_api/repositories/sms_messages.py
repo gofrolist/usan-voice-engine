@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.models import SmsMessage
@@ -38,6 +38,14 @@ async def create_sms_message(
     await db.flush()
     await db.refresh(row)
     return row
+
+
+async def count_for_call(db: AsyncSession, call_id: uuid.UUID) -> int:
+    """All sms rows for a call, regardless of status (the per-call send budget)."""
+    result = await db.execute(
+        select(func.count()).select_from(SmsMessage).where(SmsMessage.call_id == call_id)
+    )
+    return int(result.scalar_one())
 
 
 async def get_pending_for_call(db: AsyncSession, call_id: uuid.UUID) -> list[SmsMessage]:

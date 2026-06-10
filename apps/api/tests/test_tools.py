@@ -656,3 +656,56 @@ def test_send_sms_resolves_profile_override_over_direction_default(
         headers=_auth(call_id),
     )
     assert miss.status_code == 404
+
+
+def test_send_sms_per_call_cap_409(client, mock_dispatch, async_database_url):
+    # A confused/hijacked LLM must not queue unbounded carrier traffic: send_sms is
+    # exempt from the global rate limiter (in-call tool path), so the endpoint
+    # itself refuses once MAX_SMS_PER_CALL rows exist for the call — any status,
+    # since already-sent texts count toward the elder's per-call budget too.
+    from usan_api.routers import tools as tools_router
+
+    # Pin the literal value: raising the per-call budget must be a deliberate,
+    # reviewed decision (carrier traffic to an elder's phone), not a constant tweak.
+    assert tools_router.MAX_SMS_PER_CALL == 3
+
+    _publish_sms_profile(async_database_url)
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    for _ in range(tools_router.MAX_SMS_PER_CALL):
+        r = client.post(
+            "/v1/tools/send_sms",
+            json={"call_id": call_id, "template_key": "greet"},
+            headers=_auth(call_id),
+        )
+        assert r.status_code == 200, r.text
+
+    # The budget counts ALL statuses: flushing a queued row to `sent` must not
+    # refund the cap (a pending-only count would reset after every flush).
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import sms_messages as sms_repo
+
+    async def _mark_one_sent():
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as db:
+                rows = await sms_repo.list_messages(db, limit=100)
+                row = next(r for r in rows if str(r.call_id) == call_id)
+                await sms_repo.mark_sent(db, row.id, telnyx_message_id="m-cap")
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_mark_one_sent())
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 409
+    assert "limit" in r.json()["detail"]

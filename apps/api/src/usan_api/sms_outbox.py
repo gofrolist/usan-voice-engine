@@ -5,7 +5,13 @@ Idempotent: each row is claimed by a status-guarded pending->sent/failed
 transition (sms_messages repo), so both completion paths (end_call + the
 room_finished webhook) can fire for one call without re-sending. Gated on
 TELNYX_MESSAGING_ENABLED; when off, rows are marked failed with a documented
-reason (observable, not silent). The metric is incremented AFTER commit.
+reason (observable, not silent). The metric is incremented AFTER each row's commit.
+
+Delivery is AT-LEAST-ONCE: the Telnyx POST and the status commit cannot be made
+one atomic step, so a commit that fails after a successful send leaves that row
+pending and a later flush re-sends it. Each row is committed INDIVIDUALLY, right
+after its claim, which bounds the duplicate window to the single row whose commit
+failed — a loop-end commit would instead re-send the whole batch.
 """
 
 import uuid
@@ -20,6 +26,17 @@ from usan_api.settings import get_settings
 
 
 async def flush_pending_sms(call_id: uuid.UUID) -> None:
+    try:
+        await _flush_pending_sms(call_id)
+    except Exception as exc:  # noqa: BLE001 - fire-and-forget background task
+        # FastAPI's BackgroundTasks runner swallows exceptions silently — without
+        # this the rows would sit pending with no log at all. Log only the exception
+        # TYPE, never str(exc): a DB/httpx message can embed SQL parameters or URLs
+        # (PHI-adjacent, same rule as the error column below).
+        logger.bind(call_id=str(call_id), err=type(exc).__name__).error("SMS flush crashed")
+
+
+async def _flush_pending_sms(call_id: uuid.UUID) -> None:
     settings = get_settings()
     factory = get_session_factory()
     async with factory() as db:
@@ -28,6 +45,7 @@ async def flush_pending_sms(call_id: uuid.UUID) -> None:
             return
 
         if not settings.telnyx_messaging_enabled:
+            # No external side effects on this path, so one batch commit is safe.
             disabled = 0
             for row in pending:
                 claimed = await sms_repo.mark_failed(
@@ -45,7 +63,7 @@ async def flush_pending_sms(call_id: uuid.UUID) -> None:
             )
             return
 
-        results: list[str] = []
+        flushed = 0
         for row in pending:
             try:
                 message_id = await telnyx_messaging.send_sms(
@@ -61,16 +79,19 @@ async def flush_pending_sms(call_id: uuid.UUID) -> None:
                     row.id,
                     error={"reason": "send_failed", "detail": type(exc).__name__},
                 )
+                await db.commit()
                 # Only count when THIS flush claimed the row; a None means a concurrent
                 # flush (end_call + room_finished race) already transitioned it, so
                 # counting here would double-increment SMS_MESSAGES_TOTAL.
                 if claimed is not None:
-                    results.append("failed")
+                    SMS_MESSAGES_TOTAL.labels(status="failed").inc()
+                    flushed += 1
                 continue
             claimed = await sms_repo.mark_sent(db, row.id, telnyx_message_id=message_id)
+            # Commit BEFORE moving on: the Telnyx send above already happened, so this
+            # row's claim must not ride on later rows' fate (at-least-once bound).
+            await db.commit()
             if claimed is not None:
-                results.append("sent")
-        await db.commit()
-        for outcome in results:
-            SMS_MESSAGES_TOTAL.labels(status=outcome).inc()
-        logger.bind(call_id=str(call_id), n=len(results)).info("SMS flush complete")
+                SMS_MESSAGES_TOTAL.labels(status="sent").inc()
+                flushed += 1
+        logger.bind(call_id=str(call_id), n=flushed).info("SMS flush complete")
