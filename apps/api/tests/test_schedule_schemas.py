@@ -173,9 +173,3 @@ def test_schedule_response_from_model_renders_day_list():
     assert resp.last_materialized_date == date(2026, 6, 7)
     assert resp.last_result == "completed"
     assert resp.last_result_at == row.last_result_at
-
-
-def test_max_schedules_limit_constant():
-    from usan_api.schemas.schedule import MAX_SCHEDULES_LIMIT
-
-    assert MAX_SCHEDULES_LIMIT == 500

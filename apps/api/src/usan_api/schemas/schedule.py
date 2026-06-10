@@ -29,9 +29,8 @@ from usan_api.schedule_windows import (
 # metadata, so schedules reuse the one canonical cap from the call schemas.
 from usan_api.schemas.call import MAX_DYNAMIC_VARS_BYTES
 
-# Bounded list reads, house style (admin_audit precedent): GET /v1/schedules
-# clamps ?limit= to this, never an unbounded table scan.
-MAX_SCHEDULES_LIMIT = 500
+# The GET /v1/schedules ?limit= clamp lives with the read it bounds:
+# repositories/call_schedules.MAX_SCHEDULES_LIMIT (spec §4.1).
 
 
 def _validated_days(days: list[str]) -> list[str]:
