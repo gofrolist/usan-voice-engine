@@ -332,6 +332,17 @@ class AdminUser(Base):
 
 
 class AdminAuditLog(Base):
+    """Append-only audit trail for admin/operator mutations.
+
+    ``actor_email`` is normally the SSO-authenticated admin's email. The
+    outbound-webhook operator API (routers/webhook_endpoints.py) deliberately
+    breaks that admin-session-identity assumption with the sentinel
+    ``"operator-api-key"``: the operator-key plane carries no per-user
+    identity, and durable DB audit is wanted for egress configuration changes
+    (outbound-webhooks spec §4). ``detail`` carries ids and changed field
+    names only — never secrets, never URLs.
+    """
+
     __tablename__ = "admin_audit_log"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

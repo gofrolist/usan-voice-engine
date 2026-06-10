@@ -30,6 +30,7 @@ from usan_api.routers import (
     runtime,
     schedules,
     tools,
+    webhook_endpoints,
     webhooks,
 )
 from usan_api.settings import Settings, get_settings
@@ -146,6 +147,8 @@ def create_app() -> FastAPI:
     app.include_router(dnc.router)
     app.include_router(schedules.router)
     app.include_router(batches.router)
+    app.include_router(webhook_endpoints.router)
+    app.include_router(webhook_endpoints.deliveries_router)
     app.include_router(calls.router)
     app.include_router(webhooks.router)
     app.include_router(tools.router)
