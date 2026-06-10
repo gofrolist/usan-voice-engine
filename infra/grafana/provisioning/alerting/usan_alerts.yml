@@ -24,6 +24,14 @@ groups:
         # FOR 0m: fire as soon as the threshold is crossed (an urgent flag is a
         # page-now event). PHI-free: the metric labels are bounded enums only.
         for: 0m
+        # "No data" is the steady state for a low-traffic increase() query (fresh
+        # deploy, restart, quiet day) — never page on it (the provisioning default,
+        # NoData, routes to the contact point). An evaluation ERROR, by contrast,
+        # must page: a silently-broken urgent-flag rule is worse than a spurious
+        # one. Alerting matches file-provisioning's default (the UI/API default is
+        # Error); pinned explicitly so a Grafana default change can't silence it.
+        noDataState: OK
+        execErrState: Alerting
         data:
           - refId: A
             relativeTimeRange:
@@ -57,6 +65,10 @@ groups:
         title: SMS delivery failing
         condition: C
         for: 0m
+        # Same rationale as usan-urgent-followup-flag: no-data is normal, never
+        # page on it; evaluation errors must surface.
+        noDataState: OK
+        execErrState: Alerting
         data:
           - refId: A
             relativeTimeRange:
