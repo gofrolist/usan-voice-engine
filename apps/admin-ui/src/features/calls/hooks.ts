@@ -18,8 +18,8 @@ export interface CallsFilters {
   status?: string;
   direction?: string;
   origin?: string;
-  createdFrom?: string;
-  createdTo?: string; // already exclusive — CallsPage bumps the inclusive To by +1 day
+  createdFrom?: string; // ISO instant — local midnight of the picked day (CallsPage)
+  createdTo?: string; // ISO instant, already exclusive — CallsPage bumps the inclusive To +1 day
 }
 
 // Query keys carry UUIDs/enums/dates ONLY — never names or phones (spec §6.5).

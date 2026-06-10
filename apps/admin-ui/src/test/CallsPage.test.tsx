@@ -112,16 +112,32 @@ describe("CallsPage", () => {
     });
   });
 
-  it("To date is sent exclusive (+1 day) and labeled inclusive", async () => {
+  it("To date is sent exclusive (+1 day) as a local-midnight instant", async () => {
     getMock.mockResolvedValue(rows(3));
     renderPage();
     await screen.findByRole("table");
 
     // getByLabelText doubles as the label-copy assertion: the field must read
     // "To (inclusive)" while the wire value is the day after (exclusive bound).
+    // The bound is local midnight, not UTC midnight — the Created column renders
+    // local time, so an evening call must not fall outside its selected day.
+    // Expected value is built with the same Date math, keeping the test
+    // TZ-independent.
     const to = screen.getByLabelText("To (inclusive)");
     fireEvent.change(to, { target: { value: "2026-06-10" } });
-    await waitFor(() => expect(lastUrl()).toContain("created_to=2026-06-11"));
+    const expected = encodeURIComponent(new Date("2026-06-11T00:00:00").toISOString());
+    await waitFor(() => expect(lastUrl()).toContain(`created_to=${expected}`));
+  });
+
+  it("From date is sent as a local-midnight instant", async () => {
+    getMock.mockResolvedValue(rows(3));
+    renderPage();
+    await screen.findByRole("table");
+
+    const from = screen.getByLabelText("From");
+    fireEvent.change(from, { target: { value: "2026-06-10" } });
+    const expected = encodeURIComponent(new Date("2026-06-10T00:00:00").toISOString());
+    await waitFor(() => expect(lastUrl()).toContain(`created_from=${expected}`));
   });
 
   it("honors elder_id from the URL", async () => {

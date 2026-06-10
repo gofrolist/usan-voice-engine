@@ -53,11 +53,20 @@ function originBadge(c: AdminCallSummary) {
 
 // `created_to` is exclusive server-side; the field is labeled "To (inclusive)", so
 // the selected date is bumped by one day before being sent (spec §5.2) — otherwise
-// To=2026-06-10 would silently drop June 10's calls.
+// To=2026-06-10 would silently drop June 10's calls. Pure calendar math on the
+// date string (UTC anchoring here only avoids DST edge cases in the +1).
 function nextDay(date: string): string {
   const d = new Date(`${date}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + 1);
   return d.toISOString().slice(0, 10);
+}
+
+// The pickers select local calendar days and the Created column renders local
+// time, but the server treats a bare date string as UTC midnight — which drops
+// evening calls from the selected local day. Send local-midnight instants
+// instead (the server accepts aware datetimes unchanged).
+function localMidnightIso(date: string): string {
+  return new Date(`${date}T00:00:00`).toISOString();
 }
 
 export function CallsPage() {
@@ -84,8 +93,8 @@ export function CallsPage() {
     status: status || undefined,
     direction: direction || undefined,
     origin: origin || undefined,
-    createdFrom: from || undefined,
-    createdTo: to ? nextDay(to) : undefined,
+    createdFrom: from ? localMidnightIso(from) : undefined,
+    createdTo: to ? localMidnightIso(nextDay(to)) : undefined,
   };
   const calls = useCalls(filters, PAGE_SIZE, offset);
 
