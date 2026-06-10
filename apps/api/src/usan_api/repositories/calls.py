@@ -1,16 +1,17 @@
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 
 from loguru import logger
-from sqlalchemy import CursorResult, func, or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api import quiet_hours
+from usan_api import quiet_hours, webhook_events
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, CallBatch, CallBatchTarget, Elder
+from usan_api.repositories import webhook_outbox
 from usan_api.retry_policy import next_retry_delay
 from usan_api.schemas.call import RESERVED_KEY_PREFIXES  # single source (spec §2.2 invariant 3)
 
@@ -35,6 +36,23 @@ _TERMINAL_STATUSES = frozenset(
 )
 
 
+async def _enqueue_call_completed(db: AsyncSession, call: Call) -> None:
+    """Fan call.completed into the transactional outbox INSIDE the caller's
+    transaction, after the guarded transition's flush (spec §2.1): business
+    change and event commit or roll back together; the guard's no-op paths
+    never reach this, so one occurrence produces exactly one enqueue."""
+    await webhook_outbox.enqueue_event(
+        db, event="call.completed", payload=await webhook_events.call_completed_payload(db, call)
+    )
+
+
+async def _enqueue_call_started(db: AsyncSession, call: Call) -> None:
+    """call.started twin of _enqueue_call_completed (spec §2.1 table)."""
+    await webhook_outbox.enqueue_event(
+        db, event="call.started", payload=await webhook_events.call_started_payload(db, call)
+    )
+
+
 async def create_call(
     db: AsyncSession,
     *,
@@ -56,6 +74,10 @@ async def create_call(
     db.add(call)
     await db.flush()
     await db.refresh(call)
+    if status is CallStatus.DNC_BLOCKED:
+        # Terminal at birth (spec §2.1): the DNC gate refuses to dial, so this
+        # row never passes through a terminal mutator — emit here or never.
+        await _enqueue_call_completed(db, call)
     return call
 
 
@@ -78,15 +100,18 @@ async def set_status(
     call = await db.get(Call, call_id, with_for_update=True)
     if call is None:
         return None
-    # Captured under the row lock, before assignment: C4 gates the call.completed
-    # enqueue on `_old_status not in _TERMINAL_STATUSES and status in _TERMINAL_STATUSES`
-    # (spec §2.1). Underscore-prefixed until C4 consumes it; write behavior unchanged.
-    _old_status = call.status
+    # Captured under the row lock, before assignment: the call.completed enqueue
+    # is gated on the non-terminal -> terminal crossing only (spec §2.1), so the
+    # dial-time DNC_BLOCKED and dispatch-failure FAILED call sites emit with zero
+    # call-site edits while terminal -> terminal rewrites enqueue nothing.
+    old_status = call.status
     call.status = status
     if error is not None:
         call.error = error
     await db.flush()
     await db.refresh(call)
+    if old_status not in _TERMINAL_STATUSES and status in _TERMINAL_STATUSES:
+        await _enqueue_call_completed(db, call)
     return call
 
 
@@ -108,6 +133,7 @@ async def mark_answered(
         call.sip_call_id = sip_call_id
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_started(db, call)
     return call
 
 
@@ -137,6 +163,7 @@ async def mark_dial_failure(
         call.error = error
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_completed(db, call)
     return call
 
 
@@ -172,6 +199,7 @@ async def mark_completed_if_in_progress(db: AsyncSession, livekit_room: str) -> 
         call.duration_seconds = int((call.ended_at - call.answered_at).total_seconds())
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_completed(db, call)
     return call
 
 
@@ -219,6 +247,7 @@ async def mark_voicemail_left_if_in_progress(db: AsyncSession, call_id: uuid.UUI
         call.duration_seconds = int((call.ended_at - call.answered_at).total_seconds())
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_completed(db, call)
     return call
 
 
@@ -410,6 +439,9 @@ async def create_materialized_root(
     db.add(call)
     await db.flush()
     await db.refresh(call)
+    if status is CallStatus.DNC_BLOCKED:
+        # Terminal at birth, same as create_call's DNC gate (spec §2.1 table).
+        await _enqueue_call_completed(db, call)
     return call
 
 
@@ -458,6 +490,8 @@ async def create_inbound_call(
     db.add(call)
     await db.flush()
     await db.refresh(call)
+    # Inbound calls are answered at birth (spec §2.1 table) — call.started here.
+    await _enqueue_call_started(db, call)
     return call
 
 
@@ -546,6 +580,7 @@ async def complete_call_if_in_progress(
         call.duration_seconds = int((call.ended_at - call.answered_at).total_seconds())
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_completed(db, call)
     return call
 
 
@@ -565,6 +600,7 @@ async def mark_failed_if_active(
     call.end_reason = end_reason
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_completed(db, call)
     return call
 
 
@@ -601,7 +637,11 @@ async def has_child(db: AsyncSession, call_id: uuid.UUID) -> bool:
 async def cancel_queued_tips(db: AsyncSession, root_call_ids: Sequence[uuid.UUID]) -> int:
     """Guarded UPDATE: each chain's tip ``queued -> cancelled`` (the first writer
     of the CANCELLED enum value). Never touches ``dialing``/``in_progress`` rows —
-    in-flight calls finish naturally (spec §5.6). Returns rows flipped."""
+    in-flight calls finish naturally (spec §5.6). Returns rows flipped (the
+    ``-> int`` signature is kept for both callers, executor note 4); RETURNING
+    feeds one call.completed{status=cancelled} per flipped row into the outbox
+    (spec §2.1), with populate_existing so the tips get_chain_tip already loaded
+    into this session are refreshed rather than served stale."""
     tip_ids: list[uuid.UUID] = []
     for root_call_id in root_call_ids:
         tip = await get_chain_tip(db, root_call_id)
@@ -609,13 +649,15 @@ async def cancel_queued_tips(db: AsyncSession, root_call_ids: Sequence[uuid.UUID
             tip_ids.append(tip.id)
     if not tip_ids:
         return 0
-    result = cast(
-        "CursorResult[Any]",
-        await db.execute(
-            update(Call)
-            .where(Call.id.in_(tip_ids), Call.status == CallStatus.QUEUED)
-            .values(status=CallStatus.CANCELLED)
-        ),
+    result = await db.execute(
+        update(Call)
+        .where(Call.id.in_(tip_ids), Call.status == CallStatus.QUEUED)
+        .values(status=CallStatus.CANCELLED)
+        .returning(Call)
+        .execution_options(populate_existing=True)
     )
+    cancelled = list(result.scalars().all())
+    for call in cancelled:
+        await _enqueue_call_completed(db, call)
     await db.flush()
-    return int(result.rowcount or 0)
+    return len(cancelled)
