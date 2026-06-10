@@ -272,6 +272,22 @@ async def claim_due_retries(db: AsyncSession, *, now: datetime, limit: int) -> l
     return [call.id for call in claimed]
 
 
+async def requeue_for_quiet_hours(
+    db: AsyncSession, call_id: uuid.UUID, *, scheduled_at: datetime
+) -> Call | None:
+    """Flip a claimed DIALING row back to QUEUED with a fresh clamp (dial-time
+    quiet-hours re-check, spec §2.3). Guarded on DIALING so it never clobbers an
+    outcome written by a racing webhook."""
+    call = await db.get(Call, call_id)
+    if call is None or call.status is not CallStatus.DIALING:
+        return None
+    call.status = CallStatus.QUEUED
+    call.scheduled_at = scheduled_at
+    await db.flush()
+    await db.refresh(call)
+    return call
+
+
 async def create_inbound_call(
     db: AsyncSession,
     *,

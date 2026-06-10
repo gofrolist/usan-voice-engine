@@ -1,11 +1,13 @@
 import asyncio
 import json
 import uuid
+from datetime import UTC, datetime
 
 from google.protobuf.duration_pb2 import Duration
 from livekit import api
 from loguru import logger
 
+from usan_api import quiet_hours
 from usan_api.builtin_vars import resolve_builtin_vars
 from usan_api.db.base import CallStatus
 from usan_api.db.models import Call, Elder
@@ -16,6 +18,11 @@ from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import wellness as wellness_repo
 from usan_api.settings import Settings
 from usan_api.sip_status import classify_dial_exception
+
+
+def _utcnow() -> datetime:
+    """Module-level seam so tests can pin the dial moment (quiet-hours re-check)."""
+    return datetime.now(UTC)
 
 
 class OutboundDispatchError(Exception):
@@ -301,10 +308,11 @@ async def _dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
 async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
     """Poller dispatch entrypoint for a claimed retry (already flipped to DIALING).
 
-    Re-checks DNC at dial time (the elder may have opted out since the retry was
-    scheduled), dispatches the agent, then delegates to dial_and_classify. A
-    permanent misconfig fails the call without a retry; any other crash marks
-    FAILED and schedules a retry per §5.3.
+    Re-checks quiet hours at the actual dial moment (re-queues with a fresh clamp
+    when stale; fails closed on a bad timezone) and DNC (the elder may have opted
+    out since the retry was scheduled), dispatches the agent, then delegates to
+    dial_and_classify. A permanent misconfig fails the call without a retry; any
+    other crash marks FAILED and schedules a retry per §5.3.
     """
     factory = get_session_factory()
     try:
@@ -335,6 +343,31 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
                 await db.commit()
                 return
             room = call.livekit_room
+            # Quiet-hours re-check at the actual dial moment (TCPA, spec §2.3):
+            # gate-induced waiting / poller restarts can slide a claim past its
+            # clamp, and a clamp is a promise about the past — never dial on a
+            # stale one. Runs BEFORE lock_phone so the re-queue/fail paths never
+            # hold the advisory lock.
+            now = _utcnow()
+            try:
+                allowed = quiet_hours.next_allowed(now, elder.timezone)
+            except ValueError:
+                await calls_repo.mark_dial_failure(
+                    db, call_id, CallStatus.FAILED, end_reason="invalid_timezone"
+                )
+                await db.commit()
+                logger.bind(call_id=str(call_id)).error(
+                    "Dial blocked: elder timezone invalid; call FAILED (fail closed)"
+                )
+                await _delete_room(room, settings)
+                return
+            if allowed > now:
+                await calls_repo.requeue_for_quiet_hours(db, call_id, scheduled_at=allowed)
+                await db.commit()
+                logger.bind(call_id=str(call_id)).warning(
+                    "Dial outside quiet hours; re-queued with fresh clamp"
+                )
+                return
             # DNC re-check at dial time (closes the schedule->due window).
             await dnc_repo.lock_phone(db, elder.phone_e164)
             blocked = await dnc_repo.is_blocked(db, elder.phone_e164)
