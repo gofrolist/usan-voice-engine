@@ -1,9 +1,10 @@
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -382,3 +383,47 @@ async def mark_failed_if_active(
     await db.flush()
     await db.refresh(call)
     return call
+
+
+# Retry ladders top out at 3 attempts (retry_policy.py), so a chain is root + 2
+# children; one extra hop of headroom keeps the walk bounded, never load-bearing.
+_MAX_CHAIN_HOPS = 3
+
+
+async def get_chain_tip(db: AsyncSession, root_call_id: uuid.UUID) -> Call | None:
+    """Latest attempt of a retry chain: follow child rows via ``parent_call_id``
+    (<=_MAX_CHAIN_HOPS hops; one-child-max via ``uq_calls_parent_call_id`` makes
+    each probe a single indexed lookup)."""
+    current = await db.get(Call, root_call_id)
+    if current is None:
+        return None
+    for _ in range(_MAX_CHAIN_HOPS):
+        result = await db.execute(select(Call).where(Call.parent_call_id == current.id))
+        child = result.scalar_one_or_none()
+        if child is None:
+            break
+        current = child
+    return current
+
+
+async def cancel_queued_tips(db: AsyncSession, root_call_ids: Sequence[uuid.UUID]) -> int:
+    """Guarded UPDATE: each chain's tip ``queued -> cancelled`` (the first writer
+    of the CANCELLED enum value). Never touches ``dialing``/``in_progress`` rows —
+    in-flight calls finish naturally (spec §5.6). Returns rows flipped."""
+    tip_ids: list[uuid.UUID] = []
+    for root_call_id in root_call_ids:
+        tip = await get_chain_tip(db, root_call_id)
+        if tip is not None:
+            tip_ids.append(tip.id)
+    if not tip_ids:
+        return 0
+    result = cast(
+        "CursorResult[Any]",
+        await db.execute(
+            update(Call)
+            .where(Call.id.in_(tip_ids), Call.status == CallStatus.QUEUED)
+            .values(status=CallStatus.CANCELLED)
+        ),
+    )
+    await db.flush()
+    return int(result.rowcount or 0)
