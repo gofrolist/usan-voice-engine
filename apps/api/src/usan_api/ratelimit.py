@@ -32,8 +32,8 @@ def _is_operator_route(method: str, path: str) -> bool:
     """True for the externally reachable operator/management endpoints.
 
     Covers the operator data-plane routes (elders, DNC, outbound call
-    enqueue/lookup) plus the entire /v1/admin/* management plane (the
-    operator-token-guarded admin UI backend).
+    enqueue/lookup, call schedules, call batches) plus the entire /v1/admin/*
+    management plane (the operator-token-guarded admin UI backend).
 
     The internal /v1/calls routes (POST /inbound, POST /{id}/outcome) and every
     /v1/tools/*, /webhooks/*, and /health path fall through unthrottled.
@@ -41,6 +41,8 @@ def _is_operator_route(method: str, path: str) -> bool:
     if path.startswith("/v1/admin/") or path.startswith("/v1/auth/"):
         return True
     if path.startswith("/v1/elders") or path.startswith("/v1/dnc"):
+        return True
+    if path.startswith("/v1/schedules") or path.startswith("/v1/batches"):
         return True
     if path == "/v1/calls" and method == "POST":  # enqueue_call
         return True
