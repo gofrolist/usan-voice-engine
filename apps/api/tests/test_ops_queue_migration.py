@@ -207,59 +207,62 @@ def test_downgrade_seed_upgrade_normalizes_and_roundtrips(
         env=env,
         check=True,
     )
-    for table in ("follow_up_flags", "callback_requests"):
-        cols = asyncio.run(_columns(async_database_url, table))
-        assert "status_updated_at" not in cols
-        assert "status_updated_by" not in cols
-    checks = asyncio.run(_check_constraints(async_database_url, "follow_up_flags"))
-    assert "ck_follow_up_flags_status" not in checks
-    checks = asyncio.run(_check_constraints(async_database_url, "callback_requests"))
-    assert "ck_callback_requests_status" not in checks
-    assert "idx_calls_created" not in asyncio.run(_indexes(async_database_url, "calls"))
+    try:
+        for table in ("follow_up_flags", "callback_requests"):
+            cols = asyncio.run(_columns(async_database_url, table))
+            assert "status_updated_at" not in cols
+            assert "status_updated_by" not in cols
+        checks = asyncio.run(_check_constraints(async_database_url, "follow_up_flags"))
+        assert "ck_follow_up_flags_status" not in checks
+        checks = asyncio.run(_check_constraints(async_database_url, "callback_requests"))
+        assert "ck_callback_requests_status" not in checks
+        assert "idx_calls_created" not in asyncio.run(_indexes(async_database_url, "calls"))
 
-    # Seed a stray non-enum status — legal pre-CHECK.
-    elder_id = uuid.uuid4()
-    call_id = uuid.uuid4()
-    asyncio.run(
-        _execute(
-            async_database_url,
-            "INSERT INTO elders (id, name, phone_e164, timezone) "
-            "VALUES (:id, 'Mig Roundtrip', '+19998880014', 'America/New_York')",
-            {"id": elder_id},
+        # Seed a stray non-enum status — legal pre-CHECK.
+        elder_id = uuid.uuid4()
+        call_id = uuid.uuid4()
+        asyncio.run(
+            _execute(
+                async_database_url,
+                "INSERT INTO elders (id, name, phone_e164, timezone) "
+                "VALUES (:id, 'Mig Roundtrip', '+19998880014', 'America/New_York')",
+                {"id": elder_id},
+            )
         )
-    )
-    asyncio.run(
-        _execute(
-            async_database_url,
-            "INSERT INTO calls (id, elder_id, direction, status) "
-            "VALUES (:id, :elder_id, CAST('outbound' AS call_direction), "
-            "CAST('queued' AS call_status))",
-            {"id": call_id, "elder_id": elder_id},
+        asyncio.run(
+            _execute(
+                async_database_url,
+                "INSERT INTO calls (id, elder_id, direction, status) "
+                "VALUES (:id, :elder_id, CAST('outbound' AS call_direction), "
+                "CAST('queued' AS call_status))",
+                {"id": call_id, "elder_id": elder_id},
+            )
         )
-    )
-    asyncio.run(
-        _execute(
-            async_database_url,
-            "INSERT INTO follow_up_flags (call_id, elder_id, severity, category, status) "
-            "VALUES (:call_id, :elder_id, 'routine', 'medical', 'weird')",
-            {"call_id": call_id, "elder_id": elder_id},
+        asyncio.run(
+            _execute(
+                async_database_url,
+                "INSERT INTO follow_up_flags (call_id, elder_id, severity, category, status) "
+                "VALUES (:call_id, :elder_id, 'routine', 'medical', 'weird')",
+                {"call_id": call_id, "elder_id": elder_id},
+            )
         )
-    )
-    asyncio.run(
-        _execute(
-            async_database_url,
-            "INSERT INTO callback_requests (call_id, elder_id, requested_time_text, status) "
-            "VALUES (:call_id, :elder_id, 'x', 'weird')",
-            {"call_id": call_id, "elder_id": elder_id},
+        asyncio.run(
+            _execute(
+                async_database_url,
+                "INSERT INTO callback_requests (call_id, elder_id, requested_time_text, status) "
+                "VALUES (:call_id, :elder_id, 'x', 'weird')",
+                {"call_id": call_id, "elder_id": elder_id},
+            )
         )
-    )
-
-    subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        cwd=API_DIR,
-        env=env,
-        check=True,
-    )
+    finally:
+        # A mid-test failure must not strand the shared session DB at 0012 —
+        # every other module in the run assumes head.
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=API_DIR,
+            env=env,
+            check=True,
+        )
 
     # The defensive normalize rewrote the stray status before the CHECK landed.
     assert (
