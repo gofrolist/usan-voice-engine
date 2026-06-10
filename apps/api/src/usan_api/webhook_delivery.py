@@ -37,6 +37,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from usan_api import ssrf_guard, webhook_signing
 from usan_api.db.models import WebhookEndpoint
 from usan_api.db.session import get_session_factory
+from usan_api.observability.custom_metrics import (
+    WEBHOOK_DELIVERIES_TOTAL,
+    WEBHOOK_ENDPOINTS_AUTO_DISABLED_TOTAL,
+    WEBHOOK_PENDING_DELIVERIES,
+)
 from usan_api.repositories import webhook_endpoints as endpoints_repo
 from usan_api.repositories import webhook_outbox
 from usan_api.repositories.webhook_outbox import ClaimedDelivery
@@ -55,13 +60,23 @@ class WebhookDeliveryError(Exception):
 _HOUSEKEEPING_INTERVAL_S = 3600.0
 _USER_AGENT = "usan-voice-engine-webhooks/1.0"
 
-# Outcome strings (spec §5.3 label rule): F1 counts ONLY the first four;
-# "skipped" is a breaker no-attempt, never a metric label.
+# Outcome strings (spec §5.3 label rule): the metric counts ONLY the first
+# four; "skipped" is a breaker no-attempt, never a metric label.
 _OUTCOME_DELIVERED = "delivered"
 _OUTCOME_RETRY = "retry_scheduled"
 _OUTCOME_FAILED = "failed"
 _OUTCOME_SSRF = "ssrf_blocked"
 _OUTCOME_SKIPPED = "skipped"
+_COUNTED_OUTCOMES = frozenset({_OUTCOME_DELIVERED, _OUTCOME_RETRY, _OUTCOME_FAILED, _OUTCOME_SSRF})
+
+
+def _record_outcome(event: str, outcome: str) -> None:
+    """Increment-after-commit (house discipline): callers invoke this only
+    after the row's outcome transaction commits. The label set is CLOSED
+    (spec §9) — ``"skipped"`` falls through uncounted.
+    """
+    if outcome in _COUNTED_OUTCOMES:
+        WEBHOOK_DELIVERIES_TOTAL.labels(event=event, outcome=outcome).inc()
 
 
 def _housekeeping_due(last_run: float | None, now: float) -> bool:
@@ -146,8 +161,9 @@ async def deliver_one(
                 tripped = await endpoints_repo.trip_breaker(db, claimed.endpoint_id)
             await db.commit()
             if tripped:
-                # endpoint_id only — never the URL (spec §5.5/§8.3). The
-                # auto-disabled metric increment lands in F1.
+                # endpoint_id only — never the URL (spec §5.5/§8.3). Counter
+                # after commit; trip_breaker's guarded UPDATE makes it one-shot.
+                WEBHOOK_ENDPOINTS_AUTO_DISABLED_TOTAL.inc()
                 logger.bind(
                     component="webhook_delivery", endpoint_id=str(claimed.endpoint_id)
                 ).warning("Webhook endpoint auto-disabled by circuit breaker")
@@ -160,6 +176,7 @@ async def deliver_one(
                 outcome = _OUTCOME_SSRF
             else:
                 outcome = _OUTCOME_RETRY
+            _record_outcome(claimed.event, outcome)
             log.bind(outcome=outcome, response_code=response_code).info(
                 "Webhook delivery attempt settled"
             )
@@ -168,6 +185,7 @@ async def deliver_one(
         await webhook_outbox.mark_delivered(db, claimed.id, response_code=response_code)
         await endpoints_repo.reset_failures(db, claimed.endpoint_id)
         await db.commit()
+        _record_outcome(claimed.event, _OUTCOME_DELIVERED)
         log.bind(outcome=_OUTCOME_DELIVERED, response_code=response_code).info(
             "Webhook delivery attempt settled"
         )
@@ -215,9 +233,11 @@ async def poll_once(
     }
 
     # EVERY-CYCLE half (flag-INDEPENDENT): backlog depth, per-cycle not hourly
-    # (spec §9 — F1 wires the gauge .set() on this value).
+    # (spec §9) — the gauge is set here, NOT in the hourly housekeeping branch,
+    # so flag-off backlogs and breaker-stranded rows stay observable.
     async with factory() as db:
         stats["pending"] = await webhook_outbox.count_pending(db)
+    WEBHOOK_PENDING_DELIVERIES.set(stats["pending"])
 
     # HOURLY half (flag-INDEPENDENT): sweep/expire/prune in one txn (spec §5.4).
     if run_housekeeping:
