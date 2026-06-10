@@ -340,13 +340,41 @@ def test_redeliver_semantics(client, operator_headers, async_database_url):
     r = client.post(f"/v1/webhook-deliveries/{failed_id}/redeliver", headers=operator_headers)
     assert r.status_code == 409
 
+    # A DELIVERED row's redeliver must also reset delivered_at (and the attempt
+    # diagnostics): otherwise a redelivered row that later terminally fails
+    # keeps a contradictory delivered_at next to status='failed'.
+    async def _seed_delivered(db: AsyncSession) -> str:
+        row_id = await _seed_delivery(db, endpoint_id, status="delivered")
+        await db.execute(
+            update(WebhookDelivery)
+            .where(WebhookDelivery.id == row_id)
+            .values(delivered_at=text("now()"), response_code=200, attempts=1)
+        )
+        return str(row_id)
+
+    delivered_id = asyncio.run(_run_db(async_database_url, _seed_delivered))
+    r = client.post(f"/v1/webhook-deliveries/{delivered_id}/redeliver", headers=operator_headers)
+    assert r.status_code == 202
+
+    async def _delivered_row(db: AsyncSession) -> WebhookDelivery:
+        row = await db.get(WebhookDelivery, uuid.UUID(delivered_id))
+        assert row is not None
+        return row
+
+    row = asyncio.run(_run_db(async_database_url, _delivered_row))
+    assert row.status == "pending"
+    assert row.delivered_at is None
+    assert row.response_code is None
+    assert row.last_error is None
+    assert row.attempts == 0
+
     # Unknown id -> 404.
     r = client.post(f"/v1/webhook-deliveries/{uuid.uuid4()}/redeliver", headers=operator_headers)
     assert r.status_code == 404
 
     # Backpressure: >=100 pending rows on the endpoint -> 429 (§4/§8.4).
     async def _backlog(db: AsyncSession) -> str:
-        for _ in range(99):  # one pending row already exists (the redelivered one)
+        for _ in range(98):  # two pending rows already exist (the redelivered ones)
             await _seed_delivery(db, endpoint_id)
         return str(await _seed_delivery(db, endpoint_id, status="failed"))
 

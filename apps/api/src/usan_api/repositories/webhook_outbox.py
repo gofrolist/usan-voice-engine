@@ -139,7 +139,9 @@ async def redeliver(db: AsyncSession, delivery_id: uuid.UUID) -> uuid.UUID | Non
     The status predicate is load-bearing: a Python status check would race the
     poller's in-flight claim of a row that just flipped to pending. Returns the
     id, or None when the row is missing or already pending (router 409s).
-    ``next_attempt_at = now()`` makes the row immediately due.
+    ``next_attempt_at = now()`` makes the row immediately due. ``delivered_at``
+    resets with the other attempt diagnostics — otherwise a redelivered row
+    that later terminally fails keeps a contradictory delivered_at.
     """
     result = await db.execute(
         update(WebhookDelivery)
@@ -153,6 +155,7 @@ async def redeliver(db: AsyncSession, delivery_id: uuid.UUID) -> uuid.UUID | Non
             next_attempt_at=func.now(),
             response_code=None,
             last_error=None,
+            delivered_at=None,
         )
         .returning(WebhookDelivery.id)
     )
