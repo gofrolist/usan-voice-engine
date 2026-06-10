@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from loguru import logger
 from pydantic import BaseModel
 
-from usan_api import background, retention, retry_orchestrator
+from usan_api import background, retention, retry_orchestrator, schedule_orchestrator
 from usan_api.db.session import dispose_engine, get_session_factory
 from usan_api.logging_config import configure_logging
 from usan_api.observability.instrumentation import setup_metrics
@@ -66,6 +66,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         poller_tasks.append(asyncio.create_task(retry_orchestrator.run_poller(settings, stop)))
     if settings.phi_retention_days is not None:
         poller_tasks.append(asyncio.create_task(retention.run_poller(settings, stop)))
+    if settings.scheduler_poller_enabled:
+        poller_tasks.append(asyncio.create_task(schedule_orchestrator.run_poller(settings, stop)))
     try:
         yield
     finally:
