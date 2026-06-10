@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import quiet_hours
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call, Elder
+from usan_api.db.models import Call, CallBatch, CallBatchTarget, Elder
 from usan_api.retry_policy import next_retry_delay
 
 
@@ -182,8 +182,8 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
 
     Returns the child, or None when: the policy says stop, the parent/elder is
     gone, the elder's timezone is invalid (fail CLOSED — never risk a TCPA-hour
-    call), or a retry child already exists (idempotent via the partial UNIQUE
-    index on parent_call_id).
+    call), the chain's owning batch was cancelled (spec §5.6), or a retry child
+    already exists (idempotent via the partial UNIQUE index on parent_call_id).
     """
     parent = await db.get(Call, call_id)
     if parent is None or parent.elder_id is None:
@@ -201,6 +201,28 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
             "Retry not scheduled: elder timezone is not a valid IANA zone"
         )
         return None
+
+    # Batch-cancellation guard (spec §5.6): walk parent_call_id to the chain root
+    # (<=3 hops); if the root is batch-owned and its batch is cancelled, never create
+    # a child — in the SAME commit as the parent's terminal transition, so the
+    # scheduler-cycle sweep is only a backstop for the cancel-vs-transition race.
+    root = parent
+    for _ in range(3):
+        if root.parent_call_id is None:
+            break
+        nxt = await db.get(Call, root.parent_call_id)
+        if nxt is None:
+            break
+        root = nxt
+    if root.idempotency_key and root.idempotency_key.startswith("batch:"):
+        result = await db.execute(
+            select(CallBatch.status)
+            .join(CallBatchTarget, CallBatchTarget.batch_id == CallBatch.id)
+            .where(CallBatchTarget.call_id == root.id)  # idx_call_batch_targets_call
+        )
+        if result.scalar_one_or_none() == "cancelled":
+            logger.bind(call_id=str(call_id)).info("Retry suppressed: batch cancelled")
+            return None
 
     child = Call(
         elder_id=parent.elder_id,

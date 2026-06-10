@@ -9,8 +9,10 @@ from sqlalchemy.pool import NullPool
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
 from usan_api.repositories import agent_profiles as profiles_repo
+from usan_api.repositories import call_batches as call_batches_repo
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
+from usan_api.schemas.batch import BatchTargetIn
 
 FIXED_NOW = datetime(2026, 5, 31, 12, 0, tzinfo=UTC)  # inside [09:00, 21:00) UTC
 
@@ -176,6 +178,135 @@ async def test_schedule_retry_child_inherits_profile_override(session_factory):
     assert reloaded.profile_override == profile_id
     # regression: dynamic_vars still copied alongside the override
     assert reloaded.dynamic_vars == {"k": "v"}
+
+
+async def _seed_batch_root(factory, *, root_status, cancel_batch):
+    """Seed a batch-owned chain root: batch + materialized target linked to a
+    root call keyed ``batch:{id}:0`` (spec §5.6). Optionally cancel the batch
+    AFTER the root exists — the cancel-vs-terminal-transition race window."""
+    phone = f"+1555{str(uuid.uuid4().int)[:7]}"
+    async with factory() as db:
+        elder = await elders_repo.create_elder(db, name="B", phone_e164=phone, timezone="UTC")
+        batch = await call_batches_repo.create_batch_with_targets(
+            db,
+            name="d3-batch",
+            idempotency_key=None,
+            payload_digest=f"d3-{uuid.uuid4()}",
+            trigger_at=None,
+            window_start_local=None,
+            window_end_local=None,
+            days_of_week=None,
+            max_concurrency=None,
+            profile_override=None,
+            targets=[BatchTargetIn(elder_id=elder.id)],
+        )
+        batch.status = "running"
+        root = await calls_repo.create_call(
+            db,
+            elder_id=elder.id,
+            direction=CallDirection.OUTBOUND,
+            status=root_status,
+            idempotency_key=f"batch:{batch.id}:0",
+            livekit_room="usan-outbound-root",
+        )
+        targets = await call_batches_repo.list_targets(db, batch.id)
+        assert await call_batches_repo.mark_target_materialized(
+            db, targets[0], call_id=root.id, now=FIXED_NOW
+        )
+        if cancel_batch:
+            await call_batches_repo.cancel_batch(db, batch, now=FIXED_NOW)
+        await db.commit()
+        return root.id, elder.id
+
+
+async def _seed_child(factory, *, parent_id, elder_id, status, attempt):
+    """Append a retry-chain child (parent_call_id linked list, spec §6.2)."""
+    async with factory() as db:
+        child = await calls_repo.create_call(
+            db,
+            elder_id=elder_id,
+            direction=CallDirection.OUTBOUND,
+            status=status,
+            livekit_room=f"usan-outbound-{uuid.uuid4()}",
+        )
+        child.parent_call_id = parent_id
+        child.attempt = attempt
+        await db.flush()
+        await db.commit()
+        return child.id
+
+
+@pytest.mark.asyncio
+async def test_schedule_retry_suppressed_for_cancelled_batch_chain(session_factory):
+    # The §5.6/§9 race the scheduler sweep alone would lose: FAILED children are
+    # born at +1m and the retry poller claims every 30s, so the guard must live in
+    # the same commit as the parent's terminal transition — i.e. in schedule_retry.
+    root_id, _ = await _seed_batch_root(
+        session_factory, root_status=CallStatus.DIALING, cancel_batch=True
+    )
+    async with session_factory() as db:
+        # The in-flight call terminates AFTER the batch was cancelled.
+        await calls_repo.mark_dial_failure(db, root_id, CallStatus.FAILED, end_reason="dial_failed")
+        result = await calls_repo.schedule_retry(db, root_id)
+        await db.commit()
+    assert result is None
+    assert await _child_count(session_factory, root_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_schedule_retry_suppressed_for_grandchild_of_cancelled_batch(session_factory):
+    # The guard walks parent_call_id to the chain root (<=3 hops); a cancelled
+    # batch suppresses attempt 3 even though only the ROOT carries the batch key.
+    # NO_ANSWER at attempt 2 normally retries (+2h) — FAILED would stop by policy
+    # alone and never exercise the guard.
+    root_id, elder_id = await _seed_batch_root(
+        session_factory, root_status=CallStatus.NO_ANSWER, cancel_batch=True
+    )
+    child_id = await _seed_child(
+        session_factory,
+        parent_id=root_id,
+        elder_id=elder_id,
+        status=CallStatus.NO_ANSWER,
+        attempt=2,
+    )
+    async with session_factory() as db:
+        result = await calls_repo.schedule_retry(db, child_id)
+        await db.commit()
+    assert result is None
+    assert await _child_count(session_factory, child_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_schedule_retry_unaffected_for_running_batch_and_sched_roots(session_factory):
+    # Control: the guard must not over-suppress. A running batch's chain retries
+    # normally, and sched:-rooted chains are exempt from the batch check (§5.6).
+    running_root_id, _ = await _seed_batch_root(
+        session_factory, root_status=CallStatus.FAILED, cancel_batch=False
+    )
+    async with session_factory() as db:
+        child = await calls_repo.schedule_retry(db, running_root_id)
+        await db.commit()
+    assert child is not None
+    assert await _child_count(session_factory, running_root_id) == 1
+
+    phone = f"+1555{str(uuid.uuid4().int)[:7]}"
+    async with session_factory() as db:
+        elder = await elders_repo.create_elder(db, name="S", phone_e164=phone, timezone="UTC")
+        sched_root = await calls_repo.create_call(
+            db,
+            elder_id=elder.id,
+            direction=CallDirection.OUTBOUND,
+            status=CallStatus.FAILED,
+            idempotency_key=f"sched:{uuid.uuid4()}:2026-06-10",
+            livekit_room="usan-outbound-sched-root",
+        )
+        await db.commit()
+        sched_root_id = sched_root.id
+    async with session_factory() as db:
+        sched_child = await calls_repo.schedule_retry(db, sched_root_id)
+        await db.commit()
+    assert sched_child is not None
+    assert await _child_count(session_factory, sched_root_id) == 1
 
 
 @pytest.mark.asyncio
