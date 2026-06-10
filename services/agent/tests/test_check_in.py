@@ -558,3 +558,102 @@ def test_tool_registry_has_exactly_the_seven_phase3_tools():
         "send_sms",
         "end_call",
     }
+
+
+def test_flag_for_followup_schema_constrains_severity_and_category():
+    # A plain `str` annotation gives the LLM an unconstrained string; an off-enum
+    # value 422s at the API, the bare except swallows it, and the safety flag is
+    # silently lost while the LLM hears the success phrase. The Literal annotations
+    # must surface as JSON-schema enums so the LLM cannot stray off the value set.
+    from livekit.agents.llm import utils as llm_utils
+
+    schema = llm_utils.build_legacy_openai_schema(
+        check_in.flag_for_followup, internally_tagged=True
+    )
+    props = schema["parameters"]["properties"]
+    assert props["severity"]["enum"] == ["routine", "urgent"]
+    assert props["category"]["enum"] == [
+        "medical",
+        "emotional",
+        "medication",
+        "safety",
+        "other",
+    ]
+
+
+def _cfg_with_sms_templates(templates: list[dict[str, str]]) -> AgentConfig:
+    base = DEFAULT_AGENT_CONFIG.model_dump()
+    base["tools"] = {
+        "enabled": ["log_wellness", "send_sms", "end_call"],
+        "sms": {"templates": templates},
+    }
+    return AgentConfig.model_validate(base)
+
+
+_TWO_TEMPLATES = [
+    {"key": "med_reminder", "label": "Medication reminder", "body": "Time for your meds."},
+    {"key": "checkin_summary", "label": "Check-in summary", "body": "Check-in done."},
+]
+
+
+def test_build_check_in_agent_lists_sms_template_keys_when_offered():
+    # send_sms is a statically-registered FunctionTool, so its schema cannot
+    # enumerate the operator-configured template keys; the instructions must list
+    # them or the LLM can only guess (-> 404, message silently dropped).
+    agent = check_in.build_check_in_agent(_cfg_with_sms_templates(_TWO_TEMPLATES))
+    assert "send_sms" in {t.id for t in agent.tools}
+    assert "med_reminder" in agent.instructions
+    assert "checkin_summary" in agent.instructions
+    assert "Medication reminder" in agent.instructions
+
+
+def test_build_inbound_agent_lists_sms_template_keys_when_offered():
+    agent = check_in.build_inbound_agent(
+        _cfg_with_sms_templates(_TWO_TEMPLATES), resolved_vars={"elder_name": "Ada"}, now=_NOW
+    )
+    assert "send_sms" in {t.id for t in agent.tools}
+    assert "med_reminder" in agent.instructions
+    assert "checkin_summary" in agent.instructions
+
+
+def test_build_check_in_agent_no_sms_suffix_when_not_enabled():
+    # Templates configured but send_sms NOT in enabled -> tool not offered, so the
+    # key list must not leak into the instructions either.
+    base = DEFAULT_AGENT_CONFIG.model_dump()
+    base["tools"] = {
+        "enabled": ["log_wellness", "end_call"],
+        "sms": {"templates": _TWO_TEMPLATES},
+    }
+    agent = check_in.build_check_in_agent(AgentConfig.model_validate(base))
+    assert "send_sms" not in {t.id for t in agent.tools}
+    assert "med_reminder" not in agent.instructions
+
+
+def test_build_check_in_agent_no_sms_suffix_without_templates():
+    # Enabled but unconfigured: _select_tools drops send_sms, instructions stay bare.
+    base = DEFAULT_AGENT_CONFIG.model_dump()
+    base["tools"] = {"enabled": ["log_wellness", "send_sms", "end_call"], "sms": None}
+    agent = check_in.build_check_in_agent(AgentConfig.model_validate(base))
+    assert "send_sms" not in {t.id for t in agent.tools}
+    assert agent.instructions == check_in.CHECK_IN_INSTRUCTIONS
+
+
+async def test_do_flag_for_followup_normalizes_reason(monkeypatch):
+    # The API requires reason min_length=1 / max_length=2000; an empty or over-long
+    # LLM value would 422, get swallowed by the bare except, and silently lose a
+    # safety flag (same failure class as the severity/category enum fix). The
+    # helper must normalize instead of failing.
+    seen: dict[str, str] = {}
+
+    async def _capture(call_id, settings, *, severity, category, reason):
+        seen["reason"] = reason
+
+    monkeypatch.setattr(check_in.api_client, "flag_for_followup", _capture)
+    await check_in._do_flag_for_followup(
+        _data(), severity="routine", category="other", reason="   "
+    )
+    assert seen["reason"] == "(no reason given)"
+    await check_in._do_flag_for_followup(
+        _data(), severity="urgent", category="safety", reason="x" * 3000
+    )
+    assert len(seen["reason"]) == check_in._FLAG_REASON_MAX_LEN

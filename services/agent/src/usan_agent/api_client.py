@@ -18,6 +18,12 @@ from usan_agent.settings import Settings
 
 _TOKEN_TTL_S = 300
 
+# Mirror the API's FlagForFollowupRequest Literals (apps/api schemas/tools.py).
+# Defined here (the API boundary) and re-used by check_in's tool signatures, so the
+# whole agent-side path is enum-typed end to end.
+FlagSeverity = Literal["routine", "urgent"]
+FlagCategory = Literal["medical", "emotional", "medication", "safety", "other"]
+
 # The config fetch is on the call's critical path (before the agent can speak), so use
 # a tighter timeout than the 10s tool calls — a slow API must not delay answering.
 _CONFIG_TIMEOUT_S = 5.0
@@ -83,8 +89,8 @@ async def flag_for_followup(
     call_id: str,
     settings: Settings,
     *,
-    severity: str,
-    category: str,
+    severity: FlagSeverity,
+    category: FlagCategory,
     reason: str,
 ) -> None:
     await _post_tool(

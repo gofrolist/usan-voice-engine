@@ -16,6 +16,7 @@ from loguru import logger
 
 from usan_agent import api_client
 from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
+from usan_agent.api_client import FlagCategory, FlagSeverity
 from usan_agent.prompt_vars import build_vars, substitute
 from usan_agent.sanitize import sanitize_prompt_value
 from usan_agent.settings import Settings
@@ -27,6 +28,17 @@ from usan_agent.settings import Settings
 _MED_NAME_MAX_LEN = 80
 _MED_DOSAGE_MAX_LEN = 40
 _MED_TIME_MAX_LEN = 20
+
+# FlagSeverity / FlagCategory (imported from api_client, which mirrors the API's
+# FlagForFollowupRequest Literals) reach the LLM as JSON-schema enums via the
+# @function_tool signature — a plain `str` would let the LLM stray off-enum, the
+# API would 422, and the safety flag would be silently dropped while the LLM
+# hears the success phrase.
+
+# The API bounds FlagForFollowupRequest.reason to 1..2000 chars; values outside
+# that 422 — and that 422 would be swallowed below, silently losing a safety
+# flag. _do_flag_for_followup normalizes instead of failing.
+_FLAG_REASON_MAX_LEN = 2000
 
 
 def _sanitize_prompt_value(value: Any, *, max_len: int) -> str:
@@ -85,8 +97,9 @@ async def _do_log_medication(
 
 
 async def _do_flag_for_followup(
-    data: CheckInData, *, severity: str, category: str, reason: str
+    data: CheckInData, *, severity: FlagSeverity, category: FlagCategory, reason: str
 ) -> str:
+    reason = reason.strip()[:_FLAG_REASON_MAX_LEN] or "(no reason given)"
     try:
         await api_client.flag_for_followup(
             data.call_id, data.settings, severity=severity, category=category, reason=reason
@@ -226,8 +239,8 @@ async def get_today_meds(ctx: RunContext[CheckInData]) -> str:
 @function_tool
 async def flag_for_followup(
     ctx: RunContext[CheckInData],
-    severity: str,
-    category: str,
+    severity: FlagSeverity,
+    category: FlagCategory,
     reason: str,
 ) -> str:
     """Flag this call for a human to follow up on.
@@ -306,13 +319,10 @@ _TOOL_REGISTRY: dict[str, Any] = {
 class _ToolsConfigLike(Protocol):
     """Structural view of what _select_tools requires off a ToolsConfig.
 
-    Only ``.enabled`` is a hard requirement, so Part A's ``ToolsConfig`` (which exposes
-    just ``.enabled``) structurally satisfies this and so do the tests' ``SimpleNamespace``
-    objects. ``.sms`` is deliberately NOT declared here: it is optional forward-compat
-    surface (Part D adds it to ``ToolsConfig``) that ``_select_tools`` reads defensively via
-    ``getattr``. Annotating against this Protocol -- rather than the concrete ``ToolsConfig``
-    -- makes the ``getattr`` honest: the annotation no longer claims a ``.sms`` field that
-    today's ``ToolsConfig`` lacks, yet the guard stays safe once Part D adds it.
+    Only ``.enabled`` is a hard requirement. ``.sms`` is deliberately NOT declared
+    here even though the concrete ``ToolsConfig`` now carries it: the tests'
+    ``SimpleNamespace`` objects (and any older config document) may omit it, so the
+    readers use ``getattr`` and this Protocol keeps that defensive access honest.
     """
 
     enabled: list[str]
@@ -326,22 +336,43 @@ def _select_tools(tools: _ToolsConfigLike) -> list[Any]:
     whose agent-side callable has not landed yet (see _TOOL_REGISTRY note) -- enabling
     such a tool is accepted by the API but is a no-op here until the registry catches up.
     send_sms is a dead tool until at least one SMS template is configured, so it is
-    dropped unless ``tools`` carries an ``sms`` config with templates. The ``sms`` field
-    is read via ``getattr`` because Part A's concrete ``ToolsConfig`` has no ``sms`` field
-    yet (Part D adds it) and the ``_ToolsConfigLike`` Protocol does not declare it; the
-    guard must stay safe until then. send_sms is now in _TOOL_REGISTRY, so the registry
-    filter above no longer removes it -- this template guard is the active, sole gate on
-    send_sms (covered by the template-branch tests). end_call is always included: it
-    drives report->goodbye->delete_room->shutdown, so removing it would leave a call
-    unable to end gracefully.
+    dropped unless ``tools`` carries an ``sms`` config with templates (``getattr``
+    because ``_ToolsConfigLike`` does not declare ``.sms``); this template guard is the
+    sole gate on send_sms. end_call is always included: it drives
+    report->goodbye->delete_room->shutdown, so removing it would leave a call unable
+    to end gracefully.
     """
     names = [n for n in tools.enabled if n in _TOOL_REGISTRY]  # preserve enabled order
-    sms_cfg = getattr(tools, "sms", None)
-    if not (sms_cfg and getattr(sms_cfg, "templates", None)):
+    if not _sms_templates(tools):
         names = [n for n in names if n != "send_sms"]
     if "end_call" not in names:
         names.append("end_call")
     return [_TOOL_REGISTRY[n] for n in names]
+
+
+def _sms_templates(tools: _ToolsConfigLike) -> list[Any]:
+    """The configured SMS templates, or [] (shared by the tool gate + prompt suffix)."""
+    sms_cfg = getattr(tools, "sms", None)
+    return list(getattr(sms_cfg, "templates", None) or []) if sms_cfg else []
+
+
+def _sms_template_instructions(tools: _ToolsConfigLike) -> str:
+    """Instruction suffix enumerating the valid send_sms template keys.
+
+    send_sms is a statically-registered FunctionTool, so its JSON schema cannot list
+    the operator-configured template keys; without this suffix the LLM can only
+    guess a key (-> 404 from the API, message silently dropped). Emitted exactly
+    when _select_tools offers send_sms (same enabled + templates guard). Keys are
+    server-validated slugs and labels are operator-authored config — the same trust
+    level as the surrounding prompt text.
+    """
+    templates = _sms_templates(tools)
+    if not templates or "send_sms" not in tools.enabled:
+        return ""
+    lines = "\n".join(f'- "{t.key}": {t.label}' for t in templates)
+    return (
+        f"\n\nWhen sending a text message with `send_sms`, template_key must be one of:\n{lines}\n"
+    )
 
 
 def build_check_in_agent(
@@ -366,7 +397,8 @@ def build_check_in_agent(
         now=now or datetime.now(UTC),
     )
     return Agent(
-        instructions=substitute(cfg.prompts.checkin_flow_instructions, values),
+        instructions=substitute(cfg.prompts.checkin_flow_instructions, values)
+        + _sms_template_instructions(cfg.tools),
         tools=_select_tools(cfg.tools),
     )
 
@@ -397,6 +429,7 @@ def build_inbound_agent(
         now=now or datetime.now(UTC),
     )
     return Agent(
-        instructions=substitute(cfg.prompts.inbound_personalization_template, values),
+        instructions=substitute(cfg.prompts.inbound_personalization_template, values)
+        + _sms_template_instructions(cfg.tools),
         tools=_select_tools(cfg.tools),
     )
