@@ -8,6 +8,7 @@ from sqlalchemy.pool import NullPool
 
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
+from usan_api.repositories import agent_profiles as profiles_repo
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 
@@ -145,6 +146,36 @@ async def test_schedule_retry_fails_closed_on_bad_timezone(session_factory):
         await db.commit()
     assert result is None
     assert await _child_count(session_factory, parent_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_schedule_retry_child_inherits_profile_override(session_factory):
+    # profile_override is live (runtime agent-config + SMS template resolution),
+    # so attempts 2..n must keep it instead of silently reverting to the default
+    # profile (spec §2.3(3)/§6.1).
+    parent_id, _ = await _seed_terminal(
+        session_factory, status=CallStatus.NO_ANSWER, attempt=1, dynamic_vars={"k": "v"}
+    )
+    async with session_factory() as db:
+        profile = await profiles_repo.create_profile(
+            db, name=f"retry-override-{uuid.uuid4()}", description=None, actor_email="t@usan.test"
+        )
+        await profiles_repo.publish(db, profile.id, note=None, actor_email="t@usan.test")
+        parent = await calls_repo.get_call(db, parent_id)
+        parent.profile_override = profile.id
+        await db.commit()
+        profile_id = profile.id
+    async with session_factory() as db:
+        child = await calls_repo.schedule_retry(db, parent_id)
+        await db.commit()
+    assert child is not None
+    # re-read in a fresh session to prove it persisted
+    async with session_factory() as db:
+        reloaded = await calls_repo.get_call(db, child.id)
+    assert reloaded is not None
+    assert reloaded.profile_override == profile_id
+    # regression: dynamic_vars still copied alongside the override
+    assert reloaded.dynamic_vars == {"k": "v"}
 
 
 @pytest.mark.asyncio

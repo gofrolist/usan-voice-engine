@@ -207,6 +207,7 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
         direction=CallDirection.OUTBOUND,
         status=CallStatus.QUEUED,
         dynamic_vars=dict(parent.dynamic_vars),
+        profile_override=parent.profile_override,
         parent_call_id=parent.id,
         attempt=parent.attempt + 1,
         scheduled_at=scheduled_at,
