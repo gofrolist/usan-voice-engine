@@ -20,13 +20,18 @@ mutators stays cheap).
 """
 
 import uuid
-from typing import Any
+from dataclasses import dataclass
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import webhook_events
 from usan_api.db.models import WebhookDelivery, WebhookEndpoint
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import CursorResult
 
 
 async def enqueue_event(db: AsyncSession, *, event: str, payload: dict[str, Any]) -> int:
@@ -152,3 +157,182 @@ async def redeliver(db: AsyncSession, delivery_id: uuid.UUID) -> uuid.UUID | Non
         .returning(WebhookDelivery.id)
     )
     return result.scalar_one_or_none()
+
+
+# --- Worker half (spec §5.2–§5.4): claim lease, guarded outcomes, housekeeping ---
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedDelivery:
+    """One claimed outbox row as plain data — the claim transaction commits
+    immediately, so the worker must hold no ORM state and no row locks across
+    HTTP POSTs (spec §5.2).
+    """
+
+    id: uuid.UUID
+    endpoint_id: uuid.UUID
+    event: str
+    payload: dict[str, Any]
+    attempts: int
+
+
+# Spec §5.2 verbatim, modulo two plan-mandated parametrizations: every now()
+# is the bound :now (the time-travel seam the worker tests depend on) and
+# LIMIT is the bound :limit (claim_due's keyword). The attempt bump IS the
+# lease: the next rung is pre-scheduled at claim time, so a crash anywhere
+# after this commit re-offers the row automatically — no reclaim sweeper.
+# The JOIN on e.enabled means breaker-/operator-disabled endpoints simply
+# stop being claimed; rows resume (attempt count intact) on re-enable.
+_CLAIM_SQL = text(
+    """
+    WITH due AS (
+        SELECT d.id, d.next_attempt_at
+        FROM webhook_deliveries d
+        JOIN webhook_endpoints e ON e.id = d.endpoint_id AND e.enabled
+        WHERE d.status = 'pending'
+          AND d.next_attempt_at <= :now
+          AND d.attempts < 4
+        ORDER BY d.next_attempt_at
+        LIMIT :limit
+        FOR UPDATE OF d SKIP LOCKED
+    )
+    UPDATE webhook_deliveries w
+    SET attempts = w.attempts + 1,
+        next_attempt_at = :now + (CASE w.attempts + 1
+            WHEN 1 THEN interval '1 minute'
+            WHEN 2 THEN interval '5 minutes'
+            ELSE interval '30 minutes' END),
+        updated_at = :now
+    FROM due
+    WHERE w.id = due.id
+    RETURNING w.id, w.endpoint_id, w.event, w.payload, w.attempts,
+              due.next_attempt_at AS due_at
+    """
+)
+
+
+async def claim_due(db: AsyncSession, *, now: datetime, limit: int = 20) -> list[ClaimedDelivery]:
+    """Claim up to ``limit`` due rows, bumping each onto its next retry rung.
+
+    The caller commits immediately after — the bumped ``next_attempt_at`` is a
+    crash-safe lease, not a lock. Returned oldest-due-first (UPDATE..RETURNING
+    has no guaranteed order, so the sort happens here on the CTE's original
+    ``next_attempt_at``; id tiebreak because fan-out rows share one
+    transaction timestamp).
+    """
+    result = await db.execute(_CLAIM_SQL, {"now": now, "limit": limit})
+    rows = sorted(result.mappings().all(), key=lambda row: (row["due_at"], row["id"]))
+    return [
+        ClaimedDelivery(
+            id=row["id"],
+            endpoint_id=row["endpoint_id"],
+            event=row["event"],
+            payload=row["payload"],
+            attempts=row["attempts"],
+        )
+        for row in rows
+    ]
+
+
+async def mark_delivered(db: AsyncSession, delivery_id: uuid.UUID, *, response_code: int) -> bool:
+    """Guarded success outcome (spec §5.3): only a pending row can be delivered.
+
+    The status predicate makes the at-least-once race idempotent — a duplicate
+    outcome (or a concurrent operator redeliver) claims nothing and returns
+    False, leaving the first writer's row untouched.
+    """
+    result = await db.execute(
+        update(WebhookDelivery)
+        .where(WebhookDelivery.id == delivery_id, WebhookDelivery.status == "pending")
+        .values(status="delivered", delivered_at=func.now(), response_code=response_code)
+        .returning(WebhookDelivery.id)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def mark_attempt_failed(
+    db: AsyncSession,
+    delivery_id: uuid.UUID,
+    *,
+    response_code: int | None,
+    last_error: str,
+    terminal: bool,
+) -> bool:
+    """Guarded failure outcome (spec §5.3, review L3 — same guard as success).
+
+    Non-terminal: record ``response_code``/``last_error`` and leave the row
+    pending — the claim-time lease already scheduled the next rung. Terminal
+    (attempt 4): flip to ``failed``. ``last_error`` is the exception TYPE NAME
+    only, never ``str(exc)`` (PHI-adjacent rule).
+    """
+    values: dict[str, Any] = {"response_code": response_code, "last_error": last_error}
+    if terminal:
+        values["status"] = "failed"
+    result = await db.execute(
+        update(WebhookDelivery)
+        .where(WebhookDelivery.id == delivery_id, WebhookDelivery.status == "pending")
+        .values(**values)
+        .returning(WebhookDelivery.id)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+# Spec §5.4: a crash on a row already at attempts=4 leaves it pending but
+# unclaimable (the attempts < 4 predicate) — sweep it to failed after a
+# 10-minute grace (a live worker may still be mid-POST). COALESCE so a genuine
+# last error type is never overwritten by the sentinel (review L4d).
+_SWEEP_SQL = text(
+    """
+    UPDATE webhook_deliveries
+    SET status = 'failed', last_error = COALESCE(last_error, 'crash_residual')
+    WHERE status = 'pending' AND attempts >= 4
+      AND updated_at < CAST(:now AS timestamptz) - interval '10 minutes'
+    """
+)
+
+# Spec §5.4: pending rows for disabled endpoints and flag-off backlogs escape
+# every other cleanup path — bound outbox growth (and how stale an occurred_at
+# a receiver can ever see) to 7 days.
+_EXPIRE_SQL = text(
+    """
+    UPDATE webhook_deliveries
+    SET status = 'failed', last_error = 'expired'
+    WHERE status = 'pending' AND created_at < CAST(:now AS timestamptz) - interval '7 days'
+    """
+)
+
+# Spec §5.4: payloads are PHI-free by construction, so this is hygiene, not
+# compliance. Pending rows are expire_stale_pending's job, never prune's.
+_PRUNE_SQL = text(
+    """
+    DELETE FROM webhook_deliveries
+    WHERE status IN ('delivered', 'failed')
+      AND created_at < CAST(:now AS timestamptz) - interval '30 days'
+    """
+)
+
+
+async def sweep_crash_residue(db: AsyncSession, *, now: datetime) -> int:
+    """Fail crash-orphaned attempts=4 pending rows; returns the swept count."""
+    result = cast("CursorResult[Any]", await db.execute(_SWEEP_SQL, {"now": now}))
+    return int(result.rowcount or 0)
+
+
+async def expire_stale_pending(db: AsyncSession, *, now: datetime) -> int:
+    """Fail pending rows older than 7 days; returns the expired count."""
+    result = cast("CursorResult[Any]", await db.execute(_EXPIRE_SQL, {"now": now}))
+    return int(result.rowcount or 0)
+
+
+async def prune_old(db: AsyncSession, *, now: datetime) -> int:
+    """Delete settled rows older than 30 days; returns the pruned count."""
+    result = cast("CursorResult[Any]", await db.execute(_PRUNE_SQL, {"now": now}))
+    return int(result.rowcount or 0)
+
+
+async def count_pending(db: AsyncSession) -> int:
+    """Total pending backlog — the per-cycle depth the poller reports (spec §9)."""
+    result = await db.execute(
+        select(func.count()).select_from(WebhookDelivery).where(WebhookDelivery.status == "pending")
+    )
+    return int(result.scalar_one())
