@@ -647,13 +647,21 @@ async def test_batch_target_skip_branches(session_factory):
         await dnc_repo.add_entry(db, blocked.phone_e164, "asked to stop")
         await db.commit()
 
-    counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=NOW)
+    warnings: list[str] = []
+    handler_id = logger.add(lambda m: warnings.append(m.record["message"]), level="WARNING")
+    try:
+        counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=NOW)
+    finally:
+        logger.remove(handler_id)
 
     assert counts["batch_targets"] == 4
     targets = await _targets(session_factory, batch_id)
     assert (targets[0].status, targets[0].skip_reason) == ("skipped", "elder_deleted")
     assert (targets[1].status, targets[1].skip_reason) == ("skipped", "invalid_timezone")
     assert (targets[2].status, targets[2].skip_reason) == ("skipped", "daily_cap")
+    # Spec §7: skips log at WARNING (fail-closed paths at ERROR), ids only.
+    assert any("elder deleted" in m for m in warnings)
+    assert any("daily autonomous-call cap" in m for m in warnings)
     # DNC: terminal row consumes the key; target materialized — the finalizer
     # settles it done/dnc_blocked next cycle (asserted in the finalizer matrix).
     assert targets[3].status == "materialized"

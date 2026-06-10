@@ -475,7 +475,7 @@ async def _materialize_one_target(
         # FK SET NULL orphaned the target (spec §3.3): a deleted elder must not
         # silently shrink the batch — skip observably.
         await batches_repo.mark_target_skipped(db, target, reason="elder_deleted", now=now)
-        log.info("Batch target skipped: elder deleted")
+        log.warning("Batch target skipped: elder deleted")  # skips log at WARNING (spec §7)
         return "skipped_elder_deleted"
     batch = await db.get(CallBatch, target.batch_id)
     try:
@@ -528,7 +528,8 @@ async def _materialize_one_target(
             bound.info("Batch target materialized: {r}", r=outcome.result)
     elif outcome.result == "skipped_daily_cap":
         await batches_repo.mark_target_skipped(db, target, reason="daily_cap", now=now)
-        log.info("Batch target skipped: daily autonomous-call cap reached on the dial day")
+        # Skips log at WARNING (spec §7) — ids only, bound on `log`.
+        log.warning("Batch target skipped: daily autonomous-call cap reached on the dial day")
     else:  # key_conflict
         await batches_repo.mark_target_skipped(db, target, reason="key_conflict", now=now)
         log.error("Batch target idempotency-key conflict; skipped, no call linked")
