@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from loguru import logger
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -272,6 +272,43 @@ async def claim_due_retries(db: AsyncSession, *, now: datetime, limit: int) -> l
     return [call.id for call in claimed]
 
 
+async def count_in_flight(db: AsyncSession, *, now: datetime, max_age_s: int) -> int:
+    """Recency-bounded count of dial-slot consumers (served by idx_calls_in_flight).
+
+    LiveKit enforces max_call_duration on every outbound dial, so any in-flight row
+    older than that ceiling is wedged (lost room_finished webhook or agent end-call
+    — only DIALING has a reaper today) and must not consume a slot forever: without
+    the bound, max_concurrent_calls wedged rows would silently and permanently halt
+    ALL autonomous dialing (spec §5.4).
+    """
+    cutoff = now - timedelta(seconds=max_age_s)
+    result = await db.execute(
+        select(func.count())
+        .select_from(Call)
+        .where(
+            Call.status.in_((CallStatus.DIALING, CallStatus.RINGING, CallStatus.IN_PROGRESS)),
+            Call.updated_at > cutoff,
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def count_queued_due(db: AsyncSession, *, now: datetime) -> int:
+    """COUNT(*) of due QUEUED rows — exactly the idx_calls_due_retries predicate
+    (status='queued' AND scheduled_at <= now, mirroring claim_due_retries); feeds
+    the scheduler's batch-materialization slot math (spec §5.2 phase 4)."""
+    result = await db.execute(
+        select(func.count())
+        .select_from(Call)
+        .where(
+            Call.status == CallStatus.QUEUED,
+            Call.scheduled_at.is_not(None),
+            Call.scheduled_at <= now,
+        )
+    )
+    return int(result.scalar_one())
+
+
 async def requeue_for_quiet_hours(
     db: AsyncSession, call_id: uuid.UUID, *, scheduled_at: datetime
 ) -> Call | None:
@@ -323,12 +360,13 @@ async def create_inbound_call(
 async def reclaim_stuck_dialing(
     db: AsyncSession, *, now: datetime, stale_after_s: int, limit: int
 ) -> list[uuid.UUID]:
-    """Re-queue retry rows stranded in DIALING (ungraceful death mid-dispatch).
+    """Re-queue poller-owned rows stranded in DIALING (ungraceful death mid-dispatch).
 
-    A genuine in-flight dial leaves DIALING within the ring timeout, so a retry
-    row still DIALING after ``stale_after_s`` (>> ring timeout) is stranded. Only
-    retry rows (scheduled_at set) are reclaimed; a stranded initial call is the
-    caller's to re-enqueue.
+    A genuine in-flight dial leaves DIALING within the ring timeout, so a row
+    still DIALING after ``stale_after_s`` (>> ring timeout) is stranded. Only
+    poller-owned rows (scheduled_at set — retry children and schedule/batch roots
+    alike, spec §2.2 invariant 2) are reclaimed; a stranded ad-hoc initial call is
+    the caller's to re-enqueue.
     """
     cutoff = now - timedelta(seconds=stale_after_s)
     result = await db.execute(

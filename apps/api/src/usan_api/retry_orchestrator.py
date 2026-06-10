@@ -1,9 +1,15 @@
 """In-process retry orchestrator (§4.1 RetryOrchestrator, §5.3 policy).
 
-A single async loop per process. Each cycle: reap rows stranded in DIALING, claim
-due retry rows with FOR UPDATE SKIP LOCKED, and dispatch each as a tracked
-background task. Multiple replicas may each run this safely — SKIP LOCKED and the
-partial UNIQUE index on parent_call_id make claiming and scheduling idempotent.
+A single async loop per process. Each cycle: reap rows stranded in DIALING, count
+in-flight dial-slot consumers, claim due rows with FOR UPDATE SKIP LOCKED (capped
+by the free-slot budget when the concurrency gate is enabled), and dispatch each
+as a tracked background task. Multiple replicas may each run this safely for
+claiming — SKIP LOCKED and the partial UNIQUE index on parent_call_id make
+claiming and scheduling idempotent. The concurrency gate's count-then-claim read,
+however, is racy across replicas (each could observe the same free-slot budget,
+overshooting the cap by up to one claim batch per extra replica); like the
+outbound-trunk provisioning cache in livekit_dispatch, this assumes the documented
+single-replica deployment.
 """
 
 import asyncio
@@ -30,14 +36,23 @@ async def poll_once(
     *,
     now: datetime | None = None,
 ) -> list[uuid.UUID]:
-    """One poll cycle: reap stranded DIALING rows, claim due retries, dispatch.
+    """One poll cycle: reap stranded DIALING rows, count in-flight, claim due rows,
+    dispatch.
 
-    Returns the claimed ids (at most ``retry_batch_size``). The claim is committed
+    Claimable rows are QUEUED with scheduled_at set — "poller-owned" rows: retry
+    children and schedule/batch roots alike (spec §2.2 invariant 2; the
+    idx_calls_due_retries index in migration 0003 serves exactly this predicate).
+
+    Returns the claimed ids (at most ``retry_batch_size``, further capped by the
+    free dial-slot budget when the concurrency gate is enabled — spec §5.4). The
+    in-flight count and the claim share one transaction snapshot, so webhooks and
+    ad-hoc dials cannot drift between them intra-process. The claim is committed
     before dispatch is spawned, so a spawned dispatch always sees DIALING.
 
-    ``now`` overrides the clock used for both the reclaim staleness cutoff and the
-    claim predicate (scheduled_at <= now). In production both steps use the same
-    real-time instant; in tests a fixed value keeps the cycle deterministic.
+    ``now`` overrides the clock used for the reclaim staleness cutoff, the
+    in-flight recency bound, and the claim predicate (scheduled_at <= now). In
+    production all steps use the same real-time instant; in tests a fixed value
+    keeps the cycle deterministic.
     """
     moment = now if now is not None else _utcnow()
     async with factory() as db:
@@ -49,9 +64,25 @@ async def poll_once(
         )
         await db.commit()
     async with factory() as db:
-        claimed = await calls_repo.claim_due_retries(
-            db, now=moment, limit=settings.retry_batch_size
+        in_flight = await calls_repo.count_in_flight(
+            db, now=moment, max_age_s=settings.outbound_max_call_duration_s + 120
         )
+        free = max(0, settings.max_concurrent_calls - settings.reserved_concurrency - in_flight)
+        claimed: list[uuid.UUID]
+        if settings.autonomous_dialing_paused:
+            logger.bind(component="retry_poller").warning(
+                "Autonomous dialing paused; claiming nothing this cycle"
+            )
+            claimed = []
+        elif settings.concurrency_gate_enabled:
+            limit = min(settings.retry_batch_size, free)
+            claimed = (
+                await calls_repo.claim_due_retries(db, now=moment, limit=limit) if limit > 0 else []
+            )
+        else:
+            claimed = await calls_repo.claim_due_retries(
+                db, now=moment, limit=settings.retry_batch_size
+            )
         await db.commit()
     async with factory() as db:
         missing = await calls_repo.reconcile_missing_recordings(
