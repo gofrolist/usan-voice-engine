@@ -476,6 +476,46 @@ async def test_groups_deliver_concurrently_ordered_within(session_factory, monke
     assert order.index(str(a1)) < order.index(str(a2))
 
 
+async def test_one_bad_group_does_not_abort_other_groups(session_factory, monkeypatch):
+    # An exception OUTSIDE deliver_one's except tuple (a worker bug, not a
+    # delivery failure) must not abort the whole cycle: the other endpoint
+    # groups still settle, poll_once returns normally, and the crashed group
+    # is logged ids + type-name only (its claimed row keeps the bumped lease).
+    endpoint_bad = await _seed_endpoint(session_factory, url="https://bad.example.com/hook")
+    endpoint_good = await _seed_endpoint(session_factory, url="https://good.example.com/hook")
+    bad_id = await _seed_delivery(session_factory, endpoint_bad)
+    good_id = await _seed_delivery(session_factory, endpoint_good)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "bad.example.com":
+            raise RuntimeError(f"SENTINEL-EXC-TEXT worker bug for {URL}")
+        return httpx.Response(200)
+
+    _install_client(monkeypatch, handler)
+
+    records: list[Any] = []
+    handler_id = logger.add(records.append, level=0)
+    try:
+        stats = await webhook_delivery.poll_once(session_factory, _settings())
+    finally:
+        logger.remove(handler_id)
+
+    assert stats["delivered"] == 1
+    assert (await _get_delivery(session_factory, good_id)).status == "delivered"
+    bad = await _get_delivery(session_factory, bad_id)
+    assert bad.status == "pending"  # no outcome written; re-offered at the bumped rung
+    assert bad.attempts == 1
+
+    errors = [m for m in records if m.record["level"].name == "ERROR"]
+    assert len(errors) == 1
+    assert errors[0].record["extra"]["err"] == "RuntimeError"
+    assert errors[0].record["extra"]["endpoint_id"] == str(endpoint_bad)
+    for message in records:
+        assert "SENTINEL-EXC-TEXT" not in str(message)
+        assert "PHIPHI" not in str(message)
+        assert "hooks.example.com" not in str(message)
+
+
 async def test_per_row_outcome_commits(session_factory, monkeypatch):
     endpoint_id = await _seed_endpoint(session_factory)
     r1 = await _seed_delivery(session_factory, endpoint_id)

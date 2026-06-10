@@ -265,9 +265,21 @@ async def poll_once(
 
     async with _build_client(settings) as client:
         results = await asyncio.gather(
-            *(_deliver_group(factory, settings, rows, client) for rows in groups.values())
+            *(_deliver_group(factory, settings, rows, client) for rows in groups.values()),
+            return_exceptions=True,
         )
-    for counts in results:
+    for endpoint_id, counts in zip(groups, results, strict=True):
+        if isinstance(counts, BaseException):
+            # A worker bug in one group (anything outside deliver_one's except
+            # tuple) must not abort the cycle for every other endpoint. The
+            # group's claimed rows keep their bumped leases and re-offer at the
+            # next rung. Ids + type name only (spec §9).
+            logger.bind(
+                component="webhook_delivery",
+                endpoint_id=str(endpoint_id),
+                err=type(counts).__name__,
+            ).error("Webhook delivery group failed")
+            continue
         for outcome, count in counts.items():
             stats[outcome] += count
     return stats
