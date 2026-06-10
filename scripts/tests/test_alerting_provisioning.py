@@ -24,7 +24,31 @@ def test_alert_rules_present():
         "usan-urgent-followup-flag",
         "usan-sms-delivery-failed",
         "usan-dial-slots-exhausted",
+        "usan-webhook-delivery-failed",
+        "usan-webhook-endpoint-auto-disabled",
     } <= uids
+
+
+def test_webhook_alert_rules_shape():
+    # Both outbound-webhook rules fire immediately (for: 0m) at warning severity
+    # over a 30m increase() window. Two rules are load-bearing: a tripped circuit
+    # breaker MUTES the delivery-failed alert (disabled endpoints' rows are never
+    # claimed, so they never reach outcome="failed") — the trip itself must page
+    # (spec 2026-06-10 §9 / runbook §11.5).
+    by_uid = {rule["uid"]: rule for rule in _rules()}
+    expected_exprs = {
+        "usan-webhook-delivery-failed": 'usan_webhook_deliveries_total{outcome="failed"}',
+        "usan-webhook-endpoint-auto-disabled": "usan_webhook_endpoints_auto_disabled_total",
+    }
+    for uid, expr_fragment in expected_exprs.items():
+        rule = by_uid[uid]
+        assert rule["for"] == "0m", uid
+        assert rule["labels"]["severity"] == "warning", uid
+        query = next(item for item in rule["data"] if item["refId"] == "A")
+        assert query["datasourceUid"] == "prometheus", uid
+        assert expr_fragment in query["model"]["expr"], uid
+        assert "[30m]" in query["model"]["expr"], uid
+        assert query["relativeTimeRange"]["from"] == 1800, uid
 
 
 def test_dial_slots_alert_sustained_ten_minutes():
