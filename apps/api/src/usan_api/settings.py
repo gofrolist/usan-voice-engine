@@ -154,6 +154,19 @@ class Settings(BaseSettings):
             raise ValueError("RESERVED_CONCURRENCY must be < MAX_CONCURRENT_CALLS")
         return self
 
+    @model_validator(mode="after")
+    def _scheduler_requires_gate(self) -> Settings:
+        # Staged-enable order (spec §10.3): the gate is the hard dial cap; the
+        # scheduler must never materialize-and-dial without it. Gate-only is the
+        # documented intermediate state (pre-enable observability); scheduler-only
+        # is a misconfiguration — fail at startup, not on the first dial burst.
+        if self.scheduler_poller_enabled and not self.concurrency_gate_enabled:
+            raise ValueError(
+                "SCHEDULER_POLLER_ENABLED=true requires CONCURRENCY_GATE_ENABLED=true "
+                "(the scheduler must never run without the hard dial cap; spec §10.3)"
+            )
+        return self
+
     @field_validator(
         "telnyx_caller_id",
         "telnyx_sip_username",

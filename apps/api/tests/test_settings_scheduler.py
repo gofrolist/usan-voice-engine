@@ -50,3 +50,29 @@ def test_reserved_must_be_below_max():
     msg = str(exc_info.value)
     assert "RESERVED_CONCURRENCY" in msg
     assert "MAX_CONCURRENT_CALLS" in msg
+
+
+def test_scheduler_without_gate_rejected():
+    # Staged-enable invariant (spec §10.3): the scheduler must never run
+    # without the hard dial cap — gate first, scheduler second.
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(**_BASE, SCHEDULER_POLLER_ENABLED="true", CONCURRENCY_GATE_ENABLED="false")
+    msg = str(exc_info.value)
+    assert "SCHEDULER_POLLER_ENABLED" in msg
+    assert "CONCURRENCY_GATE_ENABLED" in msg
+
+
+def test_scheduler_gate_valid_combinations_accepted():
+    # Both shipped configs stay valid: dev compose (both on), prod (both off);
+    # gate-only is the documented staged-enable intermediate state (spec §10.3).
+    both_on = Settings(**_BASE, SCHEDULER_POLLER_ENABLED="true", CONCURRENCY_GATE_ENABLED="true")
+    assert both_on.scheduler_poller_enabled is True
+    assert both_on.concurrency_gate_enabled is True
+
+    gate_only = Settings(**_BASE, CONCURRENCY_GATE_ENABLED="true")
+    assert gate_only.scheduler_poller_enabled is False
+    assert gate_only.concurrency_gate_enabled is True
+
+    both_off = Settings(**_BASE)
+    assert both_off.scheduler_poller_enabled is False
+    assert both_off.concurrency_gate_enabled is False

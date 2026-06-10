@@ -71,6 +71,8 @@ def test_lifespan_starts_scheduler_poller_when_enabled(monkeypatch):
     _set_env(monkeypatch)
     monkeypatch.setenv("RETRY_POLLER_ENABLED", "true")
     monkeypatch.setenv("SCHEDULER_POLLER_ENABLED", "true")
+    # Settings invariant (spec §10.3): the scheduler requires the gate.
+    monkeypatch.setenv("CONCURRENCY_GATE_ENABLED", "true")
     retry_state: dict = {"started": False, "stop": None}
     sched_state: dict = {"started": False, "stop": None}
 
