@@ -9,6 +9,7 @@ from usan_api.auth import require_admin_role, require_admin_session
 from usan_api.db.base import AdminRole
 from usan_api.db.models import Elder
 from usan_api.db.session import get_db
+from usan_api.masking import mask_phone
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as profiles_repo
 from usan_api.repositories import elders as elders_repo
@@ -21,15 +22,11 @@ router = APIRouter(
 )
 
 
-def _mask(phone: str | None) -> str:
-    return "***" + phone[-4:] if phone else "unknown"
-
-
 def _summary(elder: Elder, profile_name: str | None) -> ElderSummary:
     return ElderSummary(
         id=elder.id,
         name=elder.name,
-        masked_phone=_mask(elder.phone_e164),
+        masked_phone=mask_phone(elder.phone_e164),
         agent_profile_id=elder.agent_profile_id,
         agent_profile_name=profile_name,
     )
