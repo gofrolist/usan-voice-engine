@@ -2,8 +2,10 @@ import asyncio
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -17,6 +19,33 @@ from usan_api.settings import get_settings
 
 API_DIR = Path(__file__).resolve().parents[1]
 TEST_SECRET = "a" * 32
+
+# Shared auth helpers (the operator bearer header + a service JWT minted with the
+# same JWT_SIGNING_KEY the `client` fixture sets). Several test modules need these;
+# keep one copy here so a token-format change is a single edit.
+OPERATOR_HEADERS = {"Authorization": "Bearer " + "o" * 32}
+
+
+def service_token(call_id: str, secret: str = "s" * 32) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
+        secret,
+        algorithm="HS256",
+    )
+
+
+def counter_value(counter, **labels) -> float:
+    """Read a Counter's cumulative value via the public collect() API.
+
+    Avoids the private `._value.get()` internal. The `_total` sample carries the
+    cumulative count; `labels` filters labeled counters (empty for unlabeled ones).
+    """
+    for metric in counter.collect():
+        for sample in metric.samples:
+            if sample.name.endswith("_total") and sample.labels == labels:
+                return sample.value
+    return 0.0
 
 
 @pytest.fixture(scope="session")
@@ -53,16 +82,25 @@ def async_database_url(database_url: str) -> str:
 async def _truncate_and_dispose(engine: AsyncEngine) -> None:
     # Reset table state then dispose, run from the client teardown — so pure-unit
     # tests that never request `client` don't pay for a Postgres container.
+    from usan_api.db.session import dispose_engine
+
     try:
         async with engine.begin() as conn:
             await conn.execute(
                 text(
                     "TRUNCATE agent_profile_versions, agent_profiles, admin_audit_log, "
-                    "admin_users, calls, dnc_list, elders RESTART IDENTITY CASCADE"
+                    "admin_users, follow_up_flags, callback_requests, sms_messages, "
+                    "calls, dnc_list, elders "
+                    "RESTART IDENTITY CASCADE"
                 )
             )
     finally:
         await engine.dispose()
+        # Also dispose the process-global engine (used by BackgroundTasks like
+        # flush_pending_sms). It's lazily bound to the loop of whichever request
+        # first opened it; without resetting it, the next `client` fixture runs on
+        # a fresh loop and reuses a now-dead engine -> "Event loop is closed".
+        await dispose_engine()
 
 
 @pytest.fixture

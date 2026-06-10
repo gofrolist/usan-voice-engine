@@ -14,10 +14,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from usan_api.schemas.tool_catalog import TOOL_NAMES
 from usan_api.schemas.variable_catalog import BUILTIN_NAMES, PHI_BUILTIN_NAMES
 
-# Tool names the agent can register; mirrors check_in.build_check_in_agent().
-TOOL_NAMES = frozenset({"log_wellness", "log_medication", "get_today_meds", "end_call"})
 # Personalization slots allowed in the inbound template (check_in.py rendering).
 # Kept for any external code that may import it; no longer used by the validators.
 ALLOWED_TEMPLATE_SLOTS = frozenset({"elder_name", "last_check_in_line"})
@@ -171,15 +170,60 @@ class TimingConfig(BaseModel):
         return self
 
 
+# --- send_sms templates (Phase 3 §6.1) -------------------------------------
+# Operator-authored SMS bodies the LLM selects by key (never free text). A body
+# may reference ONLY non-PHI catalog variables: a PHI token (PHI_BUILTIN_NAMES)
+# hard-blocks save (HTTP 422), stricter than the greeting warn-only rule, because
+# SMS leaves our system unencrypted and carrier-visible (design §6.2). Token
+# detection reuses the Phase 2 _TOKEN_RE so the two layers agree on what a token is.
+class SmsTemplate(BaseModel):
+    key: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    label: str = Field(min_length=1, max_length=120)
+    body: str = Field(min_length=1, max_length=480)
+
+
+def _phi_tokens_in_body(body: str) -> list[str]:
+    """PHI catalog tokens used in an SMS body, de-duplicated in first-seen order."""
+    seen: list[str] = []
+    for name in _TOKEN_RE.findall(body):
+        if name in PHI_BUILTIN_NAMES and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _reject_phi_in_templates(templates: list[SmsTemplate]) -> None:
+    for tmpl in templates:
+        phi = _phi_tokens_in_body(tmpl.body)
+        if phi:
+            joined = ", ".join("{{" + n + "}}" for n in phi)
+            raise ValueError(
+                f"SMS template '{tmpl.key}' body references protected health information "
+                f"({joined}); SMS bodies may use non-PHI variables only"
+            )
+
+
+class SmsToolConfig(BaseModel):
+    templates: list[SmsTemplate] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _no_phi_in_bodies(self) -> SmsToolConfig:
+        _reject_phi_in_templates(self.templates)
+        return self
+
+
 class ToolsConfig(BaseModel):
     enabled: list[str] = Field(
         default_factory=lambda: [
             "log_wellness",
             "log_medication",
             "get_today_meds",
+            "flag_for_followup",
+            "schedule_callback",
+            "send_sms",
             "end_call",
         ]
     )
+    sms: SmsToolConfig | None = None
 
     @field_validator("enabled")
     @classmethod
@@ -188,6 +232,13 @@ class ToolsConfig(BaseModel):
         if bad:
             raise ValueError(f"unknown tool(s): {', '.join(sorted(set(bad)))}")
         return v
+
+    @model_validator(mode="after")
+    def _sms_templates_no_phi(self) -> ToolsConfig:
+        # HARD BLOCK (design §6.2): a PHI token in any SMS body fails to save (422).
+        if self.sms is not None:
+            _reject_phi_in_templates(self.sms.templates)
+        return self
 
 
 class VoicemailDetectionConfig(BaseModel):

@@ -1,0 +1,122 @@
+apiVersion: 1
+
+# Grafana unified-alerting rules, provisioned as code (spec §5.1: "the rule is
+# shipped, the channel is a deploy step"). Loaded at Grafana STARTUP from the
+# mounted ./grafana/provisioning dir (docker-compose.monitoring.yml). Datasources
+# hot-reload does NOT apply to alerting — a newly-added rule needs a grafana
+# restart (`docker restart usan-grafana`).
+#
+# CONTACT POINT: the rules route to the "usan-operator" receiver below. The
+# operator fills its email/Slack/PagerDuty address in at deploy time (it is a
+# placeholder here — an empty addresses list is valid YAML and parses, but the
+# rule will not actually notify until the operator supplies an endpoint, either
+# by editing this file before deploy or via the Grafana UI contact-point editor).
+groups:
+  - orgId: 1
+    name: usan-business
+    folder: USAN
+    # Evaluate every minute; increase() over the window catches a single event.
+    interval: 1m
+    rules:
+      - uid: usan-urgent-followup-flag
+        title: Urgent follow-up flag raised
+        condition: C
+        # FOR 0m: fire as soon as the threshold is crossed (an urgent flag is a
+        # page-now event). PHI-free: the metric labels are bounded enums only.
+        for: 0m
+        # "No data" is the steady state for a low-traffic increase() query (fresh
+        # deploy, restart, quiet day) — never page on it (the provisioning default,
+        # NoData, routes to the contact point). An evaluation ERROR, by contrast,
+        # must page: a silently-broken urgent-flag rule is worse than a spurious
+        # one. Alerting matches file-provisioning's default (the UI/API default is
+        # Error); pinned explicitly so a Grafana default change can't silence it.
+        noDataState: OK
+        execErrState: Alerting
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              editorMode: code
+              expr: sum(increase(usan_followup_flags_total{severity="urgent"}[10m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+        labels:
+          severity: page
+        annotations:
+          summary: One or more urgent follow-up flags were created in the last 10m.
+
+      - uid: usan-sms-delivery-failed
+        title: SMS delivery failing
+        condition: C
+        for: 0m
+        # Same rationale as usan-urgent-followup-flag: no-data is normal, never
+        # page on it; evaluation errors must surface.
+        noDataState: OK
+        execErrState: Alerting
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              editorMode: code
+              expr: sum(increase(usan_sms_messages_total{status="failed"}[15m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+        labels:
+          severity: warning
+        annotations:
+          summary: One or more queued SMS messages failed to send in the last 15m.
+
+# Route every USAN alert to a single operator-owned contact point. The receiver
+# below is a PLACEHOLDER: leave `usan-operator` named here and fill its actual
+# address in at deploy time (edit the contactPoints block or use the Grafana UI).
+policies:
+  - orgId: 1
+    receiver: usan-operator
+    group_by:
+      - alertname
+
+contactPoints:
+  - orgId: 1
+    name: usan-operator
+    receivers:
+      # TODO(deploy): replace with the operator's real channel, e.g.
+      #   - uid: usan-operator-email
+      #     type: email
+      #     settings:
+      #       addresses: ops@example.com
+      - uid: usan-operator-email
+        type: email
+        settings:
+          addresses: ""

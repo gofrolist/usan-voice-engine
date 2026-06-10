@@ -127,6 +127,9 @@ def test_agent_config_default_when_nothing_configured(client):
         "log_wellness",
         "log_medication",
         "get_today_meds",
+        "flag_for_followup",
+        "schedule_callback",
+        "send_sms",
         "end_call",
     ]
 

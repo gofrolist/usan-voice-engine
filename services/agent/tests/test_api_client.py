@@ -392,3 +392,39 @@ async def test_fetch_agent_config_returns_default_on_bad_body(monkeypatch):
     monkeypatch.setattr(api_client.httpx, "AsyncClient", _FakeClient)
     cfg = await api_client.fetch_agent_config(_settings(), direction="outbound")
     assert cfg == DEFAULT_AGENT_CONFIG
+
+
+async def test_api_client_flag_for_followup_payload(monkeypatch):
+    captured = {}
+
+    async def _post_tool(tool, call_id, settings, payload):
+        captured["tool"] = tool
+        captured["payload"] = payload
+        return {"id": 1}
+
+    monkeypatch.setattr(api_client, "_post_tool", _post_tool)
+    await api_client.flag_for_followup(
+        "call-9", _settings(), severity="urgent", category="safety", reason="fell"
+    )
+    assert captured["tool"] == "flag_for_followup"
+    assert captured["payload"] == {
+        "severity": "urgent",
+        "category": "safety",
+        "reason": "fell",
+    }
+
+
+@pytest.mark.asyncio
+async def test_send_sms_posts_template_key(monkeypatch):
+    captured = {}
+
+    async def _fake_post(tool, call_id, settings, payload):
+        captured["tool"] = tool
+        captured["call_id"] = call_id
+        captured["payload"] = payload
+        return {"id": "x", "status": "pending"}
+
+    monkeypatch.setattr(api_client, "_post_tool", _fake_post)
+    await api_client.send_sms("call-1", _settings(), template_key="med_reminder")
+    assert captured["tool"] == "send_sms"
+    assert captured["payload"] == {"template_key": "med_reminder"}

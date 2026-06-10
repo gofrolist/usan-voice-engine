@@ -49,15 +49,29 @@ class TimingConfig(BaseModel):
     max_call_duration_s: int = 1800
 
 
+class SmsTemplate(BaseModel):
+    key: str
+    label: str
+    body: str
+
+
+class SmsToolConfig(BaseModel):
+    templates: list[SmsTemplate] = Field(default_factory=list)
+
+
 class ToolsConfig(BaseModel):
     enabled: list[str] = Field(
         default_factory=lambda: [
             "log_wellness",
             "log_medication",
             "get_today_meds",
+            "flag_for_followup",
+            "schedule_callback",
+            "send_sms",
             "end_call",
         ]
     )
+    sms: SmsToolConfig | None = None
 
 
 class VoicemailDetectionConfig(BaseModel):

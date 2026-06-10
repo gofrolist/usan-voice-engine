@@ -35,3 +35,23 @@ describe("fieldMeta prompt help text", () => {
     }
   });
 });
+
+describe("fieldMeta tools help text", () => {
+  it("does not hardcode the old four-tool list", () => {
+    const help = fieldMeta["tools.enabled"]!.help;
+    // The catalog is now the source of truth; help must not enumerate the old set.
+    expect(help).not.toContain("log_medication");
+    expect(help).not.toContain("get_today_meds");
+    expect(help.toLowerCase()).toContain("catalog");
+  });
+});
+
+describe("fieldMeta tools.sms", () => {
+  it("registers tools.sms help mentioning templates and non-PHI", () => {
+    const meta = fieldMeta["tools.sms"];
+    expect(meta).toBeDefined();
+    expect(meta!.label.toLowerCase()).toContain("sms");
+    expect(meta!.help.toLowerCase()).toMatch(/template/);
+    expect(meta!.help.toLowerCase()).toMatch(/non-phi|protected health|phi/);
+  });
+});

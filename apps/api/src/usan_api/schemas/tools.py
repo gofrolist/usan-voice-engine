@@ -1,9 +1,9 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ToolCallRequest(BaseModel):
@@ -23,6 +23,16 @@ class LogWellnessRequest(ToolCallRequest):
 
 
 class LoggedResponse(BaseModel):
+    id: int
+
+
+class FlagForFollowupRequest(ToolCallRequest):
+    severity: Literal["routine", "urgent"]
+    category: Literal["medical", "emotional", "medication", "safety", "other"]
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class FollowupFlaggedResponse(BaseModel):
     id: int
 
 
@@ -52,6 +62,26 @@ class EndCallRequest(ToolCallRequest):
 
 class CallEndedResponse(BaseModel):
     status: str
+
+
+class ScheduleCallbackRequest(ToolCallRequest):
+    requested_time_text: str = Field(min_length=1, max_length=200)
+    requested_at: datetime | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("requested_at")
+    @classmethod
+    def _assume_utc(cls, v: datetime | None) -> datetime | None:
+        # A naive ISO string from the LLM (no offset/Z) would land in the TIMESTAMPTZ
+        # column under an implicit session tz. Treat a tz-naive value as UTC; offset/Z
+        # values are already tz-aware and pass through unchanged.
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=UTC)
+        return v
+
+
+class CallbackScheduledResponse(BaseModel):
+    id: int
 
 
 class TranscriptSegmentIn(BaseModel):
@@ -99,3 +129,13 @@ class LogMetricsRequest(BaseModel):
 class MetricsAcceptedResponse(BaseModel):
     call_id: uuid.UUID
     cost_total_usd: Decimal
+
+
+class SendSmsRequest(ToolCallRequest):
+    # The LLM selects a template KEY only; it never authors free text (design §6.1).
+    template_key: str = Field(min_length=1, max_length=64)
+
+
+class SmsQueuedResponse(BaseModel):
+    id: uuid.UUID
+    status: str

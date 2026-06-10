@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { agentConfigSchema, type AgentConfigForm } from "../config/agentConfigSchema";
+import {
+  agentConfigSchema,
+  smsTemplateSchema,
+  TOOL_NAMES,
+  toolsSchema,
+  type AgentConfigForm,
+} from "../config/agentConfigSchema";
 
 function validConfig(): AgentConfigForm {
   return {
@@ -23,7 +29,17 @@ function validConfig(): AgentConfigForm {
     llm: { model: "gemini-3.1-flash-lite", temperature: null },
     stt: { model: "ink-whisper", language: null },
     timing: { answer_timeout_s: 50, max_call_duration_s: 1800 },
-    tools: { enabled: ["log_wellness", "log_medication", "get_today_meds", "end_call"] },
+    tools: {
+      enabled: [
+        "log_wellness",
+        "log_medication",
+        "get_today_meds",
+        "flag_for_followup",
+        "schedule_callback",
+        "send_sms",
+        "end_call",
+      ],
+    },
     voicemail_detection: { window_s: 3, trigger_phrases: [] },
     speech_advanced: {
       vad_min_silence_s: null,
@@ -40,6 +56,18 @@ function validConfig(): AgentConfigForm {
 describe("agentConfigSchema", () => {
   it("accepts a valid config", () => {
     expect(agentConfigSchema.safeParse(validConfig()).success).toBe(true);
+  });
+
+  it("exposes all seven catalog tool names", () => {
+    expect([...TOOL_NAMES]).toEqual([
+      "log_wellness",
+      "log_medication",
+      "get_today_meds",
+      "flag_for_followup",
+      "schedule_callback",
+      "send_sms",
+      "end_call",
+    ]);
   });
 
   it("rejects a brace in the greeting", () => {
@@ -141,5 +169,46 @@ describe("agentConfigSchema", () => {
     cfg.prompts.inbound_personalization_template =
       "Speaking with {{elder_name}}. {{made_up_var}} Begin.";
     expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
+  });
+});
+
+describe("smsTemplateSchema", () => {
+  it("accepts a non-PHI body", () => {
+    const r = smsTemplateSchema.safeParse({
+      key: "med_reminder",
+      label: "Med reminder",
+      body: "Hi {{first_name}}, reminder for {{current_date}}.",
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects a non-slug key", () => {
+    const r = smsTemplateSchema.safeParse({ key: "Bad Key", label: "x", body: "hi" });
+    expect(r.success).toBe(false);
+  });
+
+  it.each(["last_check_in", "last_check_in_line", "last_mood", "last_pain", "today_meds"])(
+    "hard-blocks PHI token %s in the body",
+    (token) => {
+      const r = smsTemplateSchema.safeParse({
+        key: "k",
+        label: "L",
+        body: `Your status: {{${token}}}`,
+      });
+      expect(r.success).toBe(false);
+    },
+  );
+
+  it("toolsSchema accepts an sms block with templates", () => {
+    const r = toolsSchema.safeParse({
+      enabled: ["log_wellness", "send_sms", "end_call"],
+      sms: { templates: [{ key: "k", label: "L", body: "Hi {{first_name}}" }] },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("toolsSchema sms is optional", () => {
+    const r = toolsSchema.safeParse({ enabled: ["end_call"] });
+    expect(r.success).toBe(true);
   });
 });

@@ -9,13 +9,14 @@ goodbye → delete_room → shutdown.
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from livekit.agents import Agent, RunContext, function_tool
 from loguru import logger
 
 from usan_agent import api_client
 from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
+from usan_agent.api_client import FlagCategory, FlagSeverity
 from usan_agent.prompt_vars import build_vars, substitute
 from usan_agent.sanitize import sanitize_prompt_value
 from usan_agent.settings import Settings
@@ -27,6 +28,17 @@ from usan_agent.settings import Settings
 _MED_NAME_MAX_LEN = 80
 _MED_DOSAGE_MAX_LEN = 40
 _MED_TIME_MAX_LEN = 20
+
+# FlagSeverity / FlagCategory (imported from api_client, which mirrors the API's
+# FlagForFollowupRequest Literals) reach the LLM as JSON-schema enums via the
+# @function_tool signature — a plain `str` would let the LLM stray off-enum, the
+# API would 422, and the safety flag would be silently dropped while the LLM
+# hears the success phrase.
+
+# The API bounds FlagForFollowupRequest.reason to 1..2000 chars; values outside
+# that 422 — and that 422 would be swallowed below, silently losing a safety
+# flag. _do_flag_for_followup normalizes instead of failing.
+_FLAG_REASON_MAX_LEN = 2000
 
 
 def _sanitize_prompt_value(value: Any, *, max_len: int) -> str:
@@ -84,6 +96,41 @@ async def _do_log_medication(
     return "Got it, I've recorded that."
 
 
+async def _do_flag_for_followup(
+    data: CheckInData, *, severity: FlagSeverity, category: FlagCategory, reason: str
+) -> str:
+    reason = reason.strip()[:_FLAG_REASON_MAX_LEN] or "(no reason given)"
+    try:
+        await api_client.flag_for_followup(
+            data.call_id, data.settings, severity=severity, category=category, reason=reason
+        )
+    except Exception:
+        logger.bind(call_id=data.call_id).warning("flag_for_followup tool failed")
+        return "I've made a note of that, and I'll make sure someone follows up."
+    return "Thank you. I've flagged this so someone can follow up with you."
+
+
+async def _do_schedule_callback(
+    data: CheckInData,
+    *,
+    requested_time_text: str,
+    requested_at: str | None = None,
+    notes: str | None = None,
+) -> str:
+    try:
+        await api_client.schedule_callback(
+            data.call_id,
+            data.settings,
+            requested_time_text=requested_time_text,
+            requested_at=requested_at,
+            notes=notes,
+        )
+    except Exception:
+        logger.bind(call_id=data.call_id).warning("schedule_callback tool failed")
+        return "I had trouble noting that callback time, but we can still continue."
+    return "Of course, I've noted that you'd like a call back then."
+
+
 async def _do_get_today_meds(data: CheckInData) -> str:
     try:
         meds = await api_client.get_today_meds(data.call_id, data.settings)
@@ -124,6 +171,15 @@ def _format_times(times: Any) -> str:
         return ""
     cleaned = (_sanitize_prompt_value(t, max_len=_MED_TIME_MAX_LEN) for t in times if t)
     return ", ".join(seg for seg in cleaned if seg)
+
+
+async def _do_send_sms(data: CheckInData, *, template_key: str) -> str:
+    try:
+        await api_client.send_sms(data.call_id, data.settings, template_key=template_key)
+    except Exception:
+        logger.bind(call_id=data.call_id).warning("send_sms tool failed")
+        return "I wasn't able to send that text just now, but we can continue."
+    return "I've sent that text message for you."
 
 
 async def _do_end_call(data: CheckInData, session: Any, reason: str) -> None:
@@ -181,6 +237,60 @@ async def get_today_meds(ctx: RunContext[CheckInData]) -> str:
 
 
 @function_tool
+async def flag_for_followup(
+    ctx: RunContext[CheckInData],
+    severity: FlagSeverity,
+    category: FlagCategory,
+    reason: str,
+) -> str:
+    """Flag this call for a human to follow up on.
+
+    Args:
+        severity: "routine" for a non-urgent note, "urgent" for prompt attention.
+        category: One of "medical", "emotional", "medication", "safety", "other".
+        reason: A short description of what should be followed up on.
+    """
+    return await _do_flag_for_followup(
+        ctx.userdata, severity=severity, category=category, reason=reason
+    )
+
+
+@function_tool
+async def schedule_callback(
+    ctx: RunContext[CheckInData],
+    requested_time_text: str,
+    requested_at: str | None = None,
+    notes: str | None = None,
+) -> str:
+    """Record that the elder would like a call back at a particular time.
+
+    This does not place a call; it stores a request for a human to action.
+
+    Args:
+        requested_time_text: The elder's own words for when they'd like the call back.
+        requested_at: Optional best-effort ISO-8601 timestamp; omit if you can't resolve one.
+        notes: Optional short free-text note about the request.
+    """
+    return await _do_schedule_callback(
+        ctx.userdata,
+        requested_time_text=requested_time_text,
+        requested_at=requested_at,
+        notes=notes,
+    )
+
+
+@function_tool
+async def send_sms(ctx: RunContext[CheckInData], template_key: str) -> str:
+    """Send the elder a pre-approved text message.
+
+    Args:
+        template_key: The id of the message template to send (choose from the
+            available templates; you cannot write custom text).
+    """
+    return await _do_send_sms(ctx.userdata, template_key=template_key)
+
+
+@function_tool
 async def end_call(ctx: RunContext[CheckInData], reason: str = "check_in_complete") -> str:
     """End the call once the check-in is complete.
 
@@ -191,26 +301,78 @@ async def end_call(ctx: RunContext[CheckInData], reason: str = "check_in_complet
     return ""
 
 
-# name -> tool callable; mirrors the admin schema's TOOL_NAMES.
+# name -> tool callable. Full parity with the admin schema's TOOL_NAMES: every catalog
+# tool (including flag_for_followup / schedule_callback / send_sms) has a landed
+# @function_tool callable here. send_sms is still gated by the template guard in
+# _select_tools (it is dropped unless an SMS template is configured).
 _TOOL_REGISTRY: dict[str, Any] = {
     "log_wellness": log_wellness,
     "log_medication": log_medication,
     "get_today_meds": get_today_meds,
+    "flag_for_followup": flag_for_followup,
+    "schedule_callback": schedule_callback,
+    "send_sms": send_sms,
     "end_call": end_call,
 }
 
 
-def _select_tools(enabled: list[str]) -> list[Any]:
+class _ToolsConfigLike(Protocol):
+    """Structural view of what _select_tools requires off a ToolsConfig.
+
+    Only ``.enabled`` is a hard requirement. ``.sms`` is deliberately NOT declared
+    here even though the concrete ``ToolsConfig`` now carries it: the tests'
+    ``SimpleNamespace`` objects (and any older config document) may omit it, so the
+    readers use ``getattr`` and this Protocol keeps that defensive access honest.
+    """
+
+    enabled: list[str]
+
+
+def _select_tools(tools: _ToolsConfigLike) -> list[Any]:
     """Resolve enabled tool names to callables, preserving order.
 
-    Unknown names (already rejected by the admin schema) are dropped defensively.
-    end_call is always included: it drives report->goodbye->delete_room->shutdown, so
-    removing it would leave a call unable to end gracefully.
+    Any enabled name absent from _TOOL_REGISTRY is silently dropped. That covers both
+    unknown names (already rejected upstream by the admin schema) and catalog tools
+    whose agent-side callable has not landed yet (see _TOOL_REGISTRY note) -- enabling
+    such a tool is accepted by the API but is a no-op here until the registry catches up.
+    send_sms is a dead tool until at least one SMS template is configured, so it is
+    dropped unless ``tools`` carries an ``sms`` config with templates (``getattr``
+    because ``_ToolsConfigLike`` does not declare ``.sms``); this template guard is the
+    sole gate on send_sms. end_call is always included: it drives
+    report->goodbye->delete_room->shutdown, so removing it would leave a call unable
+    to end gracefully.
     """
-    names = [n for n in enabled if n in _TOOL_REGISTRY]
+    names = [n for n in tools.enabled if n in _TOOL_REGISTRY]  # preserve enabled order
+    if not _sms_templates(tools):
+        names = [n for n in names if n != "send_sms"]
     if "end_call" not in names:
         names.append("end_call")
     return [_TOOL_REGISTRY[n] for n in names]
+
+
+def _sms_templates(tools: _ToolsConfigLike) -> list[Any]:
+    """The configured SMS templates, or [] (shared by the tool gate + prompt suffix)."""
+    sms_cfg = getattr(tools, "sms", None)
+    return list(getattr(sms_cfg, "templates", None) or []) if sms_cfg else []
+
+
+def _sms_template_instructions(tools: _ToolsConfigLike) -> str:
+    """Instruction suffix enumerating the valid send_sms template keys.
+
+    send_sms is a statically-registered FunctionTool, so its JSON schema cannot list
+    the operator-configured template keys; without this suffix the LLM can only
+    guess a key (-> 404 from the API, message silently dropped). Emitted exactly
+    when _select_tools offers send_sms (same enabled + templates guard). Keys are
+    server-validated slugs and labels are operator-authored config — the same trust
+    level as the surrounding prompt text.
+    """
+    templates = _sms_templates(tools)
+    if not templates or "send_sms" not in tools.enabled:
+        return ""
+    lines = "\n".join(f'- "{t.key}": {t.label}' for t in templates)
+    return (
+        f"\n\nWhen sending a text message with `send_sms`, template_key must be one of:\n{lines}\n"
+    )
 
 
 def build_check_in_agent(
@@ -235,8 +397,9 @@ def build_check_in_agent(
         now=now or datetime.now(UTC),
     )
     return Agent(
-        instructions=substitute(cfg.prompts.checkin_flow_instructions, values),
-        tools=_select_tools(cfg.tools.enabled),
+        instructions=substitute(cfg.prompts.checkin_flow_instructions, values)
+        + _sms_template_instructions(cfg.tools),
+        tools=_select_tools(cfg.tools),
     )
 
 
@@ -266,6 +429,7 @@ def build_inbound_agent(
         now=now or datetime.now(UTC),
     )
     return Agent(
-        instructions=substitute(cfg.prompts.inbound_personalization_template, values),
-        tools=_select_tools(cfg.tools.enabled),
+        instructions=substitute(cfg.prompts.inbound_personalization_template, values)
+        + _sms_template_instructions(cfg.tools),
+        tools=_select_tools(cfg.tools),
     )

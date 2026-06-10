@@ -193,6 +193,15 @@ services:
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
       # Operator/management API plane auth (GET/POST /v1/elders, /v1/dnc, /v1/calls).
       OPERATOR_API_KEY: ${OPERATOR_API_KEY}
+      # Telnyx Messaging (Phase 3 send_sms). Feature flag default FALSE: no SMS is
+      # ever sent until a deploy sets TELNYX_MESSAGING_ENABLED=true AND the secret /
+      # profile / from-number are populated. The 3 value fields are blank-able.
+      TELNYX_MESSAGING_ENABLED: ${TELNYX_MESSAGING_ENABLED:-false}
+      TELNYX_MESSAGING_API_KEY: ${TELNYX_MESSAGING_API_KEY:-}
+      TELNYX_MESSAGING_PROFILE_ID: ${TELNYX_MESSAGING_PROFILE_ID:-}
+      TELNYX_FROM_NUMBER: ${TELNYX_FROM_NUMBER:-}
+      TELNYX_MESSAGING_API_URL: ${TELNYX_MESSAGING_API_URL:-https://api.telnyx.com/v2}
+      TELNYX_MESSAGING_TIMEOUT_S: ${TELNYX_MESSAGING_TIMEOUT_S:-10}
       # Admin UI / Google SSO (Plan admin-3 code; admin-5 wires it through here so
       # the settings actually reach the container). All optional — SSO is off until
       # the client id + secret + redirect are all set; SESSION_COOKIE_SECURE defaults

@@ -18,6 +18,12 @@ from usan_agent.settings import Settings
 
 _TOKEN_TTL_S = 300
 
+# Mirror the API's FlagForFollowupRequest Literals (apps/api schemas/tools.py).
+# Defined here (the API boundary) and re-used by check_in's tool signatures, so the
+# whole agent-side path is enum-typed end to end.
+FlagSeverity = Literal["routine", "urgent"]
+FlagCategory = Literal["medical", "emotional", "medication", "safety", "other"]
+
 # The config fetch is on the call's critical path (before the agent can speak), so use
 # a tighter timeout than the 10s tool calls — a slow API must not delay answering.
 _CONFIG_TIMEOUT_S = 5.0
@@ -79,6 +85,22 @@ async def log_wellness(
     )
 
 
+async def flag_for_followup(
+    call_id: str,
+    settings: Settings,
+    *,
+    severity: FlagSeverity,
+    category: FlagCategory,
+    reason: str,
+) -> None:
+    await _post_tool(
+        "flag_for_followup",
+        call_id,
+        settings,
+        {"severity": severity, "category": category, "reason": reason},
+    )
+
+
 async def log_medication(
     call_id: str,
     settings: Settings,
@@ -92,6 +114,30 @@ async def log_medication(
         call_id,
         settings,
         {"medication_name": medication_name, "taken": taken, "reported_time": reported_time},
+    )
+
+
+async def send_sms(call_id: str, settings: Settings, *, template_key: str) -> None:
+    await _post_tool("send_sms", call_id, settings, {"template_key": template_key})
+
+
+async def schedule_callback(
+    call_id: str,
+    settings: Settings,
+    *,
+    requested_time_text: str,
+    requested_at: str | None,
+    notes: str | None,
+) -> None:
+    await _post_tool(
+        "schedule_callback",
+        call_id,
+        settings,
+        {
+            "requested_time_text": requested_time_text,
+            "requested_at": requested_at,
+            "notes": notes,
+        },
     )
 
 

@@ -4,6 +4,7 @@ import uuid
 import jwt
 import pytest
 
+from tests.conftest import counter_value as _counter_value
 from usan_api import livekit_dispatch
 
 # Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
@@ -356,3 +357,355 @@ def test_log_transcript_empty_segments_422(client, mock_dispatch):
         headers=_auth(call_id),
     )
     assert r.status_code == 422
+
+
+def test_flag_for_followup_ok(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={
+            "call_id": call_id,
+            "severity": "urgent",
+            "category": "medical",
+            "reason": "reported chest pain",
+        },
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    assert isinstance(r.json()["id"], int)
+
+
+def test_flag_for_followup_requires_token(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={"call_id": call_id, "severity": "routine", "category": "other", "reason": "x"},
+    )
+    assert r.status_code == 401
+
+
+def test_flag_for_followup_call_id_mismatch_403(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    wrong = str(uuid.uuid4())
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={"call_id": call_id, "severity": "routine", "category": "other", "reason": "x"},
+        headers=_auth(wrong),
+    )
+    assert r.status_code == 403
+
+
+def test_flag_for_followup_unknown_call_404(client, mock_dispatch):
+    cid = str(uuid.uuid4())
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={"call_id": cid, "severity": "routine", "category": "other", "reason": "x"},
+        headers=_auth(cid),
+    )
+    assert r.status_code == 404
+
+
+def test_flag_for_followup_bad_enum_422(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={"call_id": call_id, "severity": "panic", "category": "medical", "reason": "x"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 422
+
+
+def test_flag_for_followup_increments_metric(client, mock_dispatch):
+    from usan_api.observability.custom_metrics import FOLLOWUP_FLAGS_TOTAL
+
+    before = _counter_value(FOLLOWUP_FLAGS_TOTAL, severity="urgent", category="safety")
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/flag_for_followup",
+        json={"call_id": call_id, "severity": "urgent", "category": "safety", "reason": "fell"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    after = _counter_value(FOLLOWUP_FLAGS_TOTAL, severity="urgent", category="safety")
+    assert after == before + 1
+
+
+# --- send_sms -------------------------------------------------------------
+def _publish_sms_profile(async_database_url, *, body="Hello {{first_name}} from USAN."):
+    """Create a default-outbound profile whose draft enables send_sms with one template,
+    publish it, set it default-outbound. Uses the REAL repo API (publish / set_default)."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import agent_profiles as profiles_repo
+    from usan_api.schemas.agent_config import AgentConfig, SmsTemplate, SmsToolConfig
+
+    async def _do():
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as db:
+                profile = await profiles_repo.create_profile(
+                    db, name=f"sms-{uuid.uuid4()}", description=None, actor_email="op@x.io"
+                )
+                # Build the draft through the real Pydantic schema (immutable copy) rather
+                # than spreading raw JSONB dicts, mirroring the codebase's no-mutation rule.
+                base = AgentConfig.model_validate(profile.draft_config)
+                enabled = base.tools.enabled
+                if "send_sms" not in enabled:
+                    enabled = [*enabled, "send_sms"]
+                tools = base.tools.model_copy(
+                    update={
+                        "enabled": enabled,
+                        "sms": SmsToolConfig(
+                            templates=[SmsTemplate(key="greet", label="Greet", body=body)]
+                        ),
+                    }
+                )
+                draft = base.model_copy(update={"tools": tools}).model_dump()
+                await profiles_repo.update_draft(
+                    db, profile.id, config=draft, description=None, actor_email="op@x.io"
+                )
+                await profiles_repo.publish(db, profile.id, note=None, actor_email="op@x.io")
+                await profiles_repo.set_default(db, profile.id, direction="outbound")
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_do())
+
+
+def test_send_sms_enqueues_pending_row(client, mock_dispatch, async_database_url):
+    _publish_sms_profile(async_database_url)
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    # mark the call answered/in_progress is not required for enqueue; the endpoint
+    # only needs the call + elder to exist (mirrors log_wellness, which works at QUEUED).
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "pending"
+    uuid.UUID(body["id"])  # is a uuid
+
+
+def test_send_sms_unknown_template_404(client, mock_dispatch, async_database_url):
+    _publish_sms_profile(async_database_url)
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "nope"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 404
+
+
+def test_send_sms_no_sms_config_404(client, mock_dispatch):
+    # Fresh-deployment path: no default-outbound profile configures send_sms, so
+    # resolution falls back to DEFAULT_AGENT_CONFIG where tools.sms is None.
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 404
+
+
+def test_send_sms_requires_token(client, mock_dispatch):
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post("/v1/tools/send_sms", json={"call_id": call_id, "template_key": "greet"})
+    assert r.status_code == 401
+
+
+def test_send_sms_mismatch_403(client, mock_dispatch, async_database_url):
+    # Service token bound to a different call_id must be rejected by _authorize_call.
+    _publish_sms_profile(async_database_url)
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
+        headers=_auth(str(uuid.uuid4())),
+    )
+    assert r.status_code == 403
+
+
+def _publish_override_profile(async_database_url, *, template_key, body="Hi from override."):
+    """Publish a profile enabling send_sms with one template under `template_key`, and
+    return its id. NOT marked default — used as a per-call profile_override."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import agent_profiles as profiles_repo
+    from usan_api.schemas.agent_config import AgentConfig, SmsTemplate, SmsToolConfig
+
+    async def _do():
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as db:
+                profile = await profiles_repo.create_profile(
+                    db, name=f"ovr-{uuid.uuid4()}", description=None, actor_email="op@x.io"
+                )
+                base = AgentConfig.model_validate(profile.draft_config)
+                enabled = base.tools.enabled
+                if "send_sms" not in enabled:
+                    enabled = [*enabled, "send_sms"]
+                tools = base.tools.model_copy(
+                    update={
+                        "enabled": enabled,
+                        "sms": SmsToolConfig(
+                            templates=[SmsTemplate(key=template_key, label="Ovr", body=body)]
+                        ),
+                    }
+                )
+                draft = base.model_copy(update={"tools": tools}).model_dump()
+                await profiles_repo.update_draft(
+                    db, profile.id, config=draft, description=None, actor_email="op@x.io"
+                )
+                await profiles_repo.publish(db, profile.id, note=None, actor_email="op@x.io")
+                await db.commit()
+                return profile.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_do())
+
+
+def _set_call_override(async_database_url, call_id, profile_id):
+    """Point a call's profile_override at `profile_id` via a direct write."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import calls as calls_repo
+
+    async def _do():
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as db:
+                call = await calls_repo.get_call(db, uuid.UUID(call_id))
+                call.profile_override = profile_id
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_do())
+
+
+@pytest.mark.skip(
+    reason="Elder.phone_e164 is NOT NULL (and the elder-create API requires it), so a "
+    "null/empty phone cannot be seeded through the helpers. The 409 guard in send_sms is "
+    "cheap defense for any future path that could persist a blank number."
+)
+def test_send_sms_missing_phone_409(client, mock_dispatch, async_database_url):
+    _publish_sms_profile(async_database_url)
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 409
+
+
+def test_send_sms_resolves_profile_override_over_direction_default(
+    client, mock_dispatch, async_database_url
+):
+    # The direction-default profile offers only "greet"; the call's profile_override
+    # offers only "ovr_greet". The override is top of the precedence walk, so the
+    # override's template resolves and the direction-default's "greet" does NOT.
+    _publish_sms_profile(async_database_url)  # default-outbound, template "greet"
+    override_id = _publish_override_profile(async_database_url, template_key="ovr_greet")
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    _set_call_override(async_database_url, call_id, override_id)
+
+    # Override-only template succeeds (override tier won).
+    ok = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "ovr_greet"},
+        headers=_auth(call_id),
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["status"] == "pending"
+
+    # The direction-default's "greet" is invisible once the override resolves -> 404.
+    miss = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
+        headers=_auth(call_id),
+    )
+    assert miss.status_code == 404
+
+
+def test_send_sms_per_call_cap_409(client, mock_dispatch, async_database_url):
+    # A confused/hijacked LLM must not queue unbounded carrier traffic: send_sms is
+    # exempt from the global rate limiter (in-call tool path), so the endpoint
+    # itself refuses once MAX_SMS_PER_CALL rows exist for the call — any status,
+    # since already-sent texts count toward the elder's per-call budget too.
+    from usan_api.routers import tools as tools_router
+
+    # Pin the literal value: raising the per-call budget must be a deliberate,
+    # reviewed decision (carrier traffic to an elder's phone), not a constant tweak.
+    assert tools_router.MAX_SMS_PER_CALL == 3
+
+    _publish_sms_profile(async_database_url)
+    elder_id = _create_elder(client)
+    call_id = _enqueue(client, elder_id)
+    for _ in range(tools_router.MAX_SMS_PER_CALL):
+        r = client.post(
+            "/v1/tools/send_sms",
+            json={"call_id": call_id, "template_key": "greet"},
+            headers=_auth(call_id),
+        )
+        assert r.status_code == 200, r.text
+
+    # The budget counts ALL statuses: flushing a queued row to `sent` must not
+    # refund the cap (a pending-only count would reset after every flush).
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.repositories import sms_messages as sms_repo
+
+    async def _mark_one_sent():
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as db:
+                rows = await sms_repo.list_messages(db, limit=100)
+                row = next(r for r in rows if str(r.call_id) == call_id)
+                await sms_repo.mark_sent(db, row.id, telnyx_message_id="m-cap")
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_mark_one_sent())
+    r = client.post(
+        "/v1/tools/send_sms",
+        json={"call_id": call_id, "template_key": "greet"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 409
+    assert "limit" in r.json()["detail"]

@@ -3,8 +3,21 @@ import { z } from "zod";
 // Mirrors apps/api/src/usan_api/schemas/agent_config.py. The server is the source
 // of truth; this gives instant client-side feedback with identical rules.
 
-// Tool names the agent can register (TOOL_NAMES).
-export const TOOL_NAMES = ["log_wellness", "log_medication", "get_today_meds", "end_call"] as const;
+// Closed set of tool names the config may enable. Mirrors the backend catalog
+// (apps/api/.../schemas/tool_catalog.py TOOL_CATALOG, in display order). The server
+// hard-blocks names outside this set, so the zod enum below must stay in sync or a
+// config that passes backend validation would fail client-side. The runtime source
+// of truth for rendering is useToolCatalog (toolCatalog.ts); this static list exists
+// only to give the form's zod validator identical accept/reject rules.
+export const TOOL_NAMES = [
+  "log_wellness",
+  "log_medication",
+  "get_today_meds",
+  "flag_for_followup",
+  "schedule_callback",
+  "send_sms",
+  "end_call",
+] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
 // Personalization slots allowed in the inbound template (ALLOWED_TEMPLATE_SLOTS).
@@ -13,6 +26,42 @@ export const ALLOWED_TEMPLATE_SLOTS = ["elder_name", "last_check_in_line"] as co
 // {{name}} tokens (with optional inner whitespace) are the unified substitution
 // syntax. Mirrors apps/api TOKEN_RE / the agent's prompt_vars.TOKEN_RE.
 const DOUBLE_TOKEN_RE = /\{\{\s*[a-zA-Z0-9_]+\s*\}\}/g;
+
+// PHI built-in variable names (mirror apps/api PHI_BUILTIN_NAMES). An SMS template
+// body referencing any of these hard-blocks (design §6.2) — stricter than greetings.
+const PHI_TOKEN_NAMES = [
+  "last_check_in",
+  "last_check_in_line",
+  "last_mood",
+  "last_pain",
+  "today_meds",
+] as const;
+// {{name}} token capture (mirrors DOUBLE_TOKEN_RE but captures the name).
+const TOKEN_NAME_RE = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+
+export const smsTemplateSchema = z
+  .object({
+    key: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9_]+$/, "key must be a lowercase slug (a-z, 0-9, _)"),
+    label: z.string().min(1).max(120),
+    body: z.string().min(1).max(480),
+  })
+  .superRefine((v, ctx) => {
+    const phi = new Set<string>(PHI_TOKEN_NAMES);
+    for (const m of v.body.matchAll(TOKEN_NAME_RE)) {
+      const name = m[1];
+      if (name !== undefined && phi.has(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["body"],
+          message: `SMS body must not reference protected health information ({{${name}}})`,
+        });
+      }
+    }
+  });
 // Legacy single-brace slots kept only for back-compat in the personalization template.
 const LEGACY_SLOT_RE = /\{(elder_name|last_check_in_line)\}/g;
 
@@ -94,6 +143,7 @@ export const timingSchema = z.object({
 
 export const toolsSchema = z.object({
   enabled: z.array(z.enum(TOOL_NAMES)),
+  sms: z.object({ templates: z.array(smsTemplateSchema) }).optional().nullable(),
 });
 
 export const voicemailDetectionSchema = z.object({
