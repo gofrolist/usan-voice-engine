@@ -340,6 +340,36 @@ def test_idempotent_replay_helper_409_on_override_mismatch() -> None:
     assert response.status_code == 200
 
 
+def test_idempotency_race_fallback_409_on_override_mismatch(
+    client, mock_dispatch, async_database_url, monkeypatch
+) -> None:
+    # The helper's SECOND consumer — the IntegrityError race fallback in
+    # _create_and_dispatch — exercised DIRECTLY with an override mismatch
+    # (spec §8): the early pre-check is forced to miss (the test_calls.py
+    # flaky seam), the INSERT hits the unique key, and the fallback's
+    # payload-match must 409, never silently adopt the existing row.
+    from usan_api.repositories import calls as repo
+
+    elder_id, _ = _seed_elder_http(client)
+    pid_a = _seed_live_profile(async_database_url)
+    pid_b = _seed_live_profile(async_database_url)
+
+    first = _enqueue(client, elder_id, "ov-race", pid_a)
+    assert first.status_code == 202
+
+    real = repo.get_by_idempotency_key
+    state = {"n": 0}
+
+    async def flaky(db, key):
+        state["n"] += 1
+        return None if state["n"] == 1 else await real(db, key)
+
+    monkeypatch.setattr(repo, "get_by_idempotency_key", flaky)
+    second = _enqueue(client, elder_id, "ov-race", pid_b)
+    assert second.status_code == 409
+    assert second.json()["detail"] == "idempotency_key reused with a different payload"
+
+
 def _worker_auth() -> dict[str, str]:
     now = int(time.time())
     token = jwt.encode(
