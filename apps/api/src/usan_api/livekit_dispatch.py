@@ -13,6 +13,7 @@ from usan_api.db.base import CallStatus
 from usan_api.db.models import Call, Elder
 from usan_api.db.session import get_session_factory
 from usan_api.observability.custom_metrics import DIAL_REQUEUED_TOTAL
+from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
@@ -354,10 +355,27 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
             # gate-induced waiting / poller restarts can slide a claim past its
             # clamp, and a clamp is a promise about the past — never dial on a
             # stale one. Runs BEFORE lock_phone so the re-queue/fail paths never
-            # hold the advisory lock.
+            # hold the advisory lock. Policy-aware: the per-profile policy is
+            # re-resolved here (never snapshotted onto the Call) so a tightened
+            # quiet-hours publish binds already-queued calls at dial time (spec
+            # §3.3.2). NOTE: ad-hoc immediate dials (`_dial_and_classify`, the
+            # worker behind the public `dial_and_classify`) bypass this re-check
+            # entirely — a pre-existing STATUTORY gap, §2 non-goal / Open Q5;
+            # policy first binds an ad-hoc call's retries (poller-claimed).
             now = _utcnow()
+            policy = await agent_profiles_repo.resolve_call_policy(
+                db,
+                profile_override=call.profile_override,
+                elder_profile_id=elder.agent_profile_id,
+                direction="outbound",
+            )
             try:
-                allowed = quiet_hours.next_allowed(now, elder.timezone)
+                allowed = quiet_hours.next_allowed(
+                    now,
+                    elder.timezone,
+                    start_local=policy.start_local,
+                    end_local=policy.end_local,
+                )
             except ValueError:
                 await calls_repo.mark_dial_failure(
                     db, call_id, CallStatus.FAILED, end_reason="invalid_timezone"

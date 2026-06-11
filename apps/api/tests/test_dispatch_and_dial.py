@@ -7,9 +7,12 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import counter_value
 from usan_api import livekit_dispatch, quiet_hours
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
+from usan_api.observability.custom_metrics import DIAL_REQUEUED_TOTAL
+from usan_api.repositories import agent_profiles as profiles_repo
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
@@ -56,11 +59,48 @@ def _pin_inside_quiet_hours(monkeypatch) -> datetime:
     return now
 
 
-async def _seed_dialing_retry(factory, *, room, tz="UTC"):
-    """A claimed retry row: status=DIALING, attempt 2."""
+def _pin_dial_moment(monkeypatch, hour: int, minute: int = 0) -> datetime:
+    """Frozen-time variant for the policy scenarios: pin the dial moment to an
+    arbitrary UTC wall-clock time (== elder-local for the UTC elders seeded here)."""
+    now = datetime(2026, 6, 10, hour, minute, tzinfo=UTC)
+    monkeypatch.setattr(livekit_dispatch, "_utcnow", lambda: now)
+    return now
+
+
+# Sentinel: "no profile at all" — distinct from None, which publishes a profile
+# WITHOUT a `policy` section (resolves, statutory by whole-profile precedence).
+_NO_PROFILE = object()
+
+
+async def _publish_policy_profile(db, *, policy=None):
+    """Create a profile, optionally set a `policy` section, publish it; returns the id."""
+    profile = await profiles_repo.create_profile(
+        db, name=f"policy-{uuid.uuid4().hex}", description=None, actor_email="t@usan.test"
+    )
+    if policy is not None:
+        cfg = dict(profile.draft_config)
+        cfg["policy"] = policy
+        await profiles_repo.update_draft(
+            db, profile.id, config=cfg, description=None, actor_email="t@usan.test"
+        )
+    await profiles_repo.publish(db, profile.id, note=None, actor_email="t@usan.test")
+    return profile.id
+
+
+async def _seed_dialing_retry(
+    factory, *, room, tz="UTC", elder_policy=_NO_PROFILE, override_policy=_NO_PROFILE
+):
+    """A claimed retry row: status=DIALING, attempt 2.
+
+    ``elder_policy``/``override_policy``: ``_NO_PROFILE`` (default) leaves the
+    elder/call profile-less; ``None`` publishes a profile with no ``policy``
+    section; a dict publishes that policy and assigns it (elder's
+    ``agent_profile_id`` / the call's ``profile_override``)."""
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
         elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone=tz)
+        if elder_policy is not _NO_PROFILE:
+            elder.agent_profile_id = await _publish_policy_profile(db, policy=elder_policy)
         call = Call(
             elder_id=elder.id,
             direction=CallDirection.OUTBOUND,
@@ -68,6 +108,8 @@ async def _seed_dialing_retry(factory, *, room, tz="UTC"):
             attempt=2,
             livekit_room=room,
         )
+        if override_policy is not _NO_PROFILE:
+            call.profile_override = await _publish_policy_profile(db, policy=override_policy)
         db.add(call)
         await db.flush()
         await db.commit()
@@ -287,3 +329,90 @@ async def test_dispatch_and_dial_invalid_tz_fails_closed(monkeypatch, session_fa
     fake.agent_dispatch.create_dispatch.assert_not_awaited()
     fake.sip.create_sip_participant.assert_not_awaited()
     assert await _count_children(session_factory, call_id) == 0
+
+
+# --- Wiring site 2: the dial-moment re-check is policy-aware (spec §3.3.2) ---
+
+
+@pytest.mark.asyncio
+async def test_dial_requeued_under_narrowed_policy_window(monkeypatch, session_factory):
+    """Elder's profile narrows quiet-hours start to 10:00; at 09:30 local (inside
+    statutory [09:00, 21:00) — today's check would dial) the re-check must take
+    the requeue_for_quiet_hours path: row back to QUEUED with scheduled_at at the
+    POLICY start, the requeue counter incremented, and no dial attempted. This is
+    what makes a tightened window effective for already-queued calls (§3.3.2)."""
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+    _pin_dial_moment(monkeypatch, 9, 30)  # 09:30 local for a UTC elder
+
+    call_id, _ = await _seed_dialing_retry(
+        session_factory,
+        room="usan-outbound-pol-rq",
+        elder_policy={"quiet_hours_start_local": "10:00"},
+    )
+    before = counter_value(DIAL_REQUEUED_TOTAL, reason="quiet_hours")
+    await livekit_dispatch.dispatch_and_dial(call_id, _settings())
+
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.QUEUED
+    assert call.scheduled_at == datetime(2026, 6, 10, 10, 0, tzinfo=UTC)  # 10:00 local == UTC
+    assert counter_value(DIAL_REQUEUED_TOTAL, reason="quiet_hours") == before + 1
+    fake.agent_dispatch.create_dispatch.assert_not_awaited()
+    fake.sip.create_sip_participant.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dial_proceeds_inside_policy_window(monkeypatch, session_factory):
+    """Regression guard for the narrowed window's INSIDE: at 10:30 local with
+    policy start 10:00 the dial proceeds — the policy-aware re-check must not
+    over-requeue."""
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+    _pin_dial_moment(monkeypatch, 10, 30)  # 10:30 local for a UTC elder
+
+    delegated: list[uuid.UUID] = []
+
+    async def _fake_dial(cid, settings):
+        delegated.append(cid)
+
+    monkeypatch.setattr(livekit_dispatch, "dial_and_classify", _fake_dial)
+
+    call_id, _ = await _seed_dialing_retry(
+        session_factory,
+        room="usan-outbound-pol-ok",
+        elder_policy={"quiet_hours_start_local": "10:00"},
+    )
+    await livekit_dispatch.dispatch_and_dial(call_id, _settings())
+
+    fake.agent_dispatch.create_dispatch.assert_awaited_once()
+    assert delegated == [call_id]
+
+
+@pytest.mark.asyncio
+async def test_dial_requeue_honors_call_override_policy(monkeypatch, session_factory):
+    """Precedence threading pin: the call's profile_override narrows (start
+    10:00) while the elder's assigned profile resolves with NO policy section
+    (statutory). If only elder_profile_id were threaded the 09:30 dial would
+    proceed; the override must win — whole-profile precedence (§3.3.2)."""
+    fake = _fake_api()
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+    _pin_dial_moment(monkeypatch, 9, 30)  # 09:30 local for a UTC elder
+
+    call_id, _ = await _seed_dialing_retry(
+        session_factory,
+        room="usan-outbound-pol-ovr",
+        elder_policy=None,  # published profile WITHOUT a policy section
+        override_policy={"quiet_hours_start_local": "10:00"},
+    )
+    await livekit_dispatch.dispatch_and_dial(call_id, _settings())
+
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.QUEUED
+    assert call.scheduled_at == datetime(2026, 6, 10, 10, 0, tzinfo=UTC)
+    fake.agent_dispatch.create_dispatch.assert_not_awaited()
+    fake.sip.create_sip_participant.assert_not_awaited()
