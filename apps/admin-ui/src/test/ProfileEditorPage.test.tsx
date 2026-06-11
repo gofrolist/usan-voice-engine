@@ -295,3 +295,49 @@ describe("ProfileEditorPage server 422 routing (mapServerErrors)", () => {
     );
   });
 });
+
+describe("ProfileEditorPage policy section (D11)", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+    putMock.mockReset();
+    postMock.mockReset();
+    pushToastMock.mockReset();
+    getMock.mockImplementation(routeGet);
+  });
+  afterEach(() => vi.clearAllMocks());
+
+  it("Policy section renders in order (last rail tab, after the existing sections)", async () => {
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Publish" });
+
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(9);
+    expect(tabs[8]).toHaveAccessibleName("Policy");
+
+    await user.click(screen.getByRole("tab", { name: "Policy" }));
+    expect(screen.getByRole("heading", { name: "Policy" })).toBeInTheDocument();
+  });
+
+  it("older draft without policy loads without errors", async () => {
+    // baseConfig() deliberately lacks the policy key (an older draft); form.reset
+    // must accept it and the untouched form must still pass the zod resolver on save.
+    putMock.mockResolvedValue(profile());
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Publish" });
+
+    await user.click(screen.getByRole("tab", { name: "Policy" }));
+    const start = await screen.findByLabelText("Quiet hours start (local)");
+    expect(start).toHaveValue(""); // placeholders only — never values
+
+    await user.click(screen.getByRole("button", { name: "Save draft" }));
+    await waitFor(() =>
+      expect(putMock).toHaveBeenCalledWith(
+        "/v1/admin/profiles/p1/draft",
+        expect.objectContaining({ config: expect.anything() }),
+      ),
+    );
+    expect(pushToastMock).toHaveBeenCalledWith("Draft saved.", "info");
+  });
+});

@@ -21,6 +21,7 @@ import { TimingSection } from "./sections/TimingSection";
 import { ToolsSection } from "./sections/ToolsSection";
 import { VoicemailSection } from "./sections/VoicemailSection";
 import { SpeechAdvancedSection } from "./sections/SpeechAdvancedSection";
+import { PolicySection } from "./sections/PolicySection";
 
 const SECTION_ORDER: SectionKey[] = [
   "prompts",
@@ -31,6 +32,7 @@ const SECTION_ORDER: SectionKey[] = [
   "timing",
   "tools",
   "voicemail_detection",
+  "policy",
 ];
 
 // Validation-error shape FastAPI/Pydantic returns on 422. The api wrapper
@@ -165,11 +167,16 @@ export function ProfileEditorPage() {
   const language = form.watch("voice.language");
   const toolsEnabled = form.watch("tools.enabled");
   const answerTimeout = form.watch("timing.answer_timeout_s");
+  // Policy rail summary: show the narrowed quiet-hours span only when a side is set
+  // ("" from a cleared time input counts as unset, like null/absent).
+  const policyStart = form.watch("policy.quiet_hours_start_local");
+  const policyEnd = form.watch("policy.quiet_hours_end_local");
   const summaries: Partial<Record<SectionKey, string>> = {
     llm: llmModel,
     voice: voiceId ?? "default",
     tools: `${toolsEnabled?.length ?? 0} on`,
     timing: Number.isFinite(answerTimeout) ? `${answerTimeout}s` : undefined,
+    policy: policyStart || policyEnd ? `${policyStart || "09:00"}–${policyEnd || "21:00"}` : undefined,
   };
 
   return (
@@ -205,6 +212,7 @@ export function ProfileEditorPage() {
                 {section === "timing" ? <TimingSection form={form} /> : null}
                 {section === "tools" ? <ToolsSection form={form} /> : null}
                 {section === "voicemail_detection" ? <VoicemailSection form={form} /> : null}
+                {section === "policy" ? <PolicySection form={form} /> : null}
               </fieldset>
             </form>
           </div>
