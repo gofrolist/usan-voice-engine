@@ -119,6 +119,7 @@ async def _seed_schedule(
     window_start: time = time(9, 0),
     window_end: time = time(17, 0),
     days_of_week: int = 127,
+    profile_override: uuid.UUID | None = None,
 ) -> uuid.UUID:
     async with factory() as db:
         row = await schedules_repo.create_schedule(
@@ -129,7 +130,7 @@ async def _seed_schedule(
             days_of_week=days_of_week,
             enabled=True,
             dynamic_vars={},
-            profile_override=None,
+            profile_override=profile_override,
             next_run_at=next_run_at,
         )
         await db.commit()
@@ -525,6 +526,7 @@ async def _seed_running_batch(
     window_start: time | None = None,
     window_end: time | None = None,
     days_of_week: int | None = None,
+    profile_override: uuid.UUID | None = None,
 ) -> uuid.UUID:
     """One batch with a pending target per elder, forced straight to ``status``."""
     async with factory() as db:
@@ -538,7 +540,7 @@ async def _seed_running_batch(
             window_end_local=window_end,
             days_of_week=days_of_week,
             max_concurrency=None,
-            profile_override=None,
+            profile_override=profile_override,
             targets=[BatchTargetIn(elder_id=eid) for eid in elder_ids],
         )
         batch.status = status
@@ -1146,6 +1148,69 @@ async def test_schedule_occurrence_policy_push_no_reschedule_loop(session_factor
     counts2 = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
     assert counts2["schedules"] == 0
     assert len(await _calls(session_factory)) == 1
+
+
+async def test_schedule_profile_override_policy_clamps_materialized_call(session_factory):
+    # profile_override threading pin (§3.3.2): the SCHEDULE's override carries
+    # the narrowing (start 11:00) while the elder's assigned profile resolves
+    # but has NO policy section. If only elder_profile_id were threaded, the
+    # whole-profile walk would yield statutory and the call would dial at now
+    # (09:30 EDT, inside [09:00, 17:00)); the override must win — the
+    # materialized call clamps to the override's window start (11:00 EDT).
+    now = datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT, Wednesday
+    elder = await _seed_elder(session_factory, policy=None)  # published, no policy key
+    async with session_factory() as db:
+        override_pid = await _publish_policy_profile(
+            db, policy={"quiet_hours_start_local": "11:00"}
+        )
+        await db.commit()
+    sid = await _seed_schedule(
+        session_factory,
+        elder.id,
+        next_run_at=now - timedelta(minutes=5),
+        profile_override=override_pid,
+    )
+
+    counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
+
+    assert counts["schedules"] == 1
+    calls = await _calls(session_factory)
+    assert len(calls) == 1
+    assert calls[0].scheduled_at == datetime(2026, 6, 10, 15, 0, tzinfo=UTC)  # 11:00 EDT
+    assert calls[0].profile_override == override_pid
+    schedule = await _get_schedule(session_factory, sid)
+    assert schedule.last_result == "created"
+
+
+async def test_batch_profile_override_policy_clamps_materialized_call(session_factory):
+    # Same threading pin for the batch path: the BATCH-level override carries
+    # the narrowing while the elder's profile has no policy section; the target
+    # dial is pushed to the override's window start, never dialed at now.
+    now = datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT, Wednesday
+    elder = await _seed_elder(session_factory, policy=None)  # published, no policy key
+    async with session_factory() as db:
+        override_pid = await _publish_policy_profile(
+            db, policy={"quiet_hours_start_local": "11:00"}
+        )
+        await db.commit()
+    batch_id = await _seed_running_batch(
+        session_factory,
+        elder_ids=[elder.id],
+        window_start=time(9, 0),
+        window_end=time(18, 0),
+        days_of_week=127,
+        profile_override=override_pid,
+    )
+
+    counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
+
+    assert counts["batch_targets"] == 1
+    targets = await _targets(session_factory, batch_id)
+    assert targets[0].status == "materialized"
+    assert targets[0].call_id is not None
+    call = await _get_call(session_factory, targets[0].call_id)
+    assert call.scheduled_at == datetime(2026, 6, 10, 15, 0, tzinfo=UTC)  # 11:00 EDT
+    assert call.profile_override == override_pid
 
 
 async def test_policy_free_profiles_orchestrate_unchanged(session_factory):
