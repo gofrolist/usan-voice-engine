@@ -1,6 +1,7 @@
 """custom_variables repository: CRUD roundtrip, duplicate domain error, catalog helpers."""
 
 import pytest
+from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -99,3 +100,34 @@ async def test_names_and_phi_names_helpers(session_factory) -> None:
     async with session_factory() as db:
         assert await custom_variables_repo.names(db) == frozenset({"pet_name", "diagnosis"})
         assert await custom_variables_repo.phi_names(db) == frozenset({"diagnosis"})
+
+
+async def test_names_helpers_exclude_builtin_shadowed_rows(session_factory) -> None:
+    # Shadowing consistency with the catalog merge (spec §3.2): a custom row can
+    # collide with a builtin added AFTER its creation (create-time validation
+    # only knows the builtins of its day). The catalog DROPS such rows, so the
+    # enforcement fetches must too — otherwise a shadowed phi=true row keeps
+    # 422-blocking SMS bodies that reference the (non-PHI) builtin name the
+    # operator actually sees in the catalog. Same logged drop as the merge.
+    records: list[dict] = []
+    handler_id = logger.add(lambda m: records.append(m.record), level="WARNING")
+    try:
+        async with session_factory() as db:
+            # Repo-level insert bypasses the pydantic builtin-collision gate,
+            # exactly like a pre-existing row a future builtin later shadows.
+            await custom_variables_repo.create_custom_variable(
+                db, name="elder_name", description="", example="", phi=True
+            )
+            await custom_variables_repo.create_custom_variable(
+                db, name="diagnosis", description="", example="", phi=True
+            )
+            await db.commit()
+
+        async with session_factory() as db:
+            assert await custom_variables_repo.names(db) == frozenset({"diagnosis"})
+            assert await custom_variables_repo.phi_names(db) == frozenset({"diagnosis"})
+    finally:
+        logger.remove(handler_id)
+    shadowed = [r for r in records if "shadowed by builtin" in r["message"]]
+    assert shadowed, "expected the logged drop, mirroring the catalog merge"
+    assert all(r["extra"].get("name") == "elder_name" for r in shadowed)

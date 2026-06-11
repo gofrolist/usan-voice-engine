@@ -10,12 +10,15 @@ for returned rows), and never commit — routers own the transaction boundary.
 """
 
 import uuid
+from collections.abc import Iterable
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.models import CustomVariable
+from usan_api.schemas.variable_catalog import BUILTIN_NAMES
 
 
 class DuplicateCustomVariableError(Exception):
@@ -84,13 +87,33 @@ async def delete_custom_variable(db: AsyncSession, row: CustomVariable) -> None:
     await db.flush()
 
 
+def _drop_builtin_shadowed(fetched: Iterable[str]) -> frozenset[str]:
+    """Drop names shadowed by a builtin, with the catalog merge's logged drop.
+
+    Shadowing consistency (spec §3.2): a future builtin can collide with a
+    pre-existing custom row; the catalog merge drops it, so the enforcement
+    fetches must agree — a shadowed row's definition (incl. its ``phi`` flag)
+    is invisible to operators and must not keep gating saves. Name only in the
+    log — never values (spec §7).
+    """
+    kept: list[str] = []
+    for name in fetched:
+        if name in BUILTIN_NAMES:
+            logger.bind(name=name).warning(
+                "custom variable {name} shadowed by builtin; ignored", name=name
+            )
+            continue
+        kept.append(name)
+    return frozenset(kept)
+
+
 async def names(db: AsyncSession) -> frozenset[str]:
-    """All declared names (single-column SELECT — the save-path fetch, spec §3.2)."""
+    """Declared, non-builtin-shadowed names (the save-path fetch, spec §3.2)."""
     result = await db.execute(select(CustomVariable.name))
-    return frozenset(result.scalars().all())
+    return _drop_builtin_shadowed(result.scalars().all())
 
 
 async def phi_names(db: AsyncSession) -> frozenset[str]:
-    """Names declared phi=true (single-column SELECT — the save-path fetch, spec §3.2)."""
+    """Non-builtin-shadowed names declared phi=true (the save-path fetch, spec §3.2)."""
     result = await db.execute(select(CustomVariable.name).where(CustomVariable.phi.is_(True)))
-    return frozenset(result.scalars().all())
+    return _drop_builtin_shadowed(result.scalars().all())
