@@ -1,4 +1,7 @@
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import time
 from typing import Any, Literal
 
 from loguru import logger
@@ -6,8 +9,9 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api.db.base import ProfileStatus
+from usan_api.db.base import CallStatus, ProfileStatus
 from usan_api.db.models import AgentProfile, AgentProfileVersion, Elder
+from usan_api.quiet_hours import QUIET_END_HOUR, QUIET_START_HOUR
 from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig, ResolvedAgentConfig
 
 
@@ -321,6 +325,99 @@ async def resolve_agent_config(
             return resolved
     default_profile = await get_default_profile(db, direction)
     return await _resolved_from_profile(db, default_profile)
+
+
+@dataclass(frozen=True)
+class ResolvedPolicy:
+    """The effective dialing policy for one call, with defaults filled in.
+
+    ``start_local``/``end_local`` are parsed ``datetime.time`` quiet-hours
+    bounds (statutory [09:00, 21:00) unless a profile narrows them);
+    ``delay_multiplier`` scales every retry-ladder rung. Per-status retry caps
+    live behind ``max_attempts_for`` (chain-global semantics, spec §3.3.1).
+    """
+
+    start_local: time
+    end_local: time
+    delay_multiplier: float
+    _max_attempts: Mapping[CallStatus, int | None] = field(default_factory=dict)
+
+    def max_attempts_for(self, status: CallStatus) -> int | None:
+        """Chain-global retry cap for ``status``; None keeps the builtin ladder."""
+        return self._max_attempts.get(status)
+
+
+# Statutory TCPA defaults — what resolves when no profile carries a policy.
+# Bounds derive from quiet_hours' exported constants so the two stay in sync.
+STATUTORY_POLICY = ResolvedPolicy(
+    start_local=time(QUIET_START_HOUR, 0),
+    end_local=time(QUIET_END_HOUR, 0),
+    delay_multiplier=1.0,
+)
+
+
+async def resolve_call_policy(
+    db: AsyncSession,
+    *,
+    profile_override: uuid.UUID | None,
+    elder_profile_id: uuid.UUID | None,
+    direction: Literal["inbound", "outbound"],
+) -> ResolvedPolicy:
+    """Resolve the effective policy by precedence: override -> elder -> direction default.
+
+    Thin wrapper over resolve_agent_config: the policy comes from the SAME
+    profile that walk picks — whole-profile precedence, never per-field merge
+    (spec §3.3.2). If the winning profile resolves but carries ``policy=None``,
+    the result is STATUTORY_POLICY even when a lower-precedence profile
+    narrows; attaching a policy-less ``profile_override`` therefore loosens
+    quiet hours back to statutory relative to the elder's profile — still
+    within the TCPA bound by construction (PolicyConfig validates
+    narrowing-only).
+
+    Re-resolved at EVERY consumption site (retry scheduling, the dial-moment
+    quiet-hours re-check, both materialization clamps) and never snapshotted
+    onto the Call: quiet hours are a TCPA compliance control, so a tightening
+    publish must bind calls already queued (dial-time truth, spec §3.3.2).
+    Caching is Open Q8 — not needed at eldercare volumes.
+    """
+    resolved = await resolve_agent_config(
+        db,
+        profile_override=profile_override,
+        elder_profile_id=elder_profile_id,
+        direction=direction,
+    )
+    if resolved is None or resolved.config.policy is None:
+        return STATUTORY_POLICY
+    policy = resolved.config.policy
+    rma = policy.retry_max_attempts
+    max_attempts: dict[CallStatus, int | None] = (
+        {}
+        if rma is None
+        else {
+            CallStatus.NO_ANSWER: rma.no_answer,
+            CallStatus.VOICEMAIL_LEFT: rma.voicemail_left,
+            CallStatus.BUSY: rma.busy,
+            CallStatus.FAILED: rma.failed,
+        }
+    )
+    # "HH:MM" strings are already format+narrowing validated by PolicyConfig;
+    # unset sides stay statutory (each may be narrowed independently).
+    return ResolvedPolicy(
+        start_local=(
+            time.fromisoformat(policy.quiet_hours_start_local)
+            if policy.quiet_hours_start_local is not None
+            else STATUTORY_POLICY.start_local
+        ),
+        end_local=(
+            time.fromisoformat(policy.quiet_hours_end_local)
+            if policy.quiet_hours_end_local is not None
+            else STATUTORY_POLICY.end_local
+        ),
+        delay_multiplier=(
+            policy.retry_delay_multiplier if policy.retry_delay_multiplier is not None else 1.0
+        ),
+        _max_attempts=max_attempts,
+    )
 
 
 async def is_live_profile(db: AsyncSession, profile_id: uuid.UUID) -> bool:
