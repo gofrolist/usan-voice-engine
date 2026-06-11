@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from usan_api import retry_policy
+from usan_api import retry_policy, webhook_events
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Elder
 from usan_api.repositories import agent_profiles as profiles_repo
@@ -356,6 +356,39 @@ def test_chain_hops_derive_from_policy_ceiling():
     # that lags the ceiling reintroduces the chain-tip escape (a depth-4 tip
     # invisible to get_chain_tip / cancel_queued_tips).
     assert calls_repo._MAX_CHAIN_HOPS == retry_policy.MAX_CHAIN_ATTEMPTS - 1
+    # webhook_events' root walk powers origin attribution (spec §6.1): a bound
+    # that lags the ceiling stops one hop short of the root at policy max depth,
+    # parses the depth-1 child's NULL idempotency_key, and emits origin: null.
+    assert webhook_events._MAX_CHAIN_HOPS == retry_policy.MAX_CHAIN_ATTEMPTS - 1
+
+
+@pytest.mark.asyncio
+async def test_chain_root_origin_recovered_at_max_policy_depth(session_factory):
+    # Origin attribution at the deepest policy-allowed chain (spec §6.1): the
+    # tip sits MAX_CHAIN_ATTEMPTS - 1 = 4 hops from its batch: root, and
+    # chain_root_origin must still reach the root and recover the batch origin
+    # — a 3-hop walk would stop at the depth-1 child (no key) and emit
+    # origin: null in the call.started/completed payloads.
+    root_id, elder_id = await _seed_batch_root(
+        session_factory, root_status=CallStatus.NO_ANSWER, cancel_batch=False
+    )
+    current_id = root_id
+    for attempt in range(2, retry_policy.MAX_CHAIN_ATTEMPTS + 1):
+        current_id = await _seed_child(
+            session_factory,
+            parent_id=current_id,
+            elder_id=elder_id,
+            status=CallStatus.NO_ANSWER,
+            attempt=attempt,
+        )
+    async with session_factory() as db:
+        tip = await calls_repo.get_call(db, current_id)
+        assert tip is not None
+        assert tip.attempt == retry_policy.MAX_CHAIN_ATTEMPTS
+        origin = await webhook_events.chain_root_origin(db, tip)
+    assert origin is not None, "origin must be recovered from the batch: root, not null"
+    assert origin.source == "batch"
+    assert origin.ordinal == 0
 
 
 @pytest.mark.asyncio
