@@ -63,3 +63,18 @@ def test_clock_tokens_resolve():
     # _NOW is 2026-06-09 09:15 UTC; %A, %B %-d in UTC -> "Tuesday, June 9".
     out = render_sms_body("Today is {{current_date}}.", call=_call(), elder=_elder(), now=_NOW)
     assert out == "Today is Tuesday, June 9."
+
+
+def test_custom_tokens_render_empty_even_with_value_in_dynamic_vars():
+    # Fail-closed invariant (spec §3.2.1 fact 2): the substitution map is
+    # builtins-minus-PHI + clock vars ONLY — call.dynamic_vars (the one channel
+    # carrying custom values) never enters it, so a custom token renders empty
+    # even when the call holds a value for it. Consequence: flipping a custom
+    # variable to phi=true after publish is safe immediately at send time.
+    call = SimpleNamespace(
+        direction=SimpleNamespace(value="outbound"),
+        dynamic_vars={"pet_name": "PHIPHI-Rex"},
+    )
+    out = render_sms_body("Hi {{pet_name}}!", call=call, elder=_elder(), now=_NOW)
+    assert out == "Hi !"
+    assert "PHIPHI-Rex" not in out

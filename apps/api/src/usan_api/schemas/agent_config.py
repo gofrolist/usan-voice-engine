@@ -10,7 +10,7 @@ plugin default".
 
 import re
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -208,6 +208,50 @@ def _reject_phi_in_templates(templates: list[SmsTemplate]) -> None:
             )
 
 
+def custom_phi_sms_violations(
+    config: dict[str, Any], phi_names: frozenset[str]
+) -> list[dict[str, Any]]:
+    """PRIMARY enforcement for custom PHI variables in SMS bodies (spec §3.2.1).
+
+    The pydantic validators above keep hard-blocking the 5 builtin PHI names
+    unchanged — but they cannot see the ``custom_variables`` table, so the
+    admin_profiles save/publish/rollback handlers (which have DB access) run
+    this helper and raise a non-empty result as ``HTTPException(422,
+    detail=violations)``. The client shows only a non-blocking notice for
+    customs (spec §6.3), so this server 422 is the authoritative gate and the
+    fabricated field-level ``loc`` —
+    ``["body", "config", "tools", "sms", "templates", <i>, "body"]`` — is
+    load-bearing: the client's ``tryParseFieldErrors`` parses it exactly like a
+    pydantic 422 and lands the error on the offending body input.
+
+    Walks ``config["tools"]["sms"]["templates"]`` tolerantly (absent keys /
+    ``None`` mean "no SMS templates" → no violations). The message carries
+    variable NAMES and field paths only — never per-call values (spec §7).
+    """
+    templates = ((config.get("tools") or {}).get("sms") or {}).get("templates") or []
+    violations: list[dict[str, Any]] = []
+    for i, tmpl in enumerate(templates):
+        body = tmpl.get("body") or ""
+        phi: list[str] = []
+        for name in _TOKEN_RE.findall(body):
+            if name in phi_names and name not in phi:
+                phi.append(name)
+        if phi:
+            joined = ", ".join("{{" + n + "}}" for n in phi)
+            violations.append(
+                {
+                    "loc": ["body", "config", "tools", "sms", "templates", i, "body"],
+                    "msg": (
+                        f"SMS template '{tmpl.get('key', '')}' body references protected "
+                        f"health information ({joined}); SMS bodies may use non-PHI "
+                        f"variables only"
+                    ),
+                    "type": "value_error.custom_phi_sms",
+                }
+            )
+    return violations
+
+
 class SmsToolConfig(BaseModel):
     templates: list[SmsTemplate] = Field(default_factory=list)
 
@@ -245,6 +289,31 @@ class ToolsConfig(BaseModel):
         if self.sms is not None:
             _reject_phi_in_templates(self.sms.templates)
         return self
+
+
+def sms_renders_empty_warnings(tools: ToolsConfig | None) -> list[str]:
+    """Warn that non-builtin tokens in SMS bodies will render as empty text.
+
+    ``render_sms_body``'s substitution map is builtins-minus-PHI + clock vars
+    ONLY — ``dynamic_vars`` (the one channel carrying custom values) never
+    enters it, so every custom token in an SMS body renders ``""`` (spec
+    §3.2.1). Declared customs and undeclared tokens warn alike (hard-blocking
+    only declared names would be perverse: declare → blocked, leave undeclared
+    → allowed). Warn-don't-block: phi=true customs are 422-blocked first by
+    ``custom_phi_sms_violations``, so by the time these warnings are computed
+    no blocked name remains. De-duplicated, first-seen order.
+    """
+    if tools is None or tools.sms is None:
+        return []
+    seen: list[str] = []
+    for tmpl in tools.sms.templates:
+        for name in _TOKEN_RE.findall(tmpl.body):
+            if name not in BUILTIN_NAMES and name not in seen:
+                seen.append(name)
+    return [
+        "{{" + name + "}} is not substituted in SMS — it will render as empty text."
+        for name in seen
+    ]
 
 
 class VoicemailDetectionConfig(BaseModel):

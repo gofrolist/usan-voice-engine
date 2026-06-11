@@ -12,7 +12,12 @@ from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
 from usan_api.repositories import custom_variables as custom_variables_repo
 from usan_api.repositories.agent_profiles import CloneSourceNotFoundError, ProfileInUseError
-from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields, unknown_tokens
+from usan_api.schemas.agent_config import (
+    custom_phi_sms_violations,
+    phi_tokens_in_sensitive_fields,
+    sms_renders_empty_warnings,
+    unknown_tokens,
+)
 from usan_api.schemas.agent_profile import (
     DraftUpdate,
     ProfileCreate,
@@ -99,6 +104,15 @@ async def update_draft(
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ProfileDetail:
+    custom_names = await custom_variables_repo.names(db)
+    custom_phi = await custom_variables_repo.phi_names(db)
+    # AUTHORITATIVE 422 (spec §3.2.1): a phi=true custom in any SMS body blocks the
+    # save BEFORE persistence — the draft stays unchanged. The client shows only a
+    # non-blocking notice for customs, so this server gate is primary; the
+    # field-level loc detail parses client-side exactly like a pydantic 422.
+    violations = custom_phi_sms_violations(body.config.model_dump(), custom_phi)
+    if violations:
+        raise HTTPException(status_code=422, detail=violations)
     profile = await repo.update_draft(
         db,
         profile_id,
@@ -114,8 +128,6 @@ async def update_draft(
     # count as known; custom phi=true names join the sensitive-field PHI advisory
     # (spec §3.2). The prompt channel has NO fail-closed defense — the agent
     # substitutes dynamic_vars into all prompt fields — so the warning IS the defense.
-    custom_names = await custom_variables_repo.names(db)
-    custom_phi = await custom_variables_repo.phi_names(db)
     prompts = body.config.prompts
     seen: list[str] = []
     for text in (
@@ -131,8 +143,12 @@ async def update_draft(
         for name in unknown_tokens(text, known_names=custom_names):
             if name not in seen:
                 seen.append(name)
-    warnings = seen + phi_tokens_in_sensitive_fields(
-        prompts, phi_names=PHI_BUILTIN_NAMES | custom_phi
+    # SMS renders-empty warnings come last; any phi=true custom name was already
+    # 422-blocked above, so none can appear here (422 first, then warnings).
+    warnings = (
+        seen
+        + phi_tokens_in_sensitive_fields(prompts, phi_names=PHI_BUILTIN_NAMES | custom_phi)
+        + sms_renders_empty_warnings(body.config.tools)
     )
     await admin_audit.record(
         db,
@@ -158,6 +174,15 @@ async def publish(
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> VersionSummary:
+    profile = await repo.get_profile(db, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+    # AUTHORITATIVE 422 (spec §3.2.1): re-check the draft at publish time — a
+    # variable may have been flipped to phi=true after the draft was saved.
+    custom_phi = await custom_variables_repo.phi_names(db)
+    violations = custom_phi_sms_violations(profile.draft_config, custom_phi)
+    if violations:
+        raise HTTPException(status_code=422, detail=violations)
     version = await repo.publish(db, profile_id, note=body.note, actor_email=actor)
     if version is None:
         raise HTTPException(status_code=404, detail="profile not found")
@@ -206,6 +231,18 @@ async def rollback(
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> VersionSummary:
+    target = await repo.get_version(db, profile_id, version)
+    if target is None:
+        raise HTTPException(status_code=404, detail="profile or version not found")
+    # AUTHORITATIVE 422 (spec §3.2.1): rollback re-publishes an old snapshot via
+    # repo.rollback → repo.publish with NO pydantic re-entry — without this gate a
+    # snapshot referencing a now-phi=true custom would republish cleanly. Clone-from
+    # copies only a draft (no publish), so the next save/publish catches it there —
+    # accepted (spec §3.2.1).
+    custom_phi = await custom_variables_repo.phi_names(db)
+    violations = custom_phi_sms_violations(target.config, custom_phi)
+    if violations:
+        raise HTTPException(status_code=422, detail=violations)
     new_version = await repo.rollback(db, profile_id, target_version=version, actor_email=actor)
     if new_version is None:
         raise HTTPException(status_code=404, detail="profile or version not found")

@@ -343,3 +343,49 @@ def test_phi_tokens_default_unchanged():
     assert len(warnings) == 1
     assert "{{last_check_in}}" in warnings[0]
     assert all("{{diagnosis}}" not in w for w in warnings)
+
+
+# --- custom_phi_sms_violations (custom PHI in SMS bodies, spec §3.2.1 / plan C6) ----
+
+
+def _config_with_sms_bodies(*bodies: str) -> dict:
+    base = DEFAULT_AGENT_CONFIG.model_dump()
+    base["tools"]["sms"] = {
+        "templates": [
+            {"key": f"t{i}", "label": f"T{i}", "body": body} for i, body in enumerate(bodies)
+        ]
+    }
+    return base
+
+
+def test_custom_phi_sms_violations_exact_loc():
+    from usan_api.schemas.agent_config import custom_phi_sms_violations
+
+    config = _config_with_sms_bodies("Hi {{first_name}}, see you soon.", "{{diagnosis}}")
+    violations = custom_phi_sms_violations(config, frozenset({"diagnosis"}))
+    assert len(violations) == 1
+    # The fabricated field-level loc is load-bearing (spec §3.2.1): the client
+    # maps it onto tools.sms.templates.1.body.
+    assert violations[0]["loc"] == ["body", "config", "tools", "sms", "templates", 1, "body"]
+    assert "{{diagnosis}}" in violations[0]["msg"]
+    assert violations[0]["type"] == "value_error.custom_phi_sms"
+
+
+def test_custom_phi_sms_violations_clean_and_absent_tools():
+    from usan_api.schemas.agent_config import custom_phi_sms_violations
+
+    phi = frozenset({"diagnosis"})
+    # Clean templates -> no violations.
+    clean = _config_with_sms_bodies("Hi {{first_name}}, this is USAN.")
+    assert custom_phi_sms_violations(clean, phi) == []
+    # tools.sms absent (None) and tools absent entirely -> tolerated, [].
+    base = DEFAULT_AGENT_CONFIG.model_dump()
+    assert base["tools"]["sms"] is None
+    assert custom_phi_sms_violations(base, phi) == []
+    no_tools = {k: v for k, v in base.items() if k != "tools"}
+    assert custom_phi_sms_violations(no_tools, phi) == []
+    # Builtin PHI names are NOT this helper's job (the pydantic validators block
+    # them earlier): with an empty phi_names set over a builtin-PHI-free body,
+    # nothing is flagged — the helper only knows the names it is handed.
+    tokens = _config_with_sms_bodies("About {{diagnosis}} and {{pet_name}}.")
+    assert custom_phi_sms_violations(tokens, frozenset()) == []
