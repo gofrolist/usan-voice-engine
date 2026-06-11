@@ -62,6 +62,7 @@ async def create_call(
     idempotency_key: str | None = None,
     livekit_room: str | None = None,
     dynamic_vars: dict[str, Any] | None = None,
+    profile_override: uuid.UUID | None = None,
 ) -> Call:
     call = Call(
         elder_id=elder_id,
@@ -70,6 +71,7 @@ async def create_call(
         idempotency_key=idempotency_key,
         livekit_room=livekit_room,
         dynamic_vars=dynamic_vars or {},
+        profile_override=profile_override,
     )
     db.add(call)
     await db.flush()

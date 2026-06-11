@@ -21,6 +21,9 @@ class CreateCallRequest(BaseModel):
     elder_id: uuid.UUID
     idempotency_key: str = Field(min_length=1, max_length=255)
     dynamic_vars: dict[str, Any] = Field(default_factory=dict)
+    # Validated live (ACTIVE + published) on the create path only; part of the
+    # idempotency payload contract — replays must match it exactly (spec §3.1).
+    profile_override: uuid.UUID | None = None
 
     @field_validator("dynamic_vars")
     @classmethod
@@ -107,6 +110,9 @@ class CallResponse(BaseModel):
     # Derived provenance (spec §4.3): parsed from this call's own reserved-namespace
     # idempotency_key; None for operator keys and retry children (chain walk applies).
     origin: CallOrigin | None = None
+    # Echo for the operator system and day-2 triage (spec §3.1); surfacing it as
+    # an A2 calls-console column is deferred (Open Q6).
+    profile_override: uuid.UUID | None
 
     @classmethod
     def from_model(
@@ -131,6 +137,7 @@ class CallResponse(BaseModel):
             transcript=[TranscriptSegment.from_model(t) for t in transcript],
             created_at=call.created_at,
             origin=parse_origin(call.idempotency_key),
+            profile_override=call.profile_override,
         )
 
 
