@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from usan_api import retry_policy
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
 from usan_api.repositories import agent_profiles as profiles_repo
@@ -324,3 +325,70 @@ async def test_schedule_retry_clamps_into_quiet_hours(session_factory):
         await db.commit()
     assert child is not None
     assert child.scheduled_at == FIXED_NOW + timedelta(hours=3)
+
+
+def test_chain_hops_derive_from_policy_ceiling():
+    # The chain-walk bound DERIVES from the policy ceiling (spec §3.3.1): a
+    # chain is root + 4 retries (the RetryMaxAttempts le=4 ceiling), so the
+    # deepest tip sits MAX_CHAIN_ATTEMPTS - 1 hops from its root. A literal
+    # that lags the ceiling reintroduces the chain-tip escape (a depth-4 tip
+    # invisible to get_chain_tip / cancel_queued_tips).
+    assert calls_repo._MAX_CHAIN_HOPS == retry_policy.MAX_CHAIN_ATTEMPTS - 1
+
+
+@pytest.mark.asyncio
+async def test_get_chain_tip_reaches_depth_four_tip(session_factory):
+    # Root + 4 children (attempts 1..5): a policy max_attempts=4 chain's tip
+    # sits 4 hops from root — the walk must reach it, not stop one short.
+    root_id, elder_id = await _seed_terminal(
+        session_factory, status=CallStatus.NO_ANSWER, attempt=1
+    )
+    current_id = root_id
+    for attempt in range(2, 6):
+        current_id = await _seed_child(
+            session_factory,
+            parent_id=current_id,
+            elder_id=elder_id,
+            status=CallStatus.NO_ANSWER,
+            attempt=attempt,
+        )
+    async with session_factory() as db:
+        tip = await calls_repo.get_chain_tip(db, root_id)
+    assert tip is not None
+    assert tip.id == current_id
+    assert tip.attempt == 5
+
+
+@pytest.mark.asyncio
+async def test_batch_cancel_flips_max_depth_tip(session_factory):
+    # The escape the invariant exists to kill (spec §3.3.1): a cancelled batch's
+    # chain grown to depth 4 (policy-extended retries) still has its QUEUED tip
+    # found and flipped — a 3-hop walk would stop at the depth-3 parent, leave
+    # the tip QUEUED, and the cancelled batch would dial anyway.
+    root_id, elder_id = await _seed_batch_root(
+        session_factory, root_status=CallStatus.NO_ANSWER, cancel_batch=True
+    )
+    current_id = root_id
+    for attempt in range(2, 5):
+        current_id = await _seed_child(
+            session_factory,
+            parent_id=current_id,
+            elder_id=elder_id,
+            status=CallStatus.NO_ANSWER,
+            attempt=attempt,
+        )
+    tip_id = await _seed_child(
+        session_factory,
+        parent_id=current_id,
+        elder_id=elder_id,
+        status=CallStatus.QUEUED,
+        attempt=5,
+    )
+    async with session_factory() as db:
+        flipped = await calls_repo.cancel_queued_tips(db, [root_id])
+        await db.commit()
+    assert flipped == 1
+    async with session_factory() as db:
+        tip = await calls_repo.get_call(db, tip_id)
+    assert tip is not None
+    assert tip.status is CallStatus.CANCELLED
