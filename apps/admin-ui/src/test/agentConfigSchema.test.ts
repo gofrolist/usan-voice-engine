@@ -239,6 +239,25 @@ describe("policySchema", () => {
     // One-sided narrowing OK (the unset side stays statutory), minute granularity.
     expect(policySchema.safeParse({ quiet_hours_start_local: "09:30" }).success).toBe(true);
     expect(policySchema.safeParse({ quiet_hours_end_local: "20:45" }).success).toBe(true);
+    // Exact statutory boundaries (mirror of the pydantic rows): >= 09:00 and
+    // <= 21:00 are INCLUSIVE, so restating a statutory edge is a valid no-op...
+    expect(policySchema.safeParse({ quiet_hours_start_local: "09:00" }).success).toBe(true);
+    expect(policySchema.safeParse({ quiet_hours_end_local: "21:00" }).success).toBe(true);
+    expect(
+      policySchema.safeParse({
+        quiet_hours_start_local: "09:00",
+        quiet_hours_end_local: "21:00",
+      }).success,
+    ).toBe(true);
+    // ...but start at the END boundary leaves an empty effective window
+    // (start 21:00 >= effective end 21:00) — rejected by start < end.
+    expect(policySchema.safeParse({ quiet_hours_start_local: "21:00" }).success).toBe(false);
+    expect(
+      policySchema.safeParse({
+        quiet_hours_start_local: "21:00",
+        quiet_hours_end_local: "21:00",
+      }).success,
+    ).toBe(false);
   });
 
   it("empty time input transforms to null", () => {

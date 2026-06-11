@@ -404,6 +404,15 @@ def test_custom_phi_sms_violations_clean_and_absent_tools():
         ("09:30", None, True),  # one-sided start narrowing
         (None, "20:00", True),  # one-sided end narrowing
         ("10:15", "18:45", True),  # both sides, minute granularity
+        # Exact statutory boundaries: >= 09:00 and <= 21:00 are INCLUSIVE bounds,
+        # so restating a statutory edge is a valid (no-op) narrowing...
+        ("09:00", None, True),  # start exactly at the statutory start
+        (None, "21:00", True),  # end exactly at the statutory end
+        ("09:00", "21:00", True),  # the full statutory window restated
+        # ...but start at the END boundary leaves an empty effective window
+        # (start 21:00 >= effective end 21:00) — rejected by start < end.
+        ("21:00", None, False),
+        ("21:00", "21:00", False),  # equal start/end at the boundary
     ],
 )
 def test_policy_config_narrowing_only(start, end, valid):
