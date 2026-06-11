@@ -296,6 +296,63 @@ describe("ProfileEditorPage server 422 routing (mapServerErrors)", () => {
   });
 });
 
+// Profile whose draft carries a set quiet-hours start, so clearing the time input
+// is what dirties the form — the exact publish-while-dirty payload under test.
+function profileWithPolicy(): ProfileDetail {
+  const p = profile();
+  return {
+    ...p,
+    draft_config: {
+      ...p.draft_config,
+      policy: {
+        quiet_hours_start_local: "10:00",
+        quiet_hours_end_local: null,
+        retry_delay_multiplier: null,
+        retry_max_attempts: null,
+      },
+    },
+  };
+}
+
+function routeGetWithPolicy(url: string): Promise<unknown> {
+  if (url === "/v1/admin/profiles/p1") return Promise.resolve(profileWithPolicy());
+  return routeGet(url);
+}
+
+describe("ProfileEditorPage publish-while-dirty payload normalization", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+    putMock.mockReset();
+    postMock.mockReset();
+    pushToastMock.mockReset();
+    getMock.mockImplementation(routeGetWithPolicy);
+  });
+  afterEach(() => vi.clearAllMocks());
+
+  it("a cleared quiet-hours time input persists as null, never ''", async () => {
+    // form.getValues() returns RAW input values: a cleared <input type="time">
+    // is "" and the zod ""→null transform only runs inside the resolver, so the
+    // dirty-save before publish must normalize through agentConfigSchema.parse
+    // — the server's HH:MM regex 422s on "".
+    putMock.mockResolvedValue(profileWithPolicy());
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Publish" });
+
+    await user.click(screen.getByRole("tab", { name: "Policy" }));
+    const start = await screen.findByLabelText("Quiet hours start (local)");
+    expect(start).toHaveValue("10:00");
+    await user.clear(start); // "" — and the form is now dirty
+    await user.tab();
+
+    await user.click(screen.getByRole("button", { name: "Publish" }));
+
+    await waitFor(() => expect(putMock).toHaveBeenCalled());
+    const body = putMock.mock.calls[0]?.[1] as { config: AgentConfig };
+    expect(body.config.policy?.quiet_hours_start_local).toBeNull();
+  });
+});
+
 describe("ProfileEditorPage policy section (D11)", () => {
   beforeEach(() => {
     getMock.mockReset();

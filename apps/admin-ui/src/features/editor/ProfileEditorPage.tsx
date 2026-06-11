@@ -145,7 +145,12 @@ export function ProfileEditorPage() {
     // misrepresent what goes live and unsaved changes would be silently dropped.
     if (form.formState.isDirty) {
       try {
-        await saveDraft.mutateAsync({ config: form.getValues() as AgentConfig });
+        // Normalize RAW form values through the schema before persisting:
+        // form.getValues() bypasses the resolver, so a cleared time input is ""
+        // — the zod ""→null transform never ran and the server's HH:MM regex
+        // would 422. parse() cannot throw here: form.trigger() above just passed.
+        const config = agentConfigSchema.parse(form.getValues()) as AgentConfig;
+        await saveDraft.mutateAsync({ config });
       } catch (err) {
         const e = err as ApiError;
         if (e.status === 422 && mapServerErrors(e.detail)) {
