@@ -173,6 +173,78 @@ export const speechAdvancedSchema = z
     }
   });
 
+// --- per-profile policy (Phase A4, spec §6.2) --------------------------------
+// Mirrors PolicyConfig/RetryMaxAttempts in apps/api schemas/agent_config.py 1:1.
+// The server is the gate (narrowing re-validated on every snapshot read); this
+// mirror gives instant feedback. Object paths must equal the pydantic field
+// names exactly — the 422 loc mapping in mapServerErrors depends on it.
+
+// "HH:MM", 24-hour clock, minute granularity (mirrors the server's _HHMM_RE).
+const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// Statutory TCPA bounds (mirror quiet_hours.py): a policy may only NARROW within
+// [09:00, 21:00) local — never widen. Zero-padded HH:MM compares lexicographically.
+const STATUTORY_START = "09:00";
+const STATUTORY_END = "21:00";
+
+// A cleared <input type="time"> yields "" (never null), so empty string becomes
+// null before the regex runs — otherwise pristine forms fail validation (§6.2).
+// An absent key also becomes null, matching the pydantic default of None.
+const quietHoursTime = z.preprocess(
+  (v) => (v === "" || v === undefined ? null : v),
+  z
+    .string()
+    .regex(HHMM_RE, 'must be "HH:MM" (24-hour clock, minute granularity)')
+    .nullable(),
+);
+
+// Per-status retry caps in CHAIN-GLOBAL attempt semantics (RetryMaxAttempts):
+// 0 disables retries for that status; null/blank keeps the builtin ladder
+// behavior (builtin equivalents: no_answer 2, voicemail_left/busy/failed 1).
+const retryMaxAttemptsSchema = z.object({
+  no_answer: z.number().int().gte(0).lte(4).nullable().default(null),
+  voicemail_left: z.number().int().gte(0).lte(4).nullable().default(null),
+  busy: z.number().int().gte(0).lte(4).nullable().default(null),
+  failed: z.number().int().gte(0).lte(4).nullable().default(null),
+});
+
+export const policySchema = z
+  .object({
+    quiet_hours_start_local: quietHoursTime,
+    quiet_hours_end_local: quietHoursTime,
+    retry_delay_multiplier: z.number().gte(0.5).lte(4.0).nullable().default(null),
+    retry_max_attempts: retryMaxAttemptsSchema.nullable().default(null),
+  })
+  .superRefine((v, ctx) => {
+    // NARROWING ONLY (mirror of the server's _narrowing_only validator): each
+    // side may be set independently; the unset side stays statutory.
+    const start = v.quiet_hours_start_local;
+    const end = v.quiet_hours_end_local;
+    if (start !== null && start < STATUTORY_START) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["quiet_hours_start_local"],
+        message: `Quiet hours start must be at or after the statutory ${STATUTORY_START}`,
+      });
+    }
+    if (end !== null && end > STATUTORY_END) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["quiet_hours_end_local"],
+        message: `Quiet hours end must be at or before the statutory ${STATUTORY_END}`,
+      });
+    }
+    const effectiveStart = start ?? STATUTORY_START;
+    const effectiveEnd = end ?? STATUTORY_END;
+    if (effectiveStart >= effectiveEnd) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["quiet_hours_start_local"],
+        message: `Quiet hours start (${effectiveStart}) must be before end (${effectiveEnd})`,
+      });
+    }
+  });
+
 export const agentConfigSchema = z.object({
   prompts: promptsSchema,
   voice: voiceSchema,
@@ -182,6 +254,10 @@ export const agentConfigSchema = z.object({
   tools: toolsSchema,
   voicemail_detection: voicemailDetectionSchema,
   speech_advanced: speechAdvancedSchema,
+  // Optional-with-default like the server (forward compat): older drafts and
+  // published snapshots without the key keep validating on form.reset — shaped
+  // like toolsSchema.sms.
+  policy: policySchema.optional().nullable(),
 });
 
 export type AgentConfigForm = z.infer<typeof agentConfigSchema>;

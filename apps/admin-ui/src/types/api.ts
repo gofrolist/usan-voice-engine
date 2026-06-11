@@ -66,6 +66,23 @@ export interface SpeechAdvancedConfig {
   min_interruption_words: number | null;
 }
 
+// Per-status retry caps in chain-global attempt semantics (RetryMaxAttempts).
+export interface RetryMaxAttempts {
+  no_answer: number | null;
+  voicemail_left: number | null;
+  busy: number | null;
+  failed: number | null;
+}
+
+// Per-profile policy overrides (PolicyConfig). Quiet-hours values are "HH:MM"
+// strings narrowing within the statutory 09:00–21:00; enforced server-side.
+export interface PolicyConfig {
+  quiet_hours_start_local: string | null;
+  quiet_hours_end_local: string | null;
+  retry_delay_multiplier: number | null;
+  retry_max_attempts: RetryMaxAttempts | null;
+}
+
 export interface AgentConfig {
   prompts: PromptsConfig;
   voice: VoiceConfig;
@@ -75,6 +92,9 @@ export interface AgentConfig {
   tools: ToolsConfig;
   voicemail_detection: VoicemailDetectionConfig;
   speech_advanced: SpeechAdvancedConfig;
+  // Optional-with-default on the server (forward compat): older snapshots and
+  // drafts lack the key entirely.
+  policy?: PolicyConfig | null;
 }
 
 // ---------------------------------------------------------------------------
