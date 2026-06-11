@@ -13,6 +13,14 @@ Deliberate deviation from spec §9 wording: ``effective_window`` returns ``None`
 for an empty intersection rather than raising. The error contract is preserved
 one layer up — schema validators turn an empty intersection into a 422 and
 ``next_run_at`` raises ``ValueError``.
+
+Per-profile policy composition (small-unlocks spec §3.3.3): both functions take
+keyword-default ``policy_start``/``policy_end`` bounds, so the effective dialing
+interval — window ∩ statutory ∩ policy — is computed in ONE place rather than by
+sequential clamps fighting each other. ``next_run_at`` returns ``None`` ONLY for
+the policy-induced empty intersection (callers skip observably, rule 2); a
+statutory-empty window still raises ``ValueError`` — that contract stays
+reserved for misconfiguration caught at save time.
 """
 
 from collections.abc import Sequence
@@ -54,15 +62,25 @@ def mask_to_days(mask: int) -> list[str]:
     return [name for bit, name in enumerate(DAY_NAMES) if mask & (1 << bit)]
 
 
-def effective_window(start: time, end: time) -> tuple[time, time] | None:
-    """Schedule window ∩ quiet hours [09:00, 21:00) — wall clock, tz-invariant.
+def effective_window(
+    start: time,
+    end: time,
+    *,
+    policy_start: time | None = None,
+    policy_end: time | None = None,
+) -> tuple[time, time] | None:
+    """Schedule window ∩ quiet hours [09:00, 21:00) ∩ policy — wall clock, tz-invariant.
 
     Returns ``None`` for an empty intersection (callers raise/422 — see module
     docstring). Quiet hours are start-inclusive, end-exclusive, so a window
-    ending exactly at 09:00 is empty.
+    ending exactly at 09:00 is empty. ``policy_start``/``policy_end`` are the
+    resolved per-profile narrowing bounds (small-unlocks spec §3.3.3) —
+    PolicyConfig validates them within the statutory window, so the extra
+    ``max``/``min`` against the statutory constants is defensive only; absent
+    bounds are zero-diff with the pre-policy behavior.
     """
-    eff_start = max(start, _QUIET_START)
-    eff_end = min(end, _QUIET_END)
+    eff_start = max(start, _QUIET_START, policy_start or _QUIET_START)
+    eff_end = min(end, _QUIET_END, policy_end or _QUIET_END)
     if eff_start >= eff_end:
         return None
     return (eff_start, eff_end)
@@ -123,16 +141,25 @@ def next_run_at(
     window_start: time,
     window_end: time,
     days_mask: int,
-) -> datetime:
+    policy_start: time | None = None,
+    policy_end: time | None = None,
+) -> datetime | None:
     """Earliest aware-UTC instant >= ``after`` inside the effective window on a masked day.
 
     Scans <= 8 local dates; builds local wall-clock targets on zoneinfo-aware
     datetimes then ``.astimezone(UTC)`` (never ``.replace(tzinfo=...)``).
-    Raises ValueError on an unknown timezone or an empty effective window.
+    Raises ValueError on an unknown timezone or a statutory-empty window.
+    Returns ``None`` ONLY when the policy bounds empty an otherwise-valid
+    statutory intersection (small-unlocks spec §3.3.3 rule 2) — callers skip
+    the occurrence/target observably; policy-free callers can never see it.
     """
-    window = effective_window(window_start, window_end)
+    window = effective_window(
+        window_start, window_end, policy_start=policy_start, policy_end=policy_end
+    )
     if window is None:
-        raise ValueError("schedule window never intersects quiet hours [09:00, 21:00)")
+        if effective_window(window_start, window_end) is None:
+            raise ValueError("schedule window never intersects quiet hours [09:00, 21:00)")
+        return None  # policy-induced empty intersection (§3.3.3 rule 2)
     if not 1 <= days_mask <= _FULL_MASK:
         raise ValueError(f"days mask must be in [1, {_FULL_MASK}], got {days_mask}")
     eff_start, eff_end = window

@@ -45,6 +45,7 @@ from usan_api.observability.custom_metrics import (
     BATCH_TARGETS_FINALIZED_TOTAL,
     MATERIALIZED_CALLS_TOTAL,
 )
+from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import call_schedules as schedules_repo
 from usan_api.repositories import calls as calls_repo
@@ -307,22 +308,29 @@ async def _materialize_one_schedule(
         if not schedule.days_of_week & (1 << today.weekday()) or now < start_utc:
             # Stale next_run_at (tz/window edit): recompute under the CURRENT
             # timezone — no call, no last_materialized_date, no skipped day.
+            # Two-window rule (small-unlocks spec §3.3.3 + plan executor note 5):
+            # this staleness check keys on the STATUTORY window + days-mask
+            # ONLY. Keying it on a policy-narrowed start would record
+            # `rescheduled` with a policy-free next_run_at(now) == now and
+            # re-claim the row every cycle until the policy start — policy
+            # narrows the dial clamp below, never the cadence here.
+            recomputed = schedule_windows.next_run_at(
+                now,
+                elder.timezone,
+                window_start=schedule.window_start_local,
+                window_end=schedule.window_end_local,
+                days_mask=schedule.days_of_week,
+            )
+            if recomputed is None:  # defensive: None is policy-induced only
+                raise ValueError("unreachable: policy bounds not passed")
             await schedules_repo.record_result(
-                db,
-                schedule,
-                result="rescheduled",
-                now=now,
-                next_run_at=schedule_windows.next_run_at(
-                    now,
-                    elder.timezone,
-                    window_start=schedule.window_start_local,
-                    window_end=schedule.window_end_local,
-                    days_mask=schedule.days_of_week,
-                ),
+                db, schedule, result="rescheduled", now=now, next_run_at=recomputed
             )
             log.info("Schedule rescheduled: next_run_at was stale for the current window")
             return "rescheduled"
 
+        # Cadence bookkeeping stays policy-free: policy narrows when an
+        # occurrence dials or skips, never when the schedule recurs.
         next_occurrence = schedule_windows.next_run_at(
             end_utc,
             elder.timezone,
@@ -330,6 +338,8 @@ async def _materialize_one_schedule(
             window_end=schedule.window_end_local,
             days_mask=schedule.days_of_week,
         )
+        if next_occurrence is None:  # defensive: None is policy-induced only
+            raise ValueError("unreachable: policy bounds not passed")
 
         if now >= end_utc:
             # Poller-outage semantics: skip observably, never a late call (§5.5).
@@ -339,12 +349,50 @@ async def _materialize_one_schedule(
             log.warning("Schedule window already ended; occurrence skipped observably")
             return "skipped_window"
 
+        # Policy-narrowed dial window (small-unlocks spec §3.3.2/§3.3.3):
+        # re-resolved at consumption, never snapshotted onto the Call.
+        policy = await agent_profiles_repo.resolve_call_policy(
+            db,
+            profile_override=schedule.profile_override,
+            elder_profile_id=elder.agent_profile_id,
+            direction="outbound",
+        )
+        eff = schedule_windows.effective_window(
+            schedule.window_start_local,
+            schedule.window_end_local,
+            policy_start=policy.start_local,
+            policy_end=policy.end_local,
+        )
+        if eff is None:
+            # Policy ∩ window = ∅ for this occurrence (§3.3.3 rule 2): skip
+            # observably, advance cadence policy-free — never scheduled
+            # outside the window, never silently dropped.
+            await schedules_repo.record_result(
+                db, schedule, result="skipped_window", now=now, next_run_at=next_occurrence
+            )
+            log.warning("Schedule occurrence skipped: policy-narrowed window is empty")
+            return "skipped_window"
+        eff_start_utc, eff_end_utc = schedule_windows.window_bounds_utc(
+            today, elder.timezone, window_start=eff[0], window_end=eff[1]
+        )
+        # Clamp-before-skip (§3.3.3 rule 3): evaluate the skip against the
+        # policy-clamped dial time and the EFFECTIVE window end — a clamp past
+        # it becomes skipped_window, never a late dial. dial_at is inside the
+        # statutory bounds by construction (eff ⊆ statutory ∩ window).
+        dial_at = max(now, eff_start_utc)
+        if dial_at >= eff_end_utc:
+            await schedules_repo.record_result(
+                db, schedule, result="skipped_window", now=now, next_run_at=next_occurrence
+            )
+            log.warning("Schedule occurrence skipped: policy-clamped dial past the window end")
+            return "skipped_window"
+
         outcome = await materialize_call(
             db,
             settings,
             elder=elder,
             idempotency_key=f"sched:{schedule.id}:{today.isoformat()}",
-            scheduled_at=quiet_hours.next_allowed(now, elder.timezone),
+            scheduled_at=dial_at,
             local_day=today,
             dynamic_vars=schedule.dynamic_vars,
             profile_override=schedule.profile_override,
@@ -479,22 +527,47 @@ async def _materialize_one_target(
         log.warning("Batch target skipped: elder deleted")  # skips log at WARNING (spec §7)
         return "skipped_elder_deleted"
     batch = await db.get(CallBatch, target.batch_id)
+    profile_override = target.profile_override  # target override wins over batch default (§5.3)
+    if profile_override is None and batch is not None:
+        profile_override = batch.profile_override
+    # Policy-narrowed dial bounds (small-unlocks spec §3.3.2/§3.3.3): resolved
+    # with the same target-over-batch override precedence the call dials with;
+    # re-resolved at consumption, never snapshotted onto the Call.
+    policy = await agent_profiles_repo.resolve_call_policy(
+        db,
+        profile_override=profile_override,
+        elder_profile_id=elder.agent_profile_id,
+        direction="outbound",
+    )
     try:
-        dial_at = quiet_hours.next_allowed(now, elder.timezone)
+        dial_at = quiet_hours.next_allowed(
+            now, elder.timezone, start_local=policy.start_local, end_local=policy.end_local
+        )
         if (
             batch is not None
             and batch.window_start_local is not None
             and batch.window_end_local is not None
         ):
             # Push the clamp into the batch window/day-mask (first attempts only,
-            # §6.1; next_run_at re-intersects with quiet hours).
-            dial_at = schedule_windows.next_run_at(
+            # §6.1); next_run_at re-intersects with quiet hours AND the policy
+            # bounds in one place (§3.3.3 rule 1) — sequential clamps would
+            # fight and push the dial back inside the policy-forbidden zone.
+            pushed = schedule_windows.next_run_at(
                 dial_at,
                 elder.timezone,
                 window_start=batch.window_start_local,
                 window_end=batch.window_end_local,
                 days_mask=batch.days_of_week if batch.days_of_week is not None else _EVERY_DAY_MASK,
+                policy_start=policy.start_local,
+                policy_end=policy.end_local,
             )
+            if pushed is None:
+                # Policy ∩ window = ∅ (§3.3.3 rule 2): skip observably — never
+                # scheduled outside the window, never silently dropped.
+                await batches_repo.mark_target_skipped(db, target, reason="window", now=now)
+                log.warning("Batch target skipped: policy-narrowed dial window is empty")
+                return "skipped_window"
+            dial_at = pushed
         # The PUSHED dial day: the daily cap counts the day the call will actually
         # happen, never `now`'s day — a window-pushed target must not dodge the
         # harassment cap (spec §5.3 step 1).
@@ -505,9 +578,6 @@ async def _materialize_one_target(
         await batches_repo.mark_target_skipped(db, target, reason="invalid_timezone", now=now)
         log.opt(exception=True).error("Batch target failed closed: invalid timezone")
         return "skipped_invalid_timezone"
-    profile_override = target.profile_override  # target override wins over batch default (§5.3)
-    if profile_override is None and batch is not None:
-        profile_override = batch.profile_override
     outcome = await materialize_call(
         db,
         settings,

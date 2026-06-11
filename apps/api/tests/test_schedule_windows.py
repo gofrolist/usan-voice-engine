@@ -54,9 +54,10 @@ def test_effective_window_intersects_quiet_hours():
 
 def test_effective_window_is_timezone_invariant():
     # Pure wall-clock math: the function structurally cannot depend on a timezone
-    # (spec §3.1 tz-invariance claim, pinned via the signature itself).
+    # (spec §3.1 tz-invariance claim, pinned via the signature itself). The A4
+    # policy bounds (small-unlocks spec §3.3.3) are wall-clock times too.
     params = list(inspect.signature(effective_window).parameters)
-    assert params == ["start", "end"]
+    assert params == ["start", "end", "policy_start", "policy_end"]
 
 
 def test_next_run_at_inside_window_returns_after():
@@ -132,6 +133,67 @@ def test_next_run_at_empty_effective_window_raises_value_error():
             "UTC",
             window_start=time(21, 30),
             window_end=time(22, 30),
+            days_mask=127,
+        )
+
+
+# --- D8: policy composition (small-unlocks spec §3.3.3) ---
+
+
+def test_effective_window_intersects_policy():
+    # §3.3.3 rule 1: the effective dialing interval is window ∩ statutory ∩
+    # policy, computed in ONE place — sequential clamps would fight each other.
+    assert effective_window(time(9), time(12), policy_start=time(11), policy_end=time(21)) == (
+        time(11),
+        time(12),
+    )
+    # zero-diff: the policy-free call is byte-identical to pre-policy behavior
+    assert effective_window(time(9), time(12)) == (time(9), time(12))
+
+
+def test_effective_window_policy_empty_returns_none():
+    # policy start 11:00 empties a 09:00-10:00 window (statutory-valid on its own)
+    assert effective_window(time(9), time(10), policy_start=time(11)) is None
+
+
+def test_next_run_at_policy_push_lands_at_policy_start():
+    # The §3.3.3 composition-bug pin: pushing from 08:00 with policy start 11:00
+    # lands AT 11:00 local — never inside the policy-forbidden [09:00, 11:00).
+    after = datetime(2026, 6, 10, 8, 0, tzinfo=UTC)
+    result = next_run_at(
+        after,
+        "UTC",
+        window_start=time(9),
+        window_end=time(12),
+        days_mask=127,
+        policy_start=time(11),
+    )
+    assert result == datetime(2026, 6, 10, 11, 0, tzinfo=UTC)
+
+
+def test_next_run_at_policy_empty_returns_none():
+    # Policy-induced empty intersection returns None — callers skip observably
+    # (§3.3.3 rule 2); the ValueError stays reserved for statutory misconfiguration.
+    result = next_run_at(
+        datetime(2026, 6, 10, 8, 0, tzinfo=UTC),
+        "UTC",
+        window_start=time(9),
+        window_end=time(10),
+        days_mask=127,
+        policy_start=time(11),
+    )
+    assert result is None
+
+
+def test_next_run_at_statutory_empty_still_raises():
+    # The reserved contract: a statutory-empty window is a save-time
+    # misconfiguration and still raises when no policy kwargs are passed.
+    with pytest.raises(ValueError, match="quiet hours"):
+        next_run_at(
+            datetime(2026, 6, 10, 12, 0, tzinfo=UTC),
+            "UTC",
+            window_start=time(21),
+            window_end=time(22),
             days_mask=127,
         )
 

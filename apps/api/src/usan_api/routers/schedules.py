@@ -55,7 +55,7 @@ def _compute_next_run_at(schedule_like: CallSchedule | CreateScheduleRequest, tz
     else:
         days_mask = schedule_like.days_of_week
     try:
-        return next_run_at(
+        computed = next_run_at(
             datetime.now(UTC),
             tz,
             window_start=schedule_like.window_start_local,
@@ -64,6 +64,9 @@ def _compute_next_run_at(schedule_like: CallSchedule | CreateScheduleRequest, tz
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if computed is None:  # defensive: None is policy-induced only (§3.3.3 rule 2)
+        raise ValueError("unreachable: policy bounds not passed")
+    return computed
 
 
 async def _require_live_override(db: AsyncSession, profile_id: uuid.UUID) -> None:
