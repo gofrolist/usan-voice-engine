@@ -114,18 +114,24 @@ SENSITIVE_PROMPT_FIELDS: tuple[str, ...] = (
 )
 
 
-def phi_tokens_in_sensitive_fields(prompts: PromptsConfig) -> list[str]:
+def phi_tokens_in_sensitive_fields(
+    prompts: PromptsConfig, *, phi_names: frozenset[str] = PHI_BUILTIN_NAMES
+) -> list[str]:
     """Advisory warnings for PHI variables used in pre-identity / voicemail fields.
 
     Non-fatal (warn-don't-block). One message per distinct (field, PHI token), in
     field-then-first-seen order, so the warning list reads deterministically.
+
+    ``phi_names`` lets the save path extend the check to declared custom
+    variables flagged phi=true (builtins ∪ custom PHI names, spec §3.2); the
+    keyword default keeps every existing caller builtin-only, zero-diff.
     """
     warnings: list[str] = []
     seen: set[tuple[str, str]] = set()
     for field in SENSITIVE_PROMPT_FIELDS:
         text: str = getattr(prompts, field)
         for name in _TOKEN_RE.findall(text):
-            if name in PHI_BUILTIN_NAMES and (field, name) not in seen:
+            if name in phi_names and (field, name) not in seen:
                 seen.add((field, name))
                 token = "{{" + name + "}}"
                 warnings.append(

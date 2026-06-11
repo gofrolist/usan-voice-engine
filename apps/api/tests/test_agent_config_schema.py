@@ -313,3 +313,33 @@ def test_sms_config_roundtrips_through_agent_config():
     cfg = AgentConfig.model_validate(base)
     assert cfg.tools.sms is not None
     assert cfg.tools.sms.templates[0].key == "a"
+
+
+# --- phi_names generalization (custom PHI variables, spec §3.2 / plan C5) ----
+
+
+def test_phi_tokens_in_sensitive_fields_accepts_custom_phi_names():
+    from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields
+    from usan_api.schemas.variable_catalog import PHI_BUILTIN_NAMES
+
+    prompts = _prompts_with(voicemail_message="Sorry we missed you. Re: {{diagnosis}}.")
+    warnings = phi_tokens_in_sensitive_fields(prompts, phi_names=PHI_BUILTIN_NAMES | {"diagnosis"})
+    assert len(warnings) == 1
+    # Existing message shape: token + quoted field name + the advisory sentence.
+    assert "{{diagnosis}}" in warnings[0]
+    assert "'voicemail_message'" in warnings[0]
+    assert "protected health information" in warnings[0]
+
+
+def test_phi_tokens_default_unchanged():
+    # Zero-diff pin: calling with no kwarg reproduces today's builtin-only output
+    # on the same prompts — a custom name is never flagged by default.
+    from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields
+
+    prompts = _prompts_with(
+        voicemail_message="We noted {{last_check_in}} and {{diagnosis}} last time."
+    )
+    warnings = phi_tokens_in_sensitive_fields(prompts)
+    assert len(warnings) == 1
+    assert "{{last_check_in}}" in warnings[0]
+    assert all("{{diagnosis}}" not in w for w in warnings)

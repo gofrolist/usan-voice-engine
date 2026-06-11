@@ -10,6 +10,7 @@ from usan_api.db.base import AdminRole
 from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
+from usan_api.repositories import custom_variables as custom_variables_repo
 from usan_api.repositories.agent_profiles import CloneSourceNotFoundError, ProfileInUseError
 from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields, unknown_tokens
 from usan_api.schemas.agent_profile import (
@@ -22,6 +23,7 @@ from usan_api.schemas.agent_profile import (
     VersionDetail,
     VersionSummary,
 )
+from usan_api.schemas.variable_catalog import PHI_BUILTIN_NAMES
 
 router = APIRouter(
     prefix="/v1/admin/profiles",
@@ -108,7 +110,12 @@ async def update_draft(
         raise HTTPException(status_code=404, detail="profile not found")
     # Compute non-fatal unknown-{{var}} warnings across every prompt field so the
     # editor can flag them (warn-don't-block, design §5.1). The save itself already
-    # succeeded — unknown tokens never fail validation.
+    # succeeded — unknown tokens never fail validation. Declared custom variables
+    # count as known; custom phi=true names join the sensitive-field PHI advisory
+    # (spec §3.2). The prompt channel has NO fail-closed defense — the agent
+    # substitutes dynamic_vars into all prompt fields — so the warning IS the defense.
+    custom_names = await custom_variables_repo.names(db)
+    custom_phi = await custom_variables_repo.phi_names(db)
     prompts = body.config.prompts
     seen: list[str] = []
     for text in (
@@ -121,10 +128,12 @@ async def update_draft(
         prompts.inbound_opening,
         prompts.inbound_personalization_template,
     ):
-        for name in unknown_tokens(text):
+        for name in unknown_tokens(text, known_names=custom_names):
             if name not in seen:
                 seen.append(name)
-    warnings = seen + phi_tokens_in_sensitive_fields(prompts)
+    warnings = seen + phi_tokens_in_sensitive_fields(
+        prompts, phi_names=PHI_BUILTIN_NAMES | custom_phi
+    )
     await admin_audit.record(
         db,
         actor_email=actor,
