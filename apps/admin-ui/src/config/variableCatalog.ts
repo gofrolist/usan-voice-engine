@@ -20,8 +20,11 @@ interface VariableCatalogResponse {
   variables: VariableSpec[];
 }
 
-// Catalog is a global constant on the server (not per-version), so it is highly
-// cacheable. Long staleTime avoids refetching it on every editor mount.
+// The catalog is DB-backed on the server (builtins + custom_variables rows) but
+// still global (not per-version) and slow-moving, so a long staleTime avoids
+// refetching it on every editor mount. Custom-variable CRUD mutations
+// (features/customVariables/hooks.ts) invalidate this key so the palette and
+// warnings refresh immediately after a change.
 const CATALOG_KEY = ["variable-catalog"] as const;
 
 export function useVariableCatalog() {
