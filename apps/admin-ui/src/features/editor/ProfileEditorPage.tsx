@@ -34,13 +34,15 @@ const SECTION_ORDER: SectionKey[] = [
 ];
 
 // Validation-error shape FastAPI/Pydantic returns on 422. The api wrapper
-// JSON-stringifies it into ApiError.detail, so we parse it back here.
-interface ValidationItem {
+// JSON-stringifies it into ApiError.detail, so we parse it back here. Exported:
+// useRollback (versions/hooks.ts) parses the same shape — rollback has no form to
+// land field errors on, so it surfaces each msg via toast instead.
+export interface ValidationItem {
   loc: (string | number)[];
   msg: string;
 }
 
-function tryParseFieldErrors(detail: string): ValidationItem[] | null {
+export function tryParseFieldErrors(detail: string): ValidationItem[] | null {
   try {
     const parsed: unknown = JSON.parse(detail);
     if (Array.isArray(parsed)) {
@@ -96,9 +98,14 @@ export function ProfileEditorPage() {
     if (!items || items.length === 0) return false;
     let mapped = false;
     for (const item of items) {
-      // loc is like ["body", "config", "prompts", "greeting"]; drop the leading
-      // "body"/"config" envelope to get the AgentConfig dotted path.
-      const path = item.loc.filter((p) => p !== "body" && p !== "config").join(".");
+      // loc is like ["body", "config", "prompts", "greeting"]; slice the leading
+      // ["body", "config"] envelope POSITIONALLY to get the AgentConfig dotted path.
+      // Never filter by value: the custom-PHI SMS loc ends in a field literally named
+      // "body" (["body","config","tools","sms","templates",0,"body"]) and a value
+      // filter would eat it, landing the error on the row instead of the input
+      // (spec §6.3).
+      if (item.loc[0] !== "body" || item.loc[1] !== "config") continue;
+      const path = item.loc.slice(2).join(".");
       if (path) {
         form.setError(path as keyof AgentConfigForm, { type: "server", message: item.msg });
         mapped = true;
@@ -221,6 +228,15 @@ export function ProfileEditorPage() {
         onPublished={() => {
           setPublishOpen(false);
           pushToast("Published.", "info");
+        }}
+        // Publish 422s (e.g. custom-PHI SMS violations from the server-authoritative
+        // gate) route through the same field-error mapping as save.
+        onPublishError={(detail) => {
+          if (mapServerErrors(detail)) {
+            pushToast("Some fields were rejected by the server — see the highlighted errors.");
+          } else {
+            pushToast(detail);
+          }
         }}
       />
     </div>

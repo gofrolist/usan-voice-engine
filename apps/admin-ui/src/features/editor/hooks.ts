@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import type { ApiError } from "../../lib/api";
-import { pushToast } from "../../components/ui/toast";
 import type {
   AgentConfig,
   DraftUpdate,
@@ -13,10 +12,6 @@ import type {
 
 export const profileKey = (id: string) => ["profile", id] as const;
 export const versionKey = (id: string, v: number) => ["profile", id, "version", v] as const;
-
-function onApiError(err: unknown): void {
-  pushToast((err as ApiError)?.detail ?? "Request failed");
-}
 
 export function useProfile(id: string) {
   return useQuery<ProfileDetail>({
@@ -54,7 +49,10 @@ export function usePublish(id: string) {
       void qc.invalidateQueries({ queryKey: ["profiles"] });
       void qc.invalidateQueries({ queryKey: ["versions", id] });
     },
-    onError: onApiError,
+    // NO hook-level onError: react-query v5 runs a per-mutate onError IN ADDITION
+    // to the hook-level one, and PublishDialog's handleConfirm owns the error path
+    // (routing 422s to the editor's mapServerErrors). A handler here would
+    // double-toast every failure.
   });
 }
 
