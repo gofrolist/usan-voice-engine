@@ -1150,6 +1150,26 @@ async def test_schedule_occurrence_policy_push_no_reschedule_loop(session_factor
     assert len(await _calls(session_factory)) == 1
 
 
+async def test_windowless_batch_target_clamps_to_policy_start(session_factory):
+    # Windowless batch + elder-profile policy: with no batch window there is no
+    # next_run_at composition at all — the dial time is the bare policy-aware
+    # next_allowed clamp, so a 09:30 EDT poll under policy start 11:00 schedules
+    # the target at 11:00 EDT (15:00Z), never at now.
+    now = datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT, Wednesday
+    elder = await _seed_elder(session_factory, policy={"quiet_hours_start_local": "11:00"})
+    batch_id = await _seed_running_batch(session_factory, elder_ids=[elder.id])  # no window
+
+    counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
+
+    assert counts["batch_targets"] == 1
+    targets = await _targets(session_factory, batch_id)
+    assert targets[0].status == "materialized"
+    assert targets[0].call_id is not None
+    call = await _get_call(session_factory, targets[0].call_id)
+    assert call.status is CallStatus.QUEUED
+    assert call.scheduled_at == datetime(2026, 6, 10, 15, 0, tzinfo=UTC)  # 11:00 EDT
+
+
 async def test_schedule_profile_override_policy_clamps_materialized_call(session_factory):
     # profile_override threading pin (§3.3.2): the SCHEDULE's override carries
     # the narrowing (start 11:00) while the elder's assigned profile resolves

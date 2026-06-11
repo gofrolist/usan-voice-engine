@@ -328,6 +328,12 @@ def test_idempotent_replay_helper_409_on_override_mismatch() -> None:
         _idempotent_replay(_existing(None), _body(pid_a), Response())
     assert exc_b.value.status_code == 409
 
+    # set→None: a replay that DROPS the original's override is a different
+    # payload too — the mismatch check must be symmetric, not set-only.
+    with pytest.raises(HTTPException) as exc_c:
+        _idempotent_replay(_existing(pid_a), _body(None), Response())
+    assert exc_c.value.status_code == 409
+
     response = Response()
     matched = _idempotent_replay(_existing(pid_a), _body(pid_a), response)
     assert matched.profile_override == pid_a

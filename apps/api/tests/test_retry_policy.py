@@ -101,6 +101,24 @@ def test_max_attempts_extends_with_final_rung_repeat():
     assert next_retry_delay(CallStatus.BUSY, 3, max_attempts=3) == timedelta(minutes=5)
 
 
+def test_multiplier_scales_final_rung_extension():
+    # Interaction pin: attempts past the ladder repeat the FINAL rung, and the
+    # multiplier scales that repeated rung too — extension and scaling compose,
+    # neither resets the other. NO_ANSWER's final rung is 2h; ×2.0 → 4h on both
+    # the in-ladder rung and every policy-extended repeat, until the cap stops.
+    assert next_retry_delay(
+        CallStatus.NO_ANSWER, 3, max_attempts=4, delay_multiplier=2.0
+    ) == timedelta(hours=4)
+    assert next_retry_delay(
+        CallStatus.NO_ANSWER, 4, max_attempts=4, delay_multiplier=2.0
+    ) == timedelta(hours=4)
+    assert next_retry_delay(CallStatus.NO_ANSWER, 5, max_attempts=4, delay_multiplier=2.0) is None
+    # Sub-1.0 multiplier on a single-rung ladder's extension (BUSY: 5m → 2m30s).
+    assert next_retry_delay(CallStatus.BUSY, 3, max_attempts=3, delay_multiplier=0.5) == timedelta(
+        minutes=2, seconds=30
+    )
+
+
 def test_mixed_status_chain_global_semantics():
     """§3.3.1 pin: max_attempts keys on the CHAIN-GLOBAL attempt number.
 
