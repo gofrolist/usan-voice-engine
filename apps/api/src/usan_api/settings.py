@@ -4,7 +4,7 @@ from typing import Any, Literal
 from urllib.parse import parse_qs, urlsplit
 
 from loguru import logger
-from pydantic import Field, SecretStr, ValidationError, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ""})
@@ -122,6 +122,50 @@ class Settings(BaseSettings):
     telnyx_messaging_timeout_s: int = Field(
         default=10, ge=1, le=60, alias="TELNYX_MESSAGING_TIMEOUT_S"
     )
+
+    # --- Scheduler poller + concurrency gate (batch/scheduled calling, design §5.1).
+    # Ship-inert contract: with both flags at their False defaults nothing dials
+    # autonomously and the retry poller's claim behavior is bit-identical to today.
+    # MAX_CONCURRENT_CALLS=8 is sized for the e2-standard-4 single-VM reality
+    # (~5 simultaneous calls empirically saturated 2 vCPU; 8 on 4 vCPU is the
+    # conservative start — measure before raising, per the v0.1.0 overwhelm lesson).
+    # RESERVED_CONCURRENCY keeps headroom for ad-hoc/inbound calls, away from the
+    # pollers. The daily cap of 2 allows the daily wellness schedule plus one batch
+    # campaign per elder per day. AUTONOMOUS_DIALING_PAUSED is the state-preserving
+    # emergency stop (§5.4, §10).
+    scheduler_poller_enabled: bool = Field(default=False, alias="SCHEDULER_POLLER_ENABLED")
+    scheduler_poll_interval_s: int = Field(
+        default=60, ge=15, le=600, alias="SCHEDULER_POLL_INTERVAL_S"
+    )
+    scheduler_batch_size: int = Field(default=50, ge=1, le=500, alias="SCHEDULER_BATCH_SIZE")
+    concurrency_gate_enabled: bool = Field(default=False, alias="CONCURRENCY_GATE_ENABLED")
+    max_concurrent_calls: int = Field(default=8, ge=1, le=50, alias="MAX_CONCURRENT_CALLS")
+    reserved_concurrency: int = Field(default=2, ge=0, le=20, alias="RESERVED_CONCURRENCY")
+    max_autonomous_calls_per_elder_per_day: int = Field(
+        default=2, ge=1, le=10, alias="MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY"
+    )
+    autonomous_dialing_paused: bool = Field(default=False, alias="AUTONOMOUS_DIALING_PAUSED")
+
+    @model_validator(mode="after")
+    def _reserved_below_max(self) -> Settings:
+        # The gate computes max - reserved - in_flight; reserved >= max means the
+        # autonomous planes can never dial (spec §5.1).
+        if self.reserved_concurrency >= self.max_concurrent_calls:
+            raise ValueError("RESERVED_CONCURRENCY must be < MAX_CONCURRENT_CALLS")
+        return self
+
+    @model_validator(mode="after")
+    def _scheduler_requires_gate(self) -> Settings:
+        # Staged-enable order (spec §10.3): the gate is the hard dial cap; the
+        # scheduler must never materialize-and-dial without it. Gate-only is the
+        # documented intermediate state (pre-enable observability); scheduler-only
+        # is a misconfiguration — fail at startup, not on the first dial burst.
+        if self.scheduler_poller_enabled and not self.concurrency_gate_enabled:
+            raise ValueError(
+                "SCHEDULER_POLLER_ENABLED=true requires CONCURRENCY_GATE_ENABLED=true "
+                "(the scheduler must never run without the hard dial cap; spec §10.3)"
+            )
+        return self
 
     @field_validator(
         "telnyx_caller_id",

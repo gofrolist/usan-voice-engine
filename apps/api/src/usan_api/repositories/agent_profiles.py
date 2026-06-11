@@ -321,3 +321,14 @@ async def resolve_agent_config(
             return resolved
     default_profile = await get_default_profile(db, direction)
     return await _resolved_from_profile(db, default_profile)
+
+
+async def is_live_profile(db: AsyncSession, profile_id: uuid.UUID) -> bool:
+    """True iff the profile exists, is ACTIVE, and has a published version —
+    the precondition for profile_override to actually take effect (spec §4)."""
+    profile = await get_profile(db, profile_id)
+    return (
+        profile is not None
+        and profile.status is ProfileStatus.ACTIVE
+        and profile.published_version is not None
+    )

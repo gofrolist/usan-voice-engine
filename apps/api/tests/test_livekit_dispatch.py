@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -523,6 +524,11 @@ async def test_dispatch_and_dial_retry_carries_resolved_vars_in_metadata(
     fake.sip.create_sip_participant.return_value = type("R", (), {"sip_call_id": "SCL_R"})()
     monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
     monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+    # Pin the dial moment inside quiet hours for US/Central (11:00 CDT) so the
+    # dial-time TCPA re-check never re-queues this metadata-focused test.
+    monkeypatch.setattr(
+        livekit_dispatch, "_utcnow", lambda: datetime(2026, 6, 10, 16, 0, tzinfo=UTC)
+    )
 
     call_id, _ = await _seed(session_factory, room="usan-retry-meta")
 

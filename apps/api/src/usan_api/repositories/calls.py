@@ -1,16 +1,18 @@
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import quiet_hours
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call, Elder
+from usan_api.db.models import Call, CallBatch, CallBatchTarget, Elder
 from usan_api.retry_policy import next_retry_delay
+from usan_api.schemas.call import RESERVED_KEY_PREFIXES  # single source (spec §2.2 invariant 3)
 
 
 def _utcnow() -> datetime:
@@ -181,8 +183,8 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
 
     Returns the child, or None when: the policy says stop, the parent/elder is
     gone, the elder's timezone is invalid (fail CLOSED — never risk a TCPA-hour
-    call), or a retry child already exists (idempotent via the partial UNIQUE
-    index on parent_call_id).
+    call), the chain's owning batch was cancelled (spec §5.6), or a retry child
+    already exists (idempotent via the partial UNIQUE index on parent_call_id).
     """
     parent = await db.get(Call, call_id)
     if parent is None or parent.elder_id is None:
@@ -201,11 +203,34 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
         )
         return None
 
+    # Batch-cancellation guard (spec §5.6): walk parent_call_id to the chain root
+    # (<=3 hops); if the root is batch-owned and its batch is cancelled, never create
+    # a child — in the SAME commit as the parent's terminal transition, so the
+    # scheduler-cycle sweep is only a backstop for the cancel-vs-transition race.
+    root = parent
+    for _ in range(3):
+        if root.parent_call_id is None:
+            break
+        nxt = await db.get(Call, root.parent_call_id)
+        if nxt is None:
+            break
+        root = nxt
+    if root.idempotency_key and root.idempotency_key.startswith("batch:"):
+        result = await db.execute(
+            select(CallBatch.status)
+            .join(CallBatchTarget, CallBatchTarget.batch_id == CallBatch.id)
+            .where(CallBatchTarget.call_id == root.id)  # idx_call_batch_targets_call
+        )
+        if result.scalar_one_or_none() == "cancelled":
+            logger.bind(call_id=str(call_id)).info("Retry suppressed: batch cancelled")
+            return None
+
     child = Call(
         elder_id=parent.elder_id,
         direction=CallDirection.OUTBOUND,
         status=CallStatus.QUEUED,
         dynamic_vars=dict(parent.dynamic_vars),
+        profile_override=parent.profile_override,
         parent_call_id=parent.id,
         attempt=parent.attempt + 1,
         scheduled_at=scheduled_at,
@@ -248,6 +273,117 @@ async def claim_due_retries(db: AsyncSession, *, now: datetime, limit: int) -> l
     return [call.id for call in claimed]
 
 
+async def count_in_flight(db: AsyncSession, *, now: datetime, max_age_s: int) -> int:
+    """Recency-bounded count of dial-slot consumers (served by idx_calls_in_flight).
+
+    LiveKit enforces max_call_duration on every outbound dial, so any in-flight row
+    older than that ceiling is wedged (lost room_finished webhook or agent end-call
+    — only DIALING has a reaper today) and must not consume a slot forever: without
+    the bound, max_concurrent_calls wedged rows would silently and permanently halt
+    ALL autonomous dialing (spec §5.4).
+    """
+    cutoff = now - timedelta(seconds=max_age_s)
+    result = await db.execute(
+        select(func.count())
+        .select_from(Call)
+        .where(
+            Call.status.in_((CallStatus.DIALING, CallStatus.RINGING, CallStatus.IN_PROGRESS)),
+            Call.updated_at > cutoff,
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def count_queued_due(db: AsyncSession, *, now: datetime) -> int:
+    """COUNT(*) of due QUEUED rows — exactly the idx_calls_due_retries predicate
+    (status='queued' AND scheduled_at <= now, mirroring claim_due_retries); feeds
+    the scheduler's batch-materialization slot math (spec §5.2 phase 4)."""
+    result = await db.execute(
+        select(func.count())
+        .select_from(Call)
+        .where(
+            Call.status == CallStatus.QUEUED,
+            Call.scheduled_at.is_not(None),
+            Call.scheduled_at <= now,
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def count_autonomous_roots(
+    db: AsyncSession, *, elder_id: uuid.UUID, day_start: datetime, day_end: datetime
+) -> int:
+    """Roots with a reserved-prefix key whose scheduled_at falls inside the elder-local
+    day bounds (daily repetition cap, spec §5.3 step 1; served by idx_calls_elder).
+
+    The LIKE patterns derive from RESERVED_KEY_PREFIXES — only materializer-owned
+    roots count toward the cap; retry children carry no key and ad-hoc calls carry
+    no reserved prefix, so neither eats the elder's daily autonomous budget.
+    """
+    result = await db.execute(
+        select(func.count())
+        .select_from(Call)
+        .where(
+            Call.elder_id == elder_id,
+            or_(*(Call.idempotency_key.like(f"{prefix}%") for prefix in RESERVED_KEY_PREFIXES)),
+            Call.scheduled_at >= day_start,
+            Call.scheduled_at < day_end,
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def create_materialized_root(
+    db: AsyncSession,
+    *,
+    elder_id: uuid.UUID,
+    status: CallStatus,
+    idempotency_key: str,
+    scheduled_at: datetime | None,
+    dynamic_vars: dict[str, Any],
+    profile_override: uuid.UUID | None,
+) -> Call:
+    """Insert one materializer-owned chain root (spec §5.3 step 4) in the caller's
+    transaction (flush only — the caller commits call + bookkeeping atomically).
+
+    A livekit_room is minted only for QUEUED rows; DNC_BLOCKED rows mirror
+    enqueue_call's gate (terminal, no room, no scheduled_at — the deterministic
+    key is still consumed). Raises IntegrityError on a duplicate idempotency_key:
+    callers SAVEPOINT-wrap and take the verified replay path (§5.3 step 5).
+    """
+    call = Call(
+        elder_id=elder_id,
+        direction=CallDirection.OUTBOUND,
+        status=status,
+        idempotency_key=idempotency_key,
+        scheduled_at=scheduled_at,
+        dynamic_vars=dict(dynamic_vars),
+        profile_override=profile_override,
+        attempt=1,
+        livekit_room=f"usan-outbound-{uuid.uuid4()}" if status is CallStatus.QUEUED else None,
+    )
+    db.add(call)
+    await db.flush()
+    await db.refresh(call)
+    return call
+
+
+async def requeue_for_quiet_hours(
+    db: AsyncSession, call_id: uuid.UUID, *, scheduled_at: datetime
+) -> Call | None:
+    """Flip a claimed DIALING row back to QUEUED with a fresh clamp (dial-time
+    quiet-hours re-check, spec §2.3). Guarded on DIALING so it never clobbers an
+    outcome written by a racing webhook."""
+    call = await db.get(Call, call_id)
+    if call is None or call.status is not CallStatus.DIALING:
+        return None
+    call.status = CallStatus.QUEUED
+    call.scheduled_at = scheduled_at
+    await db.flush()
+    await db.refresh(call)
+    return call
+
+
 async def create_inbound_call(
     db: AsyncSession,
     *,
@@ -283,12 +419,13 @@ async def create_inbound_call(
 async def reclaim_stuck_dialing(
     db: AsyncSession, *, now: datetime, stale_after_s: int, limit: int
 ) -> list[uuid.UUID]:
-    """Re-queue retry rows stranded in DIALING (ungraceful death mid-dispatch).
+    """Re-queue poller-owned rows stranded in DIALING (ungraceful death mid-dispatch).
 
-    A genuine in-flight dial leaves DIALING within the ring timeout, so a retry
-    row still DIALING after ``stale_after_s`` (>> ring timeout) is stranded. Only
-    retry rows (scheduled_at set) are reclaimed; a stranded initial call is the
-    caller's to re-enqueue.
+    A genuine in-flight dial leaves DIALING within the ring timeout, so a row
+    still DIALING after ``stale_after_s`` (>> ring timeout) is stranded. Only
+    poller-owned rows (scheduled_at set — retry children and schedule/batch roots
+    alike, spec §2.2 invariant 2) are reclaimed; a stranded ad-hoc initial call is
+    the caller's to re-enqueue.
     """
     cutoff = now - timedelta(seconds=stale_after_s)
     result = await db.execute(
@@ -382,3 +519,56 @@ async def mark_failed_if_active(
     await db.flush()
     await db.refresh(call)
     return call
+
+
+# Retry ladders top out at 3 attempts (retry_policy.py), so a chain is root + 2
+# children; one extra hop of headroom keeps the walk bounded, never load-bearing.
+_MAX_CHAIN_HOPS = 3
+
+
+async def get_chain_tip(db: AsyncSession, root_call_id: uuid.UUID) -> Call | None:
+    """Latest attempt of a retry chain: follow child rows via ``parent_call_id``
+    (<=_MAX_CHAIN_HOPS hops; one-child-max via ``uq_calls_parent_call_id`` makes
+    each probe a single indexed lookup)."""
+    current = await db.get(Call, root_call_id)
+    if current is None:
+        return None
+    for _ in range(_MAX_CHAIN_HOPS):
+        result = await db.execute(select(Call).where(Call.parent_call_id == current.id))
+        child = result.scalar_one_or_none()
+        if child is None:
+            break
+        current = child
+    return current
+
+
+async def has_child(db: AsyncSession, call_id: uuid.UUID) -> bool:
+    """True when a retry child row exists for ``call_id`` — a single indexed
+    probe via ``uq_calls_parent_call_id``; the finalizer's §6.2 "no child" test
+    (after a terminal transition's commit, either the child exists or it never
+    will, so this probe is race-free within one snapshot)."""
+    result = await db.execute(select(Call.id).where(Call.parent_call_id == call_id).limit(1))
+    return result.scalar_one_or_none() is not None
+
+
+async def cancel_queued_tips(db: AsyncSession, root_call_ids: Sequence[uuid.UUID]) -> int:
+    """Guarded UPDATE: each chain's tip ``queued -> cancelled`` (the first writer
+    of the CANCELLED enum value). Never touches ``dialing``/``in_progress`` rows —
+    in-flight calls finish naturally (spec §5.6). Returns rows flipped."""
+    tip_ids: list[uuid.UUID] = []
+    for root_call_id in root_call_ids:
+        tip = await get_chain_tip(db, root_call_id)
+        if tip is not None:
+            tip_ids.append(tip.id)
+    if not tip_ids:
+        return 0
+    result = cast(
+        "CursorResult[Any]",
+        await db.execute(
+            update(Call)
+            .where(Call.id.in_(tip_ids), Call.status == CallStatus.QUEUED)
+            .values(status=CallStatus.CANCELLED)
+        ),
+    )
+    await db.flush()
+    return int(result.rowcount or 0)

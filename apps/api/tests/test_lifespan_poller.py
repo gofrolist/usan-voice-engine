@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from usan_api import retry_orchestrator
+from usan_api import retry_orchestrator, schedule_orchestrator
 from usan_api.main import create_app
 from usan_api.settings import get_settings
 
@@ -65,3 +65,55 @@ def test_lifespan_skips_poller_when_disabled(monkeypatch):
         assert c.get("/health").status_code == 200
 
     assert started["v"] is False  # poller never started
+
+
+def test_lifespan_starts_scheduler_poller_when_enabled(monkeypatch):
+    _set_env(monkeypatch)
+    monkeypatch.setenv("RETRY_POLLER_ENABLED", "true")
+    monkeypatch.setenv("SCHEDULER_POLLER_ENABLED", "true")
+    # Settings invariant (spec §10.3): the scheduler requires the gate.
+    monkeypatch.setenv("CONCURRENCY_GATE_ENABLED", "true")
+    retry_state: dict = {"started": False, "stop": None}
+    sched_state: dict = {"started": False, "stop": None}
+
+    async def _fake_retry_poller(settings, stop):
+        retry_state["started"] = True
+        retry_state["stop"] = stop
+        await stop.wait()
+
+    async def _fake_scheduler_poller(settings, stop):
+        sched_state["started"] = True
+        sched_state["stop"] = stop
+        await stop.wait()  # block until shutdown signals stop
+
+    monkeypatch.setattr(retry_orchestrator, "run_poller", _fake_retry_poller)
+    monkeypatch.setattr(schedule_orchestrator, "run_poller", _fake_scheduler_poller)
+    get_settings.cache_clear()
+
+    app = create_app()
+    with TestClient(app) as c:
+        assert c.get("/health").status_code == 200
+        assert sched_state["started"] is True
+
+    assert isinstance(sched_state["stop"], asyncio.Event)
+    assert sched_state["stop"] is retry_state["stop"]  # all pollers share one stop event
+    assert sched_state["stop"].is_set()  # shutdown set the stop event
+
+
+def test_lifespan_skips_scheduler_poller_by_default(monkeypatch):
+    _set_env(monkeypatch)
+    monkeypatch.delenv("SCHEDULER_POLLER_ENABLED", raising=False)  # inert by default
+    started = {"v": False}
+
+    async def _fake_scheduler_poller(settings, stop):
+        started["v"] = True
+        await stop.wait()
+
+    monkeypatch.setattr(schedule_orchestrator, "run_poller", _fake_scheduler_poller)
+    get_settings.cache_clear()
+
+    app = create_app()
+    with TestClient(app) as c:
+        assert c.get("/health").status_code == 200
+
+    assert started["v"] is False  # scheduler poller never started

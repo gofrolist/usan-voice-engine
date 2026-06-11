@@ -20,7 +20,25 @@ def _rules() -> list[dict]:
 
 def test_alert_rules_present():
     uids = {rule["uid"] for rule in _rules()}
-    assert {"usan-urgent-followup-flag", "usan-sms-delivery-failed"} <= uids
+    assert {
+        "usan-urgent-followup-flag",
+        "usan-sms-delivery-failed",
+        "usan-dial-slots-exhausted",
+    } <= uids
+
+
+def test_dial_slots_alert_sustained_ten_minutes():
+    # usan_dial_slots_free == 0 must be SUSTAINED for 10m before paging: a brief
+    # zero is normal under load; ten minutes of no free slots means autonomous
+    # dialing (schedules, batches, retries) has stopped.
+    rule = next(r for r in _rules() if r["uid"] == "usan-dial-slots-exhausted")
+    assert rule["for"] == "10m"
+    assert rule["labels"]["severity"] == "page"
+    by_ref = {item["refId"]: item for item in rule["data"]}
+    assert by_ref["A"]["datasourceUid"] == "prometheus"
+    evaluator = by_ref["C"]["model"]["conditions"][0]["evaluator"]
+    assert evaluator["type"] == "lt"
+    assert evaluator["params"] == [1]
 
 
 def test_alert_rules_route_to_provisioned_contact_point():

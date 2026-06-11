@@ -2,9 +2,9 @@
 
 When PHI_RETENTION_DAYS is set, ``run_poller`` loops ``purge_expired`` once per
 day. The purge deletes transcript rows past the cutoff and strips ``dynamic_vars``
-(which may embed elder names / last-check-in summaries) from terminal calls past
-the cutoff. Default-off: with PHI_RETENTION_DAYS unset the poller never starts, so
-existing deployments retain everything.
+(which may embed elder names / last-check-in summaries) from terminal calls and
+settled batch targets past the cutoff. Default-off: with PHI_RETENTION_DAYS unset
+the poller never starts, so existing deployments retain everything.
 """
 
 import asyncio
@@ -13,11 +13,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from loguru import logger
-from sqlalchemy import CursorResult, delete, or_, update
+from sqlalchemy import CursorResult, delete, func, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from usan_api.db.base import CallStatus
-from usan_api.db.models import Call, Transcript
+from usan_api.db.models import Call, CallBatchTarget, Transcript
 from usan_api.db.session import get_session_factory
 from usan_api.settings import Settings
 
@@ -45,13 +45,14 @@ def _utcnow() -> datetime:
 
 async def purge_expired(
     session: AsyncSession, *, days: int, now: datetime | None = None
-) -> tuple[int, int]:
-    """Delete old transcripts and null dynamic_vars + recording_uri on old terminal calls.
+) -> tuple[int, int, int]:
+    """Delete old transcripts and scrub PHI off old terminal calls + settled batch targets.
 
-    Returns ``(transcripts_deleted, calls_scrubbed)``. The caller commits — this
-    keeps both mutations in a single transaction so a crash can't leave a partial
-    purge. Nulling recording_uri stops the API issuing fresh signed URLs for audio
-    whose retention window has elapsed. ``now`` overrides the clock for tests.
+    Returns ``(transcripts_deleted, calls_scrubbed, batch_targets_scrubbed)``. The
+    caller commits — this keeps all three mutations in a single transaction so a
+    crash can't leave a partial purge. Nulling recording_uri stops the API issuing
+    fresh signed URLs for audio whose retention window has elapsed. ``now``
+    overrides the clock for tests.
     """
     moment = now if now is not None else _utcnow()
     cutoff = moment - timedelta(days=days)
@@ -77,7 +78,25 @@ async def purge_expired(
             .values(dynamic_vars={}, recording_uri=None)
         ),
     )
-    return deleted.rowcount or 0, scrubbed.rowcount or 0
+
+    # Scrub the *source* copy too: batch-target dynamic_vars are copied onto the
+    # call at materialization, so without this the calls copy is scrubbed while
+    # the source copy lives forever, defeating the control (spec §8). Settled
+    # targets only; call_schedules.dynamic_vars are deliberately exempt as live
+    # re-used config — the operator PHI-removal path there is PATCH/DELETE.
+    target_scrub = cast(
+        "CursorResult[Any]",
+        await session.execute(
+            update(CallBatchTarget)
+            .where(
+                CallBatchTarget.status.in_(("done", "skipped", "cancelled")),
+                func.coalesce(CallBatchTarget.finalized_at, CallBatchTarget.updated_at) < cutoff,
+                CallBatchTarget.dynamic_vars != {},
+            )
+            .values(dynamic_vars={})
+        ),
+    )
+    return deleted.rowcount or 0, scrubbed.rowcount or 0, target_scrub.rowcount or 0
 
 
 async def run_poller(settings: Settings, stop: asyncio.Event) -> None:
@@ -104,11 +123,13 @@ async def run_poller(settings: Settings, stop: asyncio.Event) -> None:
 
 async def _purge_cycle(factory: async_sessionmaker[AsyncSession], days: int) -> None:
     async with factory() as db:
-        transcripts, calls = await purge_expired(db, days=days)
+        transcripts, calls, batch_targets = await purge_expired(db, days=days)
         await db.commit()
-    if transcripts or calls:
+    if transcripts or calls or batch_targets:
         logger.bind(component="retention_poller").info(
-            "Purged {t} transcript(s); scrubbed dynamic_vars on {c} call(s)",
+            "Purged {t} transcript(s); scrubbed dynamic_vars on {c} call(s) "
+            "and {b} batch target(s)",
             t=transcripts,
             c=calls,
+            b=batch_targets,
         )

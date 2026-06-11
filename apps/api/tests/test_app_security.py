@@ -114,6 +114,34 @@ def test_rate_limiting_disabled_passes_through(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_is_operator_route_matches_schedules_and_batches():
+    from usan_api.ratelimit import _is_operator_route
+
+    assert _is_operator_route("POST", "/v1/schedules")
+    assert _is_operator_route("GET", "/v1/schedules/123")
+    assert _is_operator_route("PATCH", "/v1/schedules/123")
+    assert _is_operator_route("POST", "/v1/batches")
+    assert _is_operator_route("POST", "/v1/batches/123/cancel")
+    assert _is_operator_route("GET", "/v1/batches")
+
+
+def test_schedules_and_batches_routes_throttled_pre_auth(monkeypatch):
+    # Mirror of test_admin_routes_are_rate_limited: the schedule/batch operator
+    # routes must be throttled pre-auth too. No auth header is sent; the budget is
+    # per-client (not per-path), so after two /v1/schedules requests the /v1/batches
+    # requests are throttled as well.
+    app = _app_with_env(monkeypatch, RATE_LIMIT_ENABLED="true", RATE_LIMIT_DEFAULT="2/minute")
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        codes = [client.get("/v1/schedules").status_code for _ in range(3)]
+        codes += [client.post("/v1/batches", json={}).status_code for _ in range(2)]
+        assert 429 in codes
+        assert codes.index(429) >= 2  # the first two (the budget) were not throttled
+        assert codes[-1] == 429  # the shared budget also covers /v1/batches
+    finally:
+        get_settings.cache_clear()
+
+
 def test_create_app_requires_operator_api_key(monkeypatch):
     for k, v in _BASE_ENV.items():
         if k == "OPERATOR_API_KEY":

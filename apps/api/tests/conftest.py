@@ -48,6 +48,19 @@ def counter_value(counter, **labels) -> float:
     return 0.0
 
 
+def gauge_value(gauge) -> float:
+    """Read an unlabeled Gauge's current value via the public collect() API.
+
+    Same collect()-based discipline as counter_value: an unlabeled Gauge exposes
+    exactly one sample whose name equals the family name.
+    """
+    for metric in gauge.collect():
+        for sample in metric.samples:
+            if sample.name == metric.name and sample.labels == {}:
+                return sample.value
+    return 0.0
+
+
 @pytest.fixture(scope="session")
 def database_url() -> str:
     with PostgresContainer(
@@ -88,7 +101,8 @@ async def _truncate_and_dispose(engine: AsyncEngine) -> None:
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "TRUNCATE agent_profile_versions, agent_profiles, admin_audit_log, "
+                    "TRUNCATE call_batch_targets, call_batches, call_schedules, "
+                    "agent_profile_versions, agent_profiles, admin_audit_log, "
                     "admin_users, follow_up_flags, callback_requests, sms_messages, "
                     "calls, dnc_list, elders "
                     "RESTART IDENTITY CASCADE"
