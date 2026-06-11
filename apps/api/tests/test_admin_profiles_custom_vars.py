@@ -150,3 +150,25 @@ def test_save_warns_renders_empty_for_non_phi_custom_in_sms(client, admin_sessio
     assert "{{pet_name}} is not substituted in SMS — it will render as empty text." in warnings
     assert "{{mystery2}} is not substituted in SMS — it will render as empty text." in warnings
     assert not any("{{first_name}}" in w for w in warnings)
+
+
+# --- AgentConfig.policy JSONB round-trip (spec §3.3.1, plan D1) ----
+
+
+def test_policy_jsonb_roundtrip_preserves_hhmm_strings(client, admin_session):
+    # The form.reset contract (spec §3.3.1): the saved draft must hand back
+    # "09:30" exactly — a str, never "09:30:00" — or the admin-ui zod HH:MM
+    # mirror rejects the value on form.reset(profile.draft_config).
+    pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
+    cfg = _draft_config(client, pid)
+    cfg["policy"] = {
+        "quiet_hours_start_local": "09:30",
+        "retry_delay_multiplier": 2.0,
+        "retry_max_attempts": {"busy": 0},
+    }
+    r = client.put(f"/v1/admin/profiles/{pid}/draft", json={"config": cfg})
+    assert r.status_code == 200
+    policy = _draft_config(client, pid)["policy"]
+    assert policy["quiet_hours_start_local"] == "09:30"
+    assert policy["retry_delay_multiplier"] == 2.0
+    assert policy["retry_max_attempts"]["busy"] == 0

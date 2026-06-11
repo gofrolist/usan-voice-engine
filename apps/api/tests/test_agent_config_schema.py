@@ -389,3 +389,80 @@ def test_custom_phi_sms_violations_clean_and_absent_tools():
     # nothing is flagged — the helper only knows the names it is handed.
     tokens = _config_with_sms_bodies("About {{diagnosis}} and {{pet_name}}.")
     assert custom_phi_sms_violations(tokens, frozenset()) == []
+
+
+# --- PolicyConfig / RetryMaxAttempts (per-profile policy, spec §3.3.1 / plan D1) ----
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "valid"),
+    [
+        ("08:59", None, False),  # widens past the statutory 09:00 start
+        (None, "21:01", False),  # widens past the statutory 21:00 end
+        ("12:00", "10:00", False),  # start >= end
+        ("12:00", "12:00", False),  # start == end
+        ("09:30", None, True),  # one-sided start narrowing
+        (None, "20:00", True),  # one-sided end narrowing
+        ("10:15", "18:45", True),  # both sides, minute granularity
+    ],
+)
+def test_policy_config_narrowing_only(start, end, valid):
+    from usan_api.schemas.agent_config import PolicyConfig
+
+    if valid:
+        cfg = PolicyConfig(quiet_hours_start_local=start, quiet_hours_end_local=end)
+        assert cfg.quiet_hours_start_local == start
+        assert cfg.quiet_hours_end_local == end
+    else:
+        with pytest.raises(ValidationError):
+            PolicyConfig(quiet_hours_start_local=start, quiet_hours_end_local=end)
+
+
+@pytest.mark.parametrize("value", ["9:00", "09:60", "24:00", "0900", "09:00:00"])
+def test_policy_config_hhmm_format(value):
+    from usan_api.schemas.agent_config import PolicyConfig
+
+    with pytest.raises(ValidationError):
+        PolicyConfig(quiet_hours_start_local=value)
+    with pytest.raises(ValidationError):
+        PolicyConfig(quiet_hours_end_local=value)
+
+
+def test_policy_time_fields_stay_strings():
+    # JSONB + zod round-trip contract (spec §3.3.1): times stay "HH:MM" strings.
+    # model_dump() (python mode, the save path) would TypeError on datetime.time
+    # at the JSONB write, and mode="json" would round-trip "09:30:00", which the
+    # admin-ui zod HH:MM mirror rejects on form.reset(profile.draft_config).
+    from usan_api.schemas.agent_config import PolicyConfig
+
+    dumped = PolicyConfig(quiet_hours_start_local="09:30").model_dump()
+    assert dumped["quiet_hours_start_local"] == "09:30"
+    assert isinstance(dumped["quiet_hours_start_local"], str)
+
+
+def test_retry_overrides_bounds():
+    from usan_api.schemas.agent_config import PolicyConfig, RetryMaxAttempts
+
+    with pytest.raises(ValidationError):
+        PolicyConfig(retry_delay_multiplier=0.4)
+    with pytest.raises(ValidationError):
+        PolicyConfig(retry_delay_multiplier=4.1)
+    assert PolicyConfig(retry_delay_multiplier=0.5).retry_delay_multiplier == 0.5
+    assert PolicyConfig(retry_delay_multiplier=4.0).retry_delay_multiplier == 4.0
+    for field in ("no_answer", "voicemail_left", "busy", "failed"):
+        with pytest.raises(ValidationError):
+            RetryMaxAttempts(**{field: -1})
+        with pytest.raises(ValidationError):
+            RetryMaxAttempts(**{field: 5})
+        assert getattr(RetryMaxAttempts(**{field: 0}), field) == 0
+        assert getattr(RetryMaxAttempts(**{field: 4}), field) == 4
+
+
+def test_agent_config_policy_optional_default_none():
+    # Forward-compat invariant (the AgentConfig comment block): extends
+    # test_legacy_config_still_deserializes — a prompts-only legacy dict (no
+    # `policy` key) must keep validating, with policy defaulting to None, or
+    # older agent_profile_versions snapshots would 500 on read.
+    legacy = {"prompts": DEFAULT_AGENT_CONFIG.prompts.model_dump()}
+    cfg = AgentConfig.model_validate(legacy)
+    assert cfg.policy is None

@@ -10,6 +10,7 @@ plugin default".
 
 import re
 import uuid
+from datetime import time
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -343,6 +344,98 @@ class SpeechAdvancedConfig(BaseModel):
         return self
 
 
+# --- per-profile policy (Phase A4 spec §3.3.1) ------------------------------
+# Quiet-hours times are STRINGS, full stop — "HH:MM" validated by format regex +
+# narrowing rules, parsed to datetime.time only inside the validator and at
+# consumption (resolve_call_policy). They are never stored as datetime.time on
+# the model: the save path persists model_dump() (python mode) into JSONB, where
+# a time object raises TypeError — and even mode="json" would round-trip as
+# "09:30:00", which the admin-ui zod HH:MM mirror rejects on
+# form.reset(profile.draft_config).
+_HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+# Statutory TCPA bounds (mirrors quiet_hours.QUIET_START_HOUR/QUIET_END_HOUR):
+# policy may only NARROW within [09:00, 21:00) local time, never widen.
+_STATUTORY_START = time(9, 0)
+_STATUTORY_END = time(21, 0)
+
+
+def _parse_hhmm(value: str) -> time:
+    """Parse an already-regex-validated ``"HH:MM"`` string to ``datetime.time``."""
+    hour, minute = value.split(":")
+    return time(int(hour), int(minute))
+
+
+class RetryMaxAttempts(BaseModel):
+    """Per-status retry caps in CHAIN-GLOBAL attempt semantics (spec §3.3.1).
+
+    ``<status> = N`` means "a call ending with this status schedules a retry iff
+    its chain-global attempt number <= N". There are no per-status counters —
+    status can change across a chain (no_answer → busy → no_answer), and the
+    attempt number is the chain's, not the status's. ``0`` disables retries for
+    that status; ``None`` keeps the builtin ladder behavior.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Builtin equivalents below are expressed in the same chain-global semantics
+    # (builtin busy: 1 means "retry a busy only when it was the chain's first
+    # attempt", not "at most one busy retry ever").
+    no_answer: int | None = Field(default=None, ge=0, le=4)  # builtin equivalent: 2
+    voicemail_left: int | None = Field(default=None, ge=0, le=4)  # builtin: 1
+    busy: int | None = Field(default=None, ge=0, le=4)  # builtin: 1
+    failed: int | None = Field(default=None, ge=0, le=4)  # builtin: 1
+
+
+class PolicyConfig(BaseModel):
+    """Optional per-profile quiet-hours narrowing + bounded retry overrides.
+
+    Enforced entirely API-side — re-resolved at every consumption site, never
+    snapshotted onto the Call (spec §3.3.2). The agent's AgentConfig mirror
+    ignores the riding-along key (pydantic default ``extra="ignore"``).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    quiet_hours_start_local: str | None = None  # "HH:MM", must be >= "09:00"
+    quiet_hours_end_local: str | None = None  # "HH:MM", must be <= "21:00"
+    retry_delay_multiplier: float | None = Field(default=None, ge=0.5, le=4.0)
+    retry_max_attempts: RetryMaxAttempts | None = None
+
+    @field_validator("quiet_hours_start_local", "quiet_hours_end_local")
+    @classmethod
+    def _hhmm_format(cls, v: str | None) -> str | None:
+        if v is not None and not _HHMM_RE.fullmatch(v):
+            raise ValueError('must be "HH:MM" (24-hour clock, minute granularity)')
+        return v
+
+    @model_validator(mode="after")
+    def _narrowing_only(self) -> PolicyConfig:
+        # NARROWING ONLY: each side may be set independently (the unset side
+        # stays statutory). next_allowed() does not re-clamp to statutory at
+        # consumption — this validator is the gate (spec §7).
+        start = (
+            _parse_hhmm(self.quiet_hours_start_local)
+            if self.quiet_hours_start_local is not None
+            else _STATUTORY_START
+        )
+        end = (
+            _parse_hhmm(self.quiet_hours_end_local)
+            if self.quiet_hours_end_local is not None
+            else _STATUTORY_END
+        )
+        if start < _STATUTORY_START:
+            raise ValueError("quiet_hours_start_local must be at or after the statutory 09:00")
+        if end > _STATUTORY_END:
+            raise ValueError("quiet_hours_end_local must be at or before the statutory 21:00")
+        if start >= end:
+            raise ValueError(
+                f"quiet_hours_start_local ({start:%H:%M}) must be before "
+                f"quiet_hours_end_local ({end:%H:%M})"
+            )
+        return self
+
+
 # FORWARD-COMPATIBILITY INVARIANT: version snapshots in agent_profile_versions.config
 # are immutable and long-lived, and are re-validated through AgentConfig on every read
 # (ProfileDetail/VersionDetail.from_model). Any NEW field added here MUST be Optional
@@ -364,6 +457,9 @@ class AgentConfig(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     voicemail_detection: VoicemailDetectionConfig = Field(default_factory=VoicemailDetectionConfig)
     speech_advanced: SpeechAdvancedConfig = Field(default_factory=SpeechAdvancedConfig)
+    # Optional-with-default per the forward-compat invariant above: every
+    # published snapshot and older draft (no `policy` key) keeps validating.
+    policy: PolicyConfig | None = None
 
 
 # Defaults below are copied verbatim from the agent's current constants so a new
