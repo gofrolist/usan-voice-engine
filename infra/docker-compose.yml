@@ -240,6 +240,14 @@ services:
       # Recording (Plan 4b): blank disables it; the api signs read URLs for this bucket.
       GCS_BUCKET: ${GCS_BUCKET:-}
       RECORDING_SIGNED_URL_TTL_S: ${RECORDING_SIGNED_URL_TTL_S:-3600}
+      # Outbound event webhooks (spec 2026-06-10). Disjoint namespace from the
+      # INBOUND LiveKit WEBHOOK_MAX_AGE_S above. Dev defaults the delivery flag
+      # ON so POST /v1/webhook-endpoints/{id}/test works in every dev stack; the
+      # prod overlay re-pins it OFF so the deploy ships inert (spec §10.14/§11.1).
+      WEBHOOK_DELIVERY_ENABLED: ${WEBHOOK_DELIVERY_ENABLED:-true}
+      WEBHOOK_DELIVERY_POLL_INTERVAL_S: ${WEBHOOK_DELIVERY_POLL_INTERVAL_S:-10}
+      WEBHOOK_DELIVERY_TIMEOUT_S: ${WEBHOOK_DELIVERY_TIMEOUT_S:-10}
+      WEBHOOK_DELIVERY_CIRCUIT_BREAKER_THRESHOLD: ${WEBHOOK_DELIVERY_CIRCUIT_BREAKER_THRESHOLD:-10}
     # The API is stateless: no on-disk writes outside /tmp, so run the root
     # filesystem read-only and block privilege escalation. /tmp is a tmpfs for
     # any transient scratch (e.g. signed-URL staging).

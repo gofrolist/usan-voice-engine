@@ -8,10 +8,12 @@ from types import SimpleNamespace
 
 import jwt
 from livekit import api
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from usan_api.db.base import CallDirection, CallStatus
+from usan_api.db.models import WebhookDelivery, WebhookEndpoint
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.routers.webhooks import _recording_uri
@@ -69,6 +71,65 @@ def test_livekit_webhook_room_finished_completes_call(client, async_database_url
     assert r.status_code == 200
     follow = client.get(f"/v1/calls/{call_id}", headers=_OP)
     assert follow.json()["status"] == "completed"
+
+
+async def _seed_completed_endpoint(async_database_url):
+    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            db.add(
+                WebhookEndpoint(
+                    url="https://hooks.example.com/sink",
+                    secret="a" * 64,
+                    events=["call.completed"],
+                )
+            )
+            await db.commit()
+    finally:
+        await engine.dispose()
+
+
+async def _completed_deliveries(async_database_url):
+    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            result = await db.execute(
+                select(WebhookDelivery).where(WebhookDelivery.event == "call.completed")
+            )
+            return list(result.scalars().all())
+    finally:
+        await engine.dispose()
+
+
+def test_livekit_webhook_room_finished_double_fire_single_completed_event(
+    client, async_database_url
+):
+    # LiveKit webhook delivery is at-least-once: room_finished can fire twice
+    # for one call. The §2.1 guarded transition makes the second a no-op, so
+    # exactly ONE call.completed outbox row may exist (the headline
+    # double-emit regression, end to end through the wiring).
+    room = "usan-outbound-wh-dup"
+    call_id = asyncio.run(
+        _seed_call(async_database_url, room, status=CallStatus.DIALING, answered=True)
+    )
+    asyncio.run(_seed_completed_endpoint(async_database_url))
+
+    body = _event("room_finished", room)
+    token = _sign(body, "key", "a" * 32)
+    for _ in range(2):
+        r = client.post(
+            "/webhooks/livekit",
+            content=body,
+            headers={"Authorization": token, "Content-Type": "application/webhook+json"},
+        )
+        assert r.status_code == 200
+
+    rows = asyncio.run(_completed_deliveries(async_database_url))
+    assert len(rows) == 1  # exactly one outbox row despite the double fire
+    assert rows[0].payload["data"]["call_id"] == str(call_id)
+    assert rows[0].payload["data"]["status"] == "completed"
 
 
 def test_livekit_webhook_does_not_complete_terminal_call(client, async_database_url):

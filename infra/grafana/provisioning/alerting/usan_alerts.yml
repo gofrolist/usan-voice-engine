@@ -146,6 +146,93 @@ groups:
             gate off the cap is not enforced; silence the alert during
             gate-off operation.
 
+      - uid: usan-webhook-delivery-failed
+        title: Outbound webhook delivery failing
+        condition: C
+        for: 0m
+        # Same rationale as usan-sms-delivery-failed: no-data is normal for a
+        # low-traffic increase() query (fresh deploy, restart, quiet day), never
+        # page on it; evaluation errors must surface.
+        noDataState: OK
+        execErrState: Alerting
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              editorMode: code
+              expr: sum(increase(usan_webhook_deliveries_total{outcome="failed"}[30m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            One or more outbound webhook deliveries exhausted their retry
+            ladder (outcome="failed") in the last 30m. Inspect the endpoint's
+            recent deliveries via GET /v1/webhook-endpoints/{id}/deliveries
+            (status, attempts, response codes, error type names).
+
+      - uid: usan-webhook-endpoint-auto-disabled
+        title: Webhook endpoint auto-disabled by circuit breaker
+        condition: C
+        for: 0m
+        # Same no-data/exec-error rationale as the rules above. This rule is
+        # load-bearing alongside usan-webhook-delivery-failed: a tripped breaker
+        # MUTES the failure alert (disabled endpoints' rows are never claimed, so
+        # they never reach outcome="failed") — the trip itself must page.
+        noDataState: OK
+        execErrState: Alerting
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              editorMode: code
+              expr: sum(increase(usan_webhook_endpoints_auto_disabled_total[30m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            The circuit breaker auto-disabled a webhook endpoint after
+            consecutive delivery failures. Runbook (spec §11.5): inspect
+            GET /v1/webhook-endpoints for disabled_reason='circuit_breaker',
+            review the endpoint's recent deliveries (updated_at = last
+            attempt), fix the receiver, then PATCH enabled=true (resets the
+            failure counter and resumes queued rows that haven't expired).
+
 # Route every USAN alert to a single operator-owned contact point. The receiver
 # below is a PLACEHOLDER: leave `usan-operator` named here and fill its actual
 # address in at deploy time (edit the contactPoints block or use the Grafana UI).

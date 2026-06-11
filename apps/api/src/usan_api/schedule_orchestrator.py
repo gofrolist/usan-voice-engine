@@ -36,7 +36,7 @@ from loguru import logger
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from usan_api import quiet_hours, schedule_windows
+from usan_api import quiet_hours, schedule_windows, webhook_events
 from usan_api.db.base import CallStatus
 from usan_api.db.models import Call, CallBatch, CallBatchTarget, CallSchedule, Elder
 from usan_api.db.session import get_session_factory
@@ -49,6 +49,7 @@ from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import call_schedules as schedules_repo
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
+from usan_api.repositories import webhook_outbox
 from usan_api.settings import Settings
 
 # Bounded per-cycle working set for the batch trigger (house pattern: 500-cap reads).
@@ -581,6 +582,21 @@ async def _complete_drained_batches(
     async with factory() as db:
         drained = await batches_repo.complete_drained_batches(db, now=now)
         stamped = [(batch.id, batch.status) for batch in drained]
+        # batch.completed enqueue — the ONLY emission point for this event
+        # (spec §2.1 table, §6.6): only at drain settlement are completed_at
+        # real and the final_status histogram settled, for BOTH drained
+        # statuses (completed and cancelled). Same transaction as the stamp,
+        # so stamp and event commit or roll back together (transactional
+        # outbox) and the stamp's exit-from-open-set makes re-runs
+        # exactly-once. The cancel endpoint enqueues nothing itself — its
+        # cancel_queued_tips already emits per-call call.completed events
+        # through the guarded mutator.
+        for batch in drained:
+            await webhook_outbox.enqueue_event(
+                db,
+                event="batch.completed",
+                payload=await webhook_events.batch_completed_payload(db, batch),
+            )
         await db.commit()
     for batch_id, status in stamped:
         if status == "completed":

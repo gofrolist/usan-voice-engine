@@ -301,9 +301,15 @@ async def _dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
 
     sip_call_id = getattr(info, "sip_call_id", None)
     async with factory() as db:
-        await calls_repo.mark_answered(db, call_id, sip_call_id=sip_call_id)
+        answered = await calls_repo.mark_answered(db, call_id, sip_call_id=sip_call_id)
         await db.commit()
-    log.info("Outbound call answered; in_progress")
+    if answered is not None:
+        log.info("Outbound call answered; in_progress")
+    else:
+        # The hardened mark_answered no-opped (§2.1): the row already left the
+        # pre-answer states (e.g. a racing room_finished settled it terminal).
+        # Logging "in_progress" here would contradict the DB on triage.
+        log.info("Outbound call answered but row not pre-answer; mark_answered no-op")
 
 
 async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:

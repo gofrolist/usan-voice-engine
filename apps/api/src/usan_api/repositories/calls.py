@@ -1,22 +1,56 @@
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 
 from loguru import logger
-from sqlalchemy import CursorResult, func, or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api import quiet_hours
+from usan_api import quiet_hours, webhook_events
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, CallBatch, CallBatchTarget, Elder
+from usan_api.repositories import webhook_outbox
 from usan_api.retry_policy import next_retry_delay
 from usan_api.schemas.call import RESERVED_KEY_PREFIXES  # single source (spec §2.2 invariant 3)
 
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+# Every status a call can never leave. Guarded mutators re-check against this
+# under the row lock; C4's set_status enqueue gate (non-terminal -> terminal)
+# consumes it too (spec §2.1).
+_TERMINAL_STATUSES = frozenset(
+    {
+        CallStatus.COMPLETED,
+        CallStatus.VOICEMAIL_LEFT,
+        CallStatus.NO_ANSWER,
+        CallStatus.BUSY,
+        CallStatus.FAILED,
+        CallStatus.DNC_BLOCKED,
+        CallStatus.CANCELLED,
+    }
+)
+
+
+async def _enqueue_call_completed(db: AsyncSession, call: Call) -> None:
+    """Fan call.completed into the transactional outbox INSIDE the caller's
+    transaction, after the guarded transition's flush (spec §2.1): business
+    change and event commit or roll back together; the guard's no-op paths
+    never reach this, so one occurrence produces exactly one enqueue."""
+    await webhook_outbox.enqueue_event(
+        db, event="call.completed", payload=await webhook_events.call_completed_payload(db, call)
+    )
+
+
+async def _enqueue_call_started(db: AsyncSession, call: Call) -> None:
+    """call.started twin of _enqueue_call_completed (spec §2.1 table)."""
+    await webhook_outbox.enqueue_event(
+        db, event="call.started", payload=await webhook_events.call_started_payload(db, call)
+    )
 
 
 async def create_call(
@@ -40,6 +74,10 @@ async def create_call(
     db.add(call)
     await db.flush()
     await db.refresh(call)
+    if status is CallStatus.DNC_BLOCKED:
+        # Terminal at birth (spec §2.1): the DNC gate refuses to dial, so this
+        # row never passes through a terminal mutator — emit here or never.
+        await _enqueue_call_completed(db, call)
     return call
 
 
@@ -59,22 +97,35 @@ async def set_status(
     *,
     error: dict[str, Any] | None = None,
 ) -> Call | None:
-    call = await db.get(Call, call_id)
+    call = await db.get(Call, call_id, with_for_update=True)
     if call is None:
         return None
+    # Captured under the row lock, before assignment: the call.completed enqueue
+    # is gated on the non-terminal -> terminal crossing only (spec §2.1), so the
+    # dial-time DNC_BLOCKED and dispatch-failure FAILED call sites emit with zero
+    # call-site edits while terminal -> terminal rewrites enqueue nothing.
+    old_status = call.status
     call.status = status
     if error is not None:
         call.error = error
     await db.flush()
     await db.refresh(call)
+    if old_status not in _TERMINAL_STATUSES and status in _TERMINAL_STATUSES:
+        await _enqueue_call_completed(db, call)
     return call
 
 
 async def mark_answered(
     db: AsyncSession, call_id: uuid.UUID, *, sip_call_id: str | None
 ) -> Call | None:
-    call = await db.get(Call, call_id)
-    if call is None:
+    """Guarded transition to IN_PROGRESS (spec §2.1): the WHOLE write — not just
+    the status — is gated on a pre-answer status under the row lock, so a late
+    answer event can never resurrect a room_finished-completed call back to
+    IN_PROGRESS and pin an in-flight slot (the pre-existing zombie bug). RINGING
+    is never assigned today; kept as dead-state tolerance.
+    """
+    call = await db.get(Call, call_id, with_for_update=True)
+    if call is None or call.status not in (CallStatus.DIALING, CallStatus.RINGING):
         return None
     call.status = CallStatus.IN_PROGRESS
     call.answered_at = _utcnow()
@@ -82,6 +133,7 @@ async def mark_answered(
         call.sip_call_id = sip_call_id
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_started(db, call)
     return call
 
 
@@ -93,8 +145,16 @@ async def mark_dial_failure(
     end_reason: str,
     error: dict[str, Any] | None = None,
 ) -> Call | None:
-    call = await db.get(Call, call_id)
-    if call is None:
+    """Guarded dial-failure transition (spec §2.1): DIALING-only — deliberately
+    narrower than §2.1's "(queued/dialing)" prose, because §10.7 pins "stale
+    mark_dial_failure after a reclaim_stuck_dialing re-queue is a no-op" (a
+    QUEUED match would clobber the fresh re-queued attempt) and every caller
+    (livekit_dispatch's dispatch_and_dial / _dial_and_classify paths) operates
+    on a row it claimed into DIALING. Already-terminal rows return None
+    (callers verified tolerant).
+    """
+    call = await db.get(Call, call_id, with_for_update=True)
+    if call is None or call.status is not CallStatus.DIALING:
         return None
     call.status = status
     call.ended_at = _utcnow()
@@ -103,23 +163,33 @@ async def mark_dial_failure(
         call.error = error
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_completed(db, call)
     return call
 
 
-async def _latest_by_room(db: AsyncSession, livekit_room: str) -> Call | None:
+async def _latest_by_room(
+    db: AsyncSession, livekit_room: str, *, for_update: bool = False
+) -> Call | None:
     # Room names are uuid4 so a collision is astronomically unlikely; take the most
     # recent match rather than scalar_one_or_none(), which would 500 on a duplicate.
-    result = await db.execute(
+    # for_update=True locks the row so a guarded mutator's status check holds (§2.1).
+    stmt = (
         select(Call)
         .where(Call.livekit_room == livekit_room)
         .order_by(Call.created_at.desc())
         .limit(1)
     )
+    if for_update:
+        stmt = stmt.with_for_update()
+    result = await db.execute(stmt)
     return result.scalars().first()
 
 
 async def mark_completed_if_in_progress(db: AsyncSession, livekit_room: str) -> Call | None:
-    call = await _latest_by_room(db, livekit_room)
+    """Guarded transition (spec §2.1): the row lock makes the IN_PROGRESS check
+    atomic, so the loser of a webhook-vs-outcome race re-reads the terminal
+    status and returns None instead of double-transitioning."""
+    call = await _latest_by_room(db, livekit_room, for_update=True)
     if call is None or call.status is not CallStatus.IN_PROGRESS:
         return None
     call.status = CallStatus.COMPLETED
@@ -129,6 +199,7 @@ async def mark_completed_if_in_progress(db: AsyncSession, livekit_room: str) -> 
         call.duration_seconds = int((call.ended_at - call.answered_at).total_seconds())
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_completed(db, call)
     return call
 
 
@@ -164,7 +235,9 @@ async def set_recording_status(db: AsyncSession, livekit_room: str, status: str)
 
 
 async def mark_voicemail_left_if_in_progress(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
-    call = await db.get(Call, call_id)
+    """Guarded transition (spec §2.1): IN_PROGRESS check held under the row lock —
+    the loser of the voicemail-vs-room_finished race returns None."""
+    call = await db.get(Call, call_id, with_for_update=True)
     if call is None or call.status is not CallStatus.IN_PROGRESS:
         return None
     call.status = CallStatus.VOICEMAIL_LEFT
@@ -174,6 +247,7 @@ async def mark_voicemail_left_if_in_progress(db: AsyncSession, call_id: uuid.UUI
         call.duration_seconds = int((call.ended_at - call.answered_at).total_seconds())
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_completed(db, call)
     return call
 
 
@@ -365,6 +439,9 @@ async def create_materialized_root(
     db.add(call)
     await db.flush()
     await db.refresh(call)
+    if status is CallStatus.DNC_BLOCKED:
+        # Terminal at birth, same as create_call's DNC gate (spec §2.1 table).
+        await _enqueue_call_completed(db, call)
     return call
 
 
@@ -372,9 +449,10 @@ async def requeue_for_quiet_hours(
     db: AsyncSession, call_id: uuid.UUID, *, scheduled_at: datetime
 ) -> Call | None:
     """Flip a claimed DIALING row back to QUEUED with a fresh clamp (dial-time
-    quiet-hours re-check, spec §2.3). Guarded on DIALING so it never clobbers an
-    outcome written by a racing webhook."""
-    call = await db.get(Call, call_id)
+    quiet-hours re-check, spec §2.3). Guarded on DIALING UNDER THE ROW LOCK
+    (the §2.1 hardening, same as mark_dial_failure) so it never clobbers — or
+    resurrects — a terminal outcome committed by a racing webhook."""
+    call = await db.get(Call, call_id, with_for_update=True)
     if call is None or call.status is not CallStatus.DIALING:
         return None
     call.status = CallStatus.QUEUED
@@ -413,6 +491,8 @@ async def create_inbound_call(
     db.add(call)
     await db.flush()
     await db.refresh(call)
+    # Inbound calls are answered at birth (spec §2.1 table) — call.started here.
+    await _enqueue_call_started(db, call)
     return call
 
 
@@ -487,10 +567,11 @@ async def complete_call_if_in_progress(
 ) -> Call | None:
     """Mark an in-progress call COMPLETED with a caller-supplied end_reason.
 
-    Gated on IN_PROGRESS so it is idempotent and races the room_finished webhook
-    safely: whichever marks the call COMPLETED first wins, the other no-ops.
+    Gated on IN_PROGRESS under the row lock (spec §2.1) so it is idempotent and
+    races the room_finished webhook safely: whichever marks the call COMPLETED
+    first wins, the other re-reads the terminal status and no-ops.
     """
-    call = await db.get(Call, call_id)
+    call = await db.get(Call, call_id, with_for_update=True)
     if call is None or call.status is not CallStatus.IN_PROGRESS:
         return None
     call.status = CallStatus.COMPLETED
@@ -500,6 +581,7 @@ async def complete_call_if_in_progress(
         call.duration_seconds = int((call.ended_at - call.answered_at).total_seconds())
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_completed(db, call)
     return call
 
 
@@ -508,9 +590,10 @@ async def mark_failed_if_active(
 ) -> Call | None:
     """Transition a still-active call to FAILED. No-op (returns None) if the call
     already reached IN_PROGRESS or any terminal state, so a crash handler never
-    clobbers a committed outcome.
+    clobbers a committed outcome. The check holds under the row lock (spec §2.1),
+    so it cannot race a concurrent mark_dial_failure into a double transition.
     """
-    call = await db.get(Call, call_id)
+    call = await db.get(Call, call_id, with_for_update=True)
     if call is None or call.status not in _ACTIVE_STATUSES:
         return None
     call.status = CallStatus.FAILED
@@ -518,6 +601,7 @@ async def mark_failed_if_active(
     call.end_reason = end_reason
     await db.flush()
     await db.refresh(call)
+    await _enqueue_call_completed(db, call)
     return call
 
 
@@ -554,7 +638,11 @@ async def has_child(db: AsyncSession, call_id: uuid.UUID) -> bool:
 async def cancel_queued_tips(db: AsyncSession, root_call_ids: Sequence[uuid.UUID]) -> int:
     """Guarded UPDATE: each chain's tip ``queued -> cancelled`` (the first writer
     of the CANCELLED enum value). Never touches ``dialing``/``in_progress`` rows —
-    in-flight calls finish naturally (spec §5.6). Returns rows flipped."""
+    in-flight calls finish naturally (spec §5.6). Returns rows flipped (the
+    ``-> int`` signature is kept for both callers, executor note 4); RETURNING
+    feeds one call.completed{status=cancelled} per flipped row into the outbox
+    (spec §2.1), with populate_existing so the tips get_chain_tip already loaded
+    into this session are refreshed rather than served stale."""
     tip_ids: list[uuid.UUID] = []
     for root_call_id in root_call_ids:
         tip = await get_chain_tip(db, root_call_id)
@@ -562,13 +650,15 @@ async def cancel_queued_tips(db: AsyncSession, root_call_ids: Sequence[uuid.UUID
             tip_ids.append(tip.id)
     if not tip_ids:
         return 0
-    result = cast(
-        "CursorResult[Any]",
-        await db.execute(
-            update(Call)
-            .where(Call.id.in_(tip_ids), Call.status == CallStatus.QUEUED)
-            .values(status=CallStatus.CANCELLED)
-        ),
+    result = await db.execute(
+        update(Call)
+        .where(Call.id.in_(tip_ids), Call.status == CallStatus.QUEUED)
+        .values(status=CallStatus.CANCELLED)
+        .returning(Call)
+        .execution_options(populate_existing=True)
     )
+    cancelled = list(result.scalars().all())
+    for call in cancelled:
+        await _enqueue_call_completed(db, call)
     await db.flush()
-    return int(result.rowcount or 0)
+    return len(cancelled)

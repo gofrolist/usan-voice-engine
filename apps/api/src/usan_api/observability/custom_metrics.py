@@ -140,6 +140,41 @@ DIAL_SLOTS_FREE = Gauge(
     "max_concurrent_calls - reserved - in_flight, floor 0. Alert: ==0 for 10m.",
 )
 
+# event: the 5 outbound webhook events + ping ; outcome: delivered|retry_scheduled|
+# failed|ssrf_blocked — a CLOSED set (webhook spec §9): "skipped" (a breaker
+# no-attempt) is an internal poller string, never recorded as a label. Terminal
+# attempts ALWAYS read outcome="failed" — including SSRF blocks — so the
+# delivery-failed alert cannot be muted (§5.3 alert honesty). Named
+# usan_webhook_deliveries to avoid colliding with the INBOUND usan_webhooks
+# counter above. Incremented only after each row's outcome commit.
+#
+# Grafana alert (alerts-as-code, rule uid usan-webhook-delivery-failed):
+#   EXPR sum(increase(usan_webhook_deliveries_total{outcome="failed"}[30m])) > 0
+WEBHOOK_DELIVERIES_TOTAL = Counter(
+    "usan_webhook_deliveries",
+    "Outbound webhook delivery attempts by event and outcome.",
+    labelnames=("event", "outcome"),
+)
+
+# No labels; exactly one increment per breaker trip (the guarded-UPDATE one-shot,
+# webhook spec §5.5), after its commit. A tripped breaker stops the endpoint's
+# rows from ever reaching outcome="failed" — silently muting the failure alert —
+# so the trip itself must page (rule uid usan-webhook-endpoint-auto-disabled):
+#   EXPR sum(increase(usan_webhook_endpoints_auto_disabled_total[30m])) > 0
+WEBHOOK_ENDPOINTS_AUTO_DISABLED_TOTAL = Counter(
+    "usan_webhook_endpoints_auto_disabled",
+    "Webhook endpoints auto-disabled by the circuit breaker.",
+)
+
+# Set EVERY webhook-poller cycle (not hourly), flag-independently — pre-enable
+# observability of flag-off backlogs and breaker-stranded rows (webhook spec
+# §9/§5.1). No labels: per-endpoint labels would be unbounded over time; the
+# per-endpoint pending count surfaces in GET /v1/webhook-endpoints instead.
+WEBHOOK_PENDING_DELIVERIES = Gauge(
+    "usan_webhook_pending_deliveries",
+    "Outbox rows with status='pending' (backlog visibility; set every poller cycle).",
+)
+
 
 def track_tool(tool: str) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
     """Decorate a tool route handler to record usan_tool_calls_total{tool,outcome}.

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from loguru import logger
 from sqlalchemy import func
 from sqlalchemy import select as _select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -127,6 +128,35 @@ async def test_dial_success_marks_in_progress(monkeypatch, session_factory):
     assert call.status is CallStatus.IN_PROGRESS
     assert call.sip_call_id == "SCL_OK"
     fake.room.delete_room.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dial_answered_log_gated_on_mark_answered_noop(monkeypatch, session_factory):
+    # A late answer against an already-terminal row no-ops the hardened
+    # mark_answered (§2.1); the log must not claim "answered; in_progress"
+    # when no transition happened — it would contradict the DB on triage.
+    fake = _fake_api()
+    fake.sip.create_sip_participant.return_value = MagicMock(sip_call_id="SCL_LATE")
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    monkeypatch.setattr(livekit_dispatch, "get_session_factory", lambda: session_factory)
+
+    call_id, _ = await _seed(
+        session_factory, status=CallStatus.COMPLETED, room="usan-outbound-late-answer"
+    )
+
+    records = []
+    handler_id = logger.add(records.append, level=0)
+    try:
+        await livekit_dispatch.dial_and_classify(call_id, _settings())
+    finally:
+        logger.remove(handler_id)
+
+    async with session_factory() as db:
+        call = await calls_repo.get_call(db, call_id)
+    assert call.status is CallStatus.COMPLETED  # the guard held; no zombie
+    messages = [m.record["message"] for m in records]
+    assert "Outbound call answered; in_progress" not in messages
+    assert any("mark_answered no-op" in m for m in messages)  # ids-only breadcrumb
 
 
 @pytest.mark.asyncio

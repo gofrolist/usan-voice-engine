@@ -3,7 +3,9 @@ import uuid
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from usan_api import webhook_events
 from usan_api.db.models import Elder, FollowUpFlag
+from usan_api.repositories import webhook_outbox
 
 # Bound the list read: flags accumulate per call/elder over time. Default cap
 # mirrors the audit/agent-profiles repos (_MAX_LIST_LIMIT=500); newest-first so
@@ -38,6 +40,13 @@ async def create_follow_up_flag(
     db.add(row)
     await db.flush()
     await db.refresh(row)
+    # flag.created joins this same transaction (transactional outbox, spec
+    # §2.1): the caller's existing commit makes flag and event durable
+    # together. Payload deliberately reduced per spec §6.4 — NO elder_id, NO
+    # category, NO reason — even though this row carries all three.
+    await webhook_outbox.enqueue_event(
+        db, event="flag.created", payload=webhook_events.flag_created_payload(row)
+    )
     return row
 
 

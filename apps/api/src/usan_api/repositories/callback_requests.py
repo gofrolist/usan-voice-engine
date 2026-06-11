@@ -4,7 +4,9 @@ from datetime import datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from usan_api import webhook_events
 from usan_api.db.models import CallbackRequest, Elder
+from usan_api.repositories import webhook_outbox
 
 # Bound the list read: callback requests accumulate per call/elder over time.
 # Default cap mirrors the sibling follow_up_flags repo (MAX_FLAGS_LIMIT=500);
@@ -39,6 +41,13 @@ async def create_callback_request(
     db.add(row)
     await db.flush()
     await db.refresh(row)
+    # callback.created joins this same transaction (transactional outbox, spec
+    # §2.1). Payload carries the parsed requested_at only — never
+    # requested_time_text/notes (spec §6.5); elder_id stays (no health content,
+    # the §6.4 line is the health-information x person-identifier pairing).
+    await webhook_outbox.enqueue_event(
+        db, event="callback.created", payload=webhook_events.callback_created_payload(row)
+    )
     return row
 
 
