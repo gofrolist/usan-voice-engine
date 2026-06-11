@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 
 import pytest
 
@@ -67,3 +67,82 @@ def test_next_allowed_eastern_inside_window_unchanged():
 def test_next_allowed_invalid_timezone_raises(bad_tz):
     with pytest.raises(ValueError, match="timezone"):
         next_allowed(datetime(2026, 5, 31, 6, 0, tzinfo=UTC), bad_tz)
+
+
+def test_next_allowed_narrowed_start_minute_granularity():
+    # Policy start 09:30: 09:15 local (UTC) is before the narrowed window -> 09:30.
+    base = datetime(2026, 5, 31, 9, 15, tzinfo=UTC)
+    assert next_allowed(base, "UTC", start_local=time(9, 30)) == datetime(
+        2026, 5, 31, 9, 30, tzinfo=UTC
+    )
+    # Exactly 09:30 is inside (start inclusive) -> unchanged.
+    at_start = datetime(2026, 5, 31, 9, 30, tzinfo=UTC)
+    assert next_allowed(at_start, "UTC", start_local=time(9, 30)) == at_start
+
+
+def test_next_allowed_narrowed_end():
+    # Policy end 17:00 (exclusive): 17:00 local -> next morning at start_local (default 09:00).
+    at_end = datetime(2026, 5, 31, 17, 0, tzinfo=UTC)
+    assert next_allowed(at_end, "UTC", end_local=time(17, 0)) == datetime(
+        2026, 6, 1, 9, 0, tzinfo=UTC
+    )
+    # 16:59 is still inside -> unchanged.
+    inside = datetime(2026, 5, 31, 16, 59, tzinfo=UTC)
+    assert next_allowed(inside, "UTC", end_local=time(17, 0)) == inside
+
+
+def test_next_allowed_narrowed_window_dst_spring_forward():
+    # 2026-03-08 is US spring-forward day: 02:00 EST jumps to 03:00 EDT.
+    # 06:00 UTC == 01:00 EST (pre-transition, before the window); clamping to a
+    # narrowed start of 10:30 must use the POST-transition EDT offset (UTC-4):
+    # 10:30 EDT == 14:30 UTC. Pins the zoneinfo lazy-offset-recompute behavior.
+    base = datetime(2026, 3, 8, 6, 0, tzinfo=UTC)
+    assert next_allowed(base, "America/New_York", start_local=time(10, 30)) == datetime(
+        2026, 3, 8, 14, 30, tzinfo=UTC
+    )
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        datetime(2026, 5, 31, 6, 0, tzinfo=UTC),  # before window
+        datetime(2026, 5, 31, 9, 0, tzinfo=UTC),  # at start
+        datetime(2026, 5, 31, 13, 0, tzinfo=UTC),  # inside
+        datetime(2026, 5, 31, 20, 59, tzinfo=UTC),  # last inside minute
+        datetime(2026, 5, 31, 21, 0, tzinfo=UTC),  # at end
+        datetime(2026, 5, 31, 23, 0, tzinfo=UTC),  # after window
+        datetime(2026, 3, 9, 6, 0, tzinfo=UTC),  # EDT pre-window
+        datetime(2026, 11, 2, 6, 0, tzinfo=UTC),  # EST pre-window
+    ],
+)
+@pytest.mark.parametrize("tz", ["UTC", "America/New_York"])
+def test_next_allowed_defaults_equal_statutory(base, tz):
+    # Zero-diff pin: explicit statutory kwargs reproduce the no-kwargs behavior exactly.
+    assert next_allowed(base, tz) == next_allowed(base, tz, start_local=time(9), end_local=time(21))
+
+
+def test_next_allowed_reclamps_out_of_statutory_bounds():
+    # Defense-in-depth (matching effective_window's statutory max/min):
+    # PolicyConfig is the validation gate, but a buggy caller passing
+    # wider-than-statutory bounds must never produce a pre-09:00 or
+    # post-21:00 dial — the function re-clamps to [09:00, 21:00) itself.
+    before = datetime(2026, 5, 31, 6, 0, tzinfo=UTC)
+    assert next_allowed(before, "UTC", start_local=time(8, 0)) == datetime(
+        2026, 5, 31, 9, 0, tzinfo=UTC
+    )
+    late = datetime(2026, 5, 31, 21, 30, tzinfo=UTC)
+    assert next_allowed(late, "UTC", end_local=time(22, 0)) == datetime(
+        2026, 6, 1, 9, 0, tzinfo=UTC
+    )
+
+
+@pytest.mark.parametrize("bad_tz", ["Not/AZone", "", "Mars/Phobos"])
+def test_unknown_timezone_still_raises_with_kwargs(bad_tz):
+    # Fail-CLOSED contract unchanged by the keyword generalization.
+    with pytest.raises(ValueError, match="timezone"):
+        next_allowed(
+            datetime(2026, 5, 31, 6, 0, tzinfo=UTC),
+            bad_tz,
+            start_local=time(10, 0),
+            end_local=time(18, 0),
+        )

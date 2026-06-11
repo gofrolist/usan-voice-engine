@@ -16,7 +16,8 @@ export type SectionKey =
   | "timing"
   | "tools"
   | "voicemail_detection"
-  | "speech_advanced";
+  | "speech_advanced"
+  | "policy";
 
 export const SECTION_LABELS: Record<SectionKey, string> = {
   prompts: "Prompts",
@@ -27,6 +28,7 @@ export const SECTION_LABELS: Record<SectionKey, string> = {
   tools: "Tools",
   voicemail_detection: "Voicemail",
   speech_advanced: "Speech (Advanced)",
+  policy: "Policy",
 };
 
 export const fieldMeta: Record<string, FieldMeta> = {
@@ -146,5 +148,40 @@ export const fieldMeta: Record<string, FieldMeta> = {
     label: "Min interruption words",
     help: "0–20. Blank = plugin default.",
     advanced: true,
+  },
+
+  // Policy (per-profile quiet-hours narrowing + retry overrides — enforced
+  // server-side at every consumption site; this UI only edits the config).
+  "policy.quiet_hours_start_local": {
+    label: "Quiet hours start (local)",
+    help: "Earliest local dial time, HH:MM. May only narrow within the statutory 09:00–21:00 window. Blank = statutory 09:00.",
+  },
+  "policy.quiet_hours_end_local": {
+    label: "Quiet hours end (local)",
+    help: "Latest local dial time, HH:MM. May only narrow within the statutory 09:00–21:00 window. Blank = statutory 21:00.",
+  },
+  "policy.retry_delay_multiplier": {
+    label: "Retry delay multiplier",
+    help: "Scales every retry-ladder delay uniformly. 0.5–4.0. Blank = ×1.0.",
+  },
+  "policy.retry_max_attempts": {
+    label: "Retry max attempts",
+    help: "Per-status caps on the chain-global attempt number: a call ending with a status retries only while the chain's attempt number is at or below its cap — there are no per-status counters. 0 disables retries for that status; blank keeps the builtin. Attempts beyond the built-in ladder reuse the final rung's delay.",
+  },
+  "policy.retry_max_attempts.no_answer": {
+    label: "No answer",
+    help: "Chain-global attempt cap for no-answer outcomes. 0–4. Blank = builtin (2).",
+  },
+  "policy.retry_max_attempts.voicemail_left": {
+    label: "Voicemail left",
+    help: "Chain-global attempt cap for voicemail outcomes. 0–4. Blank = builtin (1).",
+  },
+  "policy.retry_max_attempts.busy": {
+    label: "Busy",
+    help: "Chain-global attempt cap for busy outcomes. 0–4. Blank = builtin (1).",
+  },
+  "policy.retry_max_attempts.failed": {
+    label: "Failed",
+    help: "Chain-global attempt cap for failed outcomes. 0–4. Blank = builtin (1).",
   },
 };

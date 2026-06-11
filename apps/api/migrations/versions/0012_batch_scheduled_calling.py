@@ -110,7 +110,7 @@ def upgrade() -> None:
             dynamic_vars     JSONB NOT NULL DEFAULT '{}',
             profile_override UUID REFERENCES agent_profiles(id) ON DELETE SET NULL,
             status           TEXT NOT NULL DEFAULT 'pending',
-            -- skip_reason: elder_deleted | invalid_timezone | key_conflict | daily_cap
+            -- skip_reason: elder_deleted | invalid_timezone | key_conflict | daily_cap | window
             skip_reason      TEXT,
             call_id          UUID REFERENCES calls(id) ON DELETE SET NULL,  -- root attempt
             final_status     TEXT,           -- terminal CallStatus of the LAST attempt

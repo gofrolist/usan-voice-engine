@@ -105,7 +105,9 @@ def test_metric_objects_and_bounded_labels():
         assert exposed in body
 
     # The module documents the structurally-impossible label combos (spec §7):
-    # skipped_elder_deleted x schedule, skipped_window/rescheduled x batch.
+    # skipped_elder_deleted x schedule, rescheduled x batch — and that
+    # skipped_window x batch IS emitted since the per-profile policy unlock
+    # (policy ∩ window = ∅, small-unlocks spec §3.3.3 rule 2).
     doc = custom_metrics.__doc__ or ""
     assert "skipped_elder_deleted" in doc
     assert "skipped_window" in doc

@@ -82,7 +82,9 @@ def test_assign_profile_audit_detail_has_no_phi(client, admin_session, async_dat
     rows = client.get("/v1/admin/audit?action=elder.assign_profile").json()
     entry = next(e for e in rows if e["entity_id"] == eid)
     assert entry["detail"] == {"agent_profile_id": pid}
-    blob = (str(entry["detail"]) + str(entry["entity_type"])).lower()
+    # Strip the (already exactly-asserted) profile UUID before the substring checks:
+    # "ada"/"9999" are valid hex, so a random UUID can contain them (observed flake).
+    blob = (str(entry["detail"]).replace(pid, "") + str(entry["entity_type"])).lower()
     assert "ada" not in blob
     assert "lovelace" not in blob
     assert "9999" not in blob

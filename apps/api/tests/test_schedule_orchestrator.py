@@ -25,9 +25,12 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import counter_value
 from usan_api import quiet_hours, schedule_orchestrator, schedule_windows
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, CallBatch, CallBatchTarget, CallSchedule, Elder
+from usan_api.observability.custom_metrics import MATERIALIZED_CALLS_TOTAL
+from usan_api.repositories import agent_profiles as profiles_repo
 from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import call_schedules as schedules_repo
 from usan_api.repositories import dnc as dnc_repo
@@ -75,10 +78,35 @@ def _settings(**overrides) -> Settings:
     return Settings(**base)
 
 
-async def _seed_elder(factory, *, timezone: str = "America/New_York") -> Elder:
+# Sentinel: "no profile at all" — distinct from None, which publishes a profile
+# WITHOUT a `policy` section (resolves, statutory by whole-profile precedence).
+_NO_PROFILE = object()
+
+
+async def _publish_policy_profile(db, *, policy=None):
+    """Create a profile, optionally set a `policy` section, publish it; returns the id."""
+    profile = await profiles_repo.create_profile(
+        db, name=f"policy-{uuid.uuid4().hex}", description=None, actor_email="t@usan.test"
+    )
+    if policy is not None:
+        cfg = dict(profile.draft_config)
+        cfg["policy"] = policy
+        await profiles_repo.update_draft(
+            db, profile.id, config=cfg, description=None, actor_email="t@usan.test"
+        )
+    await profiles_repo.publish(db, profile.id, note=None, actor_email="t@usan.test")
+    return profile.id
+
+
+async def _seed_elder(factory, *, timezone: str = "America/New_York", policy=_NO_PROFILE) -> Elder:
+    """One elder; ``policy``: ``_NO_PROFILE`` leaves them profile-less, ``None``
+    assigns a published profile with no ``policy`` section, a dict publishes
+    that policy and assigns it (the test_dispatch_and_dial.py discipline)."""
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
         elder = await elders_repo.create_elder(db, name="S", phone_e164=phone, timezone=timezone)
+        if policy is not _NO_PROFILE:
+            elder.agent_profile_id = await _publish_policy_profile(db, policy=policy)
         await db.commit()
     return elder
 
@@ -91,6 +119,7 @@ async def _seed_schedule(
     window_start: time = time(9, 0),
     window_end: time = time(17, 0),
     days_of_week: int = 127,
+    profile_override: uuid.UUID | None = None,
 ) -> uuid.UUID:
     async with factory() as db:
         row = await schedules_repo.create_schedule(
@@ -101,7 +130,7 @@ async def _seed_schedule(
             days_of_week=days_of_week,
             enabled=True,
             dynamic_vars={},
-            profile_override=None,
+            profile_override=profile_override,
             next_run_at=next_run_at,
         )
         await db.commit()
@@ -497,6 +526,7 @@ async def _seed_running_batch(
     window_start: time | None = None,
     window_end: time | None = None,
     days_of_week: int | None = None,
+    profile_override: uuid.UUID | None = None,
 ) -> uuid.UUID:
     """One batch with a pending target per elder, forced straight to ``status``."""
     async with factory() as db:
@@ -510,7 +540,7 @@ async def _seed_running_batch(
             window_end_local=window_end,
             days_of_week=days_of_week,
             max_concurrency=None,
-            profile_override=None,
+            profile_override=profile_override,
             targets=[BatchTargetIn(elder_id=eid) for eid in elder_ids],
         )
         batch.status = status
@@ -952,3 +982,273 @@ async def test_completion_stamps_running_and_drained_cancelled(session_factory):
     assert (await _get_batch(session_factory, c_batch)).completed_at == NOW
     async with session_factory() as db:
         assert await batches_repo.open_batches(db, limit=10) == []
+
+
+# --- D8: policy × window composition at both materialization clamps (§3.3.3) ---
+
+
+async def test_batch_target_policy_window_empty_skips_observably(session_factory):
+    # §3.3.3 rule 2 (batch path): policy start 11:00 ∩ batch window 09:00-10:00
+    # = ∅ -> the target is skipped observably (reason="window") — never
+    # scheduled outside the window, never silently dropped, no call row. The
+    # source="batch" x result="skipped_window" emission is the new bounded
+    # label value (the custom_metrics docstring's old impossibility claim).
+    elder = await _seed_elder(session_factory, policy={"quiet_hours_start_local": "11:00"})
+    batch_id = await _seed_running_batch(
+        session_factory,
+        elder_ids=[elder.id],
+        window_start=time(9, 0),
+        window_end=time(10, 0),
+        days_of_week=127,
+    )
+    before = counter_value(MATERIALIZED_CALLS_TOTAL, source="batch", result="skipped_window")
+
+    warnings: list[str] = []
+    handler_id = logger.add(lambda m: warnings.append(m.record["message"]), level="WARNING")
+    try:
+        counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=NOW)
+    finally:
+        logger.remove(handler_id)
+
+    assert counts["batch_targets"] == 1
+    targets = await _targets(session_factory, batch_id)
+    assert (targets[0].status, targets[0].skip_reason) == ("skipped", "window")
+    assert targets[0].call_id is None
+    assert await _calls(session_factory) == []
+    after = counter_value(MATERIALIZED_CALLS_TOTAL, source="batch", result="skipped_window")
+    assert after == before + 1
+    assert warnings  # skips log at WARNING, ids only (spec §7)
+
+
+async def test_batch_target_dial_pushed_to_policy_start_inside_window(session_factory):
+    # §3.3.3 rule 1 (batch path): policy start 11:00 inside a 09:00-18:00 batch
+    # window at 09:30 local — the dial lands AT the policy start (11:00 EDT =
+    # 15:00Z), never inside the policy-forbidden [09:00, 11:00) zone.
+    now = datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT
+    elder = await _seed_elder(session_factory, policy={"quiet_hours_start_local": "11:00"})
+    batch_id = await _seed_running_batch(
+        session_factory,
+        elder_ids=[elder.id],
+        window_start=time(9, 0),
+        window_end=time(18, 0),
+        days_of_week=127,
+    )
+
+    counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
+
+    assert counts["batch_targets"] == 1
+    targets = await _targets(session_factory, batch_id)
+    assert targets[0].status == "materialized"
+    assert targets[0].call_id is not None
+    call = await _get_call(session_factory, targets[0].call_id)
+    assert call.scheduled_at == datetime(2026, 6, 10, 15, 0, tzinfo=UTC)  # 11:00 EDT
+
+
+async def test_schedule_occurrence_policy_window_empty_skips(session_factory):
+    # §3.3.3 rule 2 (occurrence path): schedule window 09:00-10:00, policy start
+    # 11:00, now 09:15 local on a masked weekday -> skipped_window, no call row,
+    # and next_run_at advanced POLICY-FREE (cadence never sees policy bounds).
+    now = datetime(2026, 6, 10, 13, 15, tzinfo=UTC)  # 09:15 EDT, Wednesday
+    elder = await _seed_elder(session_factory, policy={"quiet_hours_start_local": "11:00"})
+    sid = await _seed_schedule(
+        session_factory,
+        elder.id,
+        next_run_at=now - timedelta(minutes=5),
+        window_start=time(9, 0),
+        window_end=time(10, 0),
+    )
+
+    warnings: list[str] = []
+    handler_id = logger.add(lambda m: warnings.append(m.record["message"]), level="WARNING")
+    try:
+        counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
+    finally:
+        logger.remove(handler_id)
+
+    assert counts["schedules"] == 1
+    assert await _calls(session_factory) == []
+    schedule = await _get_schedule(session_factory, sid)
+    assert schedule.last_result == "skipped_window"
+    assert schedule.last_materialized_date is None
+    # Policy-free cadence: Thursday's STATUTORY window start, 09:00 EDT = 13:00Z.
+    assert schedule.next_run_at == datetime(2026, 6, 11, 13, 0, tzinfo=UTC)
+    assert warnings
+
+
+async def test_schedule_occurrence_policy_end_clamp_past_skips(session_factory):
+    # §3.3.3 rule 3 (clamp-before-skip): window 09:00-12:00 with policy END
+    # 10:00. Companion at 09:45 local: inside the effective window -> created at
+    # now; next_run_at advances policy-free.
+    early = datetime(2026, 6, 10, 13, 45, tzinfo=UTC)  # 09:45 EDT
+    elder_a = await _seed_elder(session_factory, policy={"quiet_hours_end_local": "10:00"})
+    sid_a = await _seed_schedule(
+        session_factory,
+        elder_a.id,
+        next_run_at=early - timedelta(minutes=5),
+        window_start=time(9, 0),
+        window_end=time(12, 0),
+    )
+    counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=early)
+    assert counts["schedules"] == 1
+    calls = await _calls(session_factory)
+    assert len(calls) == 1
+    assert calls[0].scheduled_at == early
+    sched_a = await _get_schedule(session_factory, sid_a)
+    assert sched_a.last_result == "created"
+    assert sched_a.next_run_at == datetime(2026, 6, 11, 13, 0, tzinfo=UTC)  # policy-free
+
+    # At 10:30 local the STATUTORY window (until 12:00) is still open, but the
+    # policy end (10:00) has passed: the skip keys on the EFFECTIVE end — a
+    # clamp past it becomes skipped_window, never a late dial.
+    late = datetime(2026, 6, 10, 14, 30, tzinfo=UTC)  # 10:30 EDT
+    elder_b = await _seed_elder(session_factory, policy={"quiet_hours_end_local": "10:00"})
+    sid_b = await _seed_schedule(
+        session_factory,
+        elder_b.id,
+        next_run_at=late - timedelta(minutes=5),
+        window_start=time(9, 0),
+        window_end=time(12, 0),
+    )
+    counts2 = await schedule_orchestrator.poll_once(session_factory, _settings(), now=late)
+    assert counts2["schedules"] == 1
+    assert len(await _calls(session_factory)) == 1  # no second call minted
+    sched_b = await _get_schedule(session_factory, sid_b)
+    assert sched_b.last_result == "skipped_window"
+    assert sched_b.next_run_at == datetime(2026, 6, 11, 13, 0, tzinfo=UTC)  # policy-free
+
+
+async def test_schedule_occurrence_policy_push_no_reschedule_loop(session_factory):
+    # The re-claim-loop pin (plan executor note 5): claimed at its STATUTORY
+    # next_run_at (09:00) under policy start 09:30. The staleness check keys on
+    # the statutory window only, so the claim materializes exactly ONE call
+    # clamped to the policy start (09:30 EDT = 13:30Z) and records `created` —
+    # a naive policy-narrowed start_utc would take the `rescheduled` branch
+    # with next_run_at(now) == now and re-claim the row every cycle until 09:30.
+    now = datetime(2026, 6, 10, 13, 0, tzinfo=UTC)  # exactly 09:00 EDT
+    elder = await _seed_elder(session_factory, policy={"quiet_hours_start_local": "09:30"})
+    sid = await _seed_schedule(
+        session_factory,
+        elder.id,
+        next_run_at=now,
+        window_start=time(9, 0),
+        window_end=time(12, 0),
+    )
+
+    counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
+
+    assert counts["schedules"] == 1
+    calls = await _calls(session_factory)
+    assert len(calls) == 1
+    assert calls[0].scheduled_at == datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT
+    schedule = await _get_schedule(session_factory, sid)
+    assert schedule.last_result == "created"  # NOT "rescheduled"
+    assert schedule.next_run_at == datetime(2026, 6, 11, 13, 0, tzinfo=UTC)
+
+    # No re-claim loop: an immediate re-poll finds nothing due.
+    counts2 = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
+    assert counts2["schedules"] == 0
+    assert len(await _calls(session_factory)) == 1
+
+
+async def test_windowless_batch_target_clamps_to_policy_start(session_factory):
+    # Windowless batch + elder-profile policy: with no batch window there is no
+    # next_run_at composition at all — the dial time is the bare policy-aware
+    # next_allowed clamp, so a 09:30 EDT poll under policy start 11:00 schedules
+    # the target at 11:00 EDT (15:00Z), never at now.
+    now = datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT, Wednesday
+    elder = await _seed_elder(session_factory, policy={"quiet_hours_start_local": "11:00"})
+    batch_id = await _seed_running_batch(session_factory, elder_ids=[elder.id])  # no window
+
+    counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
+
+    assert counts["batch_targets"] == 1
+    targets = await _targets(session_factory, batch_id)
+    assert targets[0].status == "materialized"
+    assert targets[0].call_id is not None
+    call = await _get_call(session_factory, targets[0].call_id)
+    assert call.status is CallStatus.QUEUED
+    assert call.scheduled_at == datetime(2026, 6, 10, 15, 0, tzinfo=UTC)  # 11:00 EDT
+
+
+async def test_schedule_profile_override_policy_clamps_materialized_call(session_factory):
+    # profile_override threading pin (§3.3.2): the SCHEDULE's override carries
+    # the narrowing (start 11:00) while the elder's assigned profile resolves
+    # but has NO policy section. If only elder_profile_id were threaded, the
+    # whole-profile walk would yield statutory and the call would dial at now
+    # (09:30 EDT, inside [09:00, 17:00)); the override must win — the
+    # materialized call clamps to the override's window start (11:00 EDT).
+    now = datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT, Wednesday
+    elder = await _seed_elder(session_factory, policy=None)  # published, no policy key
+    async with session_factory() as db:
+        override_pid = await _publish_policy_profile(
+            db, policy={"quiet_hours_start_local": "11:00"}
+        )
+        await db.commit()
+    sid = await _seed_schedule(
+        session_factory,
+        elder.id,
+        next_run_at=now - timedelta(minutes=5),
+        profile_override=override_pid,
+    )
+
+    counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
+
+    assert counts["schedules"] == 1
+    calls = await _calls(session_factory)
+    assert len(calls) == 1
+    assert calls[0].scheduled_at == datetime(2026, 6, 10, 15, 0, tzinfo=UTC)  # 11:00 EDT
+    assert calls[0].profile_override == override_pid
+    schedule = await _get_schedule(session_factory, sid)
+    assert schedule.last_result == "created"
+
+
+async def test_batch_profile_override_policy_clamps_materialized_call(session_factory):
+    # Same threading pin for the batch path: the BATCH-level override carries
+    # the narrowing while the elder's profile has no policy section; the target
+    # dial is pushed to the override's window start, never dialed at now.
+    now = datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT, Wednesday
+    elder = await _seed_elder(session_factory, policy=None)  # published, no policy key
+    async with session_factory() as db:
+        override_pid = await _publish_policy_profile(
+            db, policy={"quiet_hours_start_local": "11:00"}
+        )
+        await db.commit()
+    batch_id = await _seed_running_batch(
+        session_factory,
+        elder_ids=[elder.id],
+        window_start=time(9, 0),
+        window_end=time(18, 0),
+        days_of_week=127,
+        profile_override=override_pid,
+    )
+
+    counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
+
+    assert counts["batch_targets"] == 1
+    targets = await _targets(session_factory, batch_id)
+    assert targets[0].status == "materialized"
+    assert targets[0].call_id is not None
+    call = await _get_call(session_factory, targets[0].call_id)
+    assert call.scheduled_at == datetime(2026, 6, 10, 15, 0, tzinfo=UTC)  # 11:00 EDT
+    assert call.profile_override == override_pid
+
+
+async def test_policy_free_profiles_orchestrate_unchanged(session_factory):
+    # Ship-inert pin (spec §9): a resolving profile WITHOUT a `policy` section
+    # reproduces the pre-policy happy path byte-for-byte (statutory defaults).
+    elder = await _seed_elder(session_factory, policy=None)  # published, no policy key
+    sid = await _seed_schedule(session_factory, elder.id, next_run_at=NOW - timedelta(hours=1))
+
+    counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=NOW)
+
+    assert counts["schedules"] == 1
+    calls = await _calls(session_factory)
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.status is CallStatus.QUEUED
+    assert call.idempotency_key == f"sched:{sid}:{TODAY.isoformat()}"
+    assert call.scheduled_at == quiet_hours.next_allowed(NOW, "America/New_York")
+    schedule = await _get_schedule(session_factory, sid)
+    assert schedule.last_result == "created"
+    assert schedule.last_materialized_date == TODAY
+    assert schedule.next_run_at == NEXT_DAY_START

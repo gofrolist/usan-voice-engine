@@ -21,6 +21,8 @@ const GROUPS: NavGroup[] = [
     items: [
       { to: "/elders", label: "Elders", adminOnly: true },
       { to: "/defaults", label: "Defaults" },
+      // List view is all-roles (mutations are ADMIN-gated inside the page).
+      { to: "/custom-variables", label: "Variables" },
     ],
   },
   {

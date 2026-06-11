@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from usan_api import quiet_hours, webhook_events
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, CallBatch, CallBatchTarget, Elder
-from usan_api.repositories import webhook_outbox
-from usan_api.retry_policy import next_retry_delay
+from usan_api.repositories import agent_profiles, webhook_outbox
+from usan_api.retry_policy import MAX_CHAIN_ATTEMPTS, next_retry_delay
 from usan_api.schemas.call import RESERVED_KEY_PREFIXES  # single source (spec §2.2 invariant 3)
 
 
@@ -62,6 +62,7 @@ async def create_call(
     idempotency_key: str | None = None,
     livekit_room: str | None = None,
     dynamic_vars: dict[str, Any] | None = None,
+    profile_override: uuid.UUID | None = None,
 ) -> Call:
     call = Call(
         elder_id=elder_id,
@@ -70,6 +71,7 @@ async def create_call(
         idempotency_key=idempotency_key,
         livekit_room=livekit_room,
         dynamic_vars=dynamic_vars or {},
+        profile_override=profile_override,
     )
     db.add(call)
     await db.flush()
@@ -263,14 +265,36 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
     parent = await db.get(Call, call_id)
     if parent is None or parent.elder_id is None:
         return None
-    delay = next_retry_delay(parent.status, parent.attempt)
-    if delay is None:
-        return None
     elder = await db.get(Elder, parent.elder_id)
     if elder is None:
         return None
+    # Policy is re-resolved at EVERY consumption site, never snapshotted onto
+    # the Call (TCPA dial-time truth, spec §3.3.2) — a compliance-tightening
+    # publish must bind retries of already-terminal parents. The resolve needs
+    # elder.agent_profile_id, so the delay computation moved after the elder
+    # load; the early-return order is otherwise preserved (parent/elder missing
+    # -> None, then delay-None -> None, then tz clamp, then batch-root walk).
+    policy = await agent_profiles.resolve_call_policy(
+        db,
+        profile_override=parent.profile_override,
+        elder_profile_id=elder.agent_profile_id,
+        direction="outbound",
+    )
+    delay = next_retry_delay(
+        parent.status,
+        parent.attempt,
+        max_attempts=policy.max_attempts_for(parent.status),
+        delay_multiplier=policy.delay_multiplier,
+    )
+    if delay is None:
+        return None
     try:
-        scheduled_at = quiet_hours.next_allowed(_utcnow() + delay, elder.timezone)
+        scheduled_at = quiet_hours.next_allowed(
+            _utcnow() + delay,
+            elder.timezone,
+            start_local=policy.start_local,
+            end_local=policy.end_local,
+        )
     except ValueError:
         logger.bind(call_id=str(call_id), timezone=elder.timezone).error(
             "Retry not scheduled: elder timezone is not a valid IANA zone"
@@ -278,11 +302,16 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
         return None
 
     # Batch-cancellation guard (spec §5.6): walk parent_call_id to the chain root
-    # (<=3 hops); if the root is batch-owned and its batch is cancelled, never create
-    # a child — in the SAME commit as the parent's terminal transition, so the
-    # scheduler-cycle sweep is only a backstop for the cancel-vs-transition race.
+    # (<=_MAX_CHAIN_HOPS hops); if the root is batch-owned and its batch is cancelled,
+    # never create a child — in the SAME commit as the parent's terminal transition,
+    # so the scheduler-cycle sweep is only a backstop for the cancel-vs-transition
+    # race. Deriving this bound is consistency, not a bug fix: under le=4 the deepest
+    # parent that can still schedule a retry is attempt 4 = 3 hops from root, which
+    # range(3) already reached (spec §3.3.1 overstates this site); the load-bearing
+    # bounds are get_chain_tip/cancel_queued_tips, and deriving all three from
+    # MAX_CHAIN_ATTEMPTS keeps them from drifting if the le=4 ceiling ever rises.
     root = parent
-    for _ in range(3):
+    for _ in range(_MAX_CHAIN_HOPS):
         if root.parent_call_id is None:
             break
         nxt = await db.get(Call, root.parent_call_id)
@@ -605,9 +634,12 @@ async def mark_failed_if_active(
     return call
 
 
-# Retry ladders top out at 3 attempts (retry_policy.py), so a chain is root + 2
-# children; one extra hop of headroom keeps the walk bounded, never load-bearing.
-_MAX_CHAIN_HOPS = 3
+# A chain is at most MAX_CHAIN_ATTEMPTS calls — root + 4 retries, the
+# RetryMaxAttempts le=4 ceiling (spec §3.3.1) — so the deepest tip sits
+# MAX_CHAIN_ATTEMPTS - 1 hops from its root. Derived, never a literal: a bound
+# that lags the ceiling makes a depth-4 tip invisible to get_chain_tip and
+# uncancellable by cancel_queued_tips (the chain-tip escape).
+_MAX_CHAIN_HOPS = MAX_CHAIN_ATTEMPTS - 1
 
 
 async def get_chain_tip(db: AsyncSession, root_call_id: uuid.UUID) -> Call | None:

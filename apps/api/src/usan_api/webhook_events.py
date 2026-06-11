@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.models import Call, CallbackRequest, CallBatch, CallBatchTarget, FollowUpFlag
 from usan_api.repositories import call_batches
+from usan_api.retry_policy import MAX_CHAIN_ATTEMPTS
 from usan_api.schemas.call import CallOrigin, parse_origin
 
 # Closed enum of subscribable events — the single source for schema validation.
@@ -39,11 +40,13 @@ WEBHOOK_EVENTS = (
     "batch.completed",
 )
 
-# Mirrors repositories/calls.py: retry ladders top out at 3 attempts, so a chain
-# is root + 2 children; one extra hop of headroom keeps the walk bounded. Local
-# copy — calls.py imports this module for enqueue, so importing it back would
-# create a cycle.
-_MAX_CHAIN_HOPS = 3
+# DERIVED from the chain-length single source (spec §3.3.1), like
+# repositories/calls.py: a chain is root + (MAX_CHAIN_ATTEMPTS - 1) retries, so
+# the deepest tip sits MAX_CHAIN_ATTEMPTS - 1 hops from its root. A literal that
+# lags the ceiling loses origin attribution at policy max depth — the walk stops
+# one hop short of the root, parses a retry child's NULL idempotency_key, and
+# emits origin: null. (retry_policy is import-cycle-safe here; calls.py is not.)
+_MAX_CHAIN_HOPS = MAX_CHAIN_ATTEMPTS - 1
 
 
 def _utcnow() -> datetime:
@@ -142,8 +145,8 @@ def _envelope(event: str, data: BaseModel) -> dict[str, Any]:
 
 
 async def chain_root_origin(db: AsyncSession, call: Call) -> CallOrigin | None:
-    """Walk ``parent_call_id`` to the chain root (<= ``_MAX_CHAIN_HOPS``, the
-    ``schedule_retry`` bound; each hop a single indexed probe), then parse the
+    """Walk ``parent_call_id`` to the chain root (<= ``_MAX_CHAIN_HOPS``, derived
+    from ``MAX_CHAIN_ATTEMPTS``; each hop a single indexed probe), then parse the
     ROOT's ``idempotency_key`` — origin describes the chain's origin on every
     attempt (spec §6.1). ``None`` for operator one-off and inbound calls."""
     root = call

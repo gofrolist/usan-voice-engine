@@ -1,6 +1,6 @@
 // apps/admin-ui/src/test/fieldMeta.test.ts
 import { describe, expect, it } from "vitest";
-import { fieldMeta } from "../config/fieldMeta";
+import { fieldMeta, SECTION_LABELS } from "../config/fieldMeta";
 
 describe("fieldMeta prompt help text", () => {
   it("mentions the insert-variable palette on the greeting", () => {
@@ -53,5 +53,34 @@ describe("fieldMeta tools.sms", () => {
     expect(meta!.label.toLowerCase()).toContain("sms");
     expect(meta!.help.toLowerCase()).toMatch(/template/);
     expect(meta!.help.toLowerCase()).toMatch(/non-phi|protected health|phi/);
+  });
+});
+
+describe("fieldMeta policy section", () => {
+  it('registers "policy" in SECTION_LABELS', () => {
+    expect(SECTION_LABELS.policy).toBe("Policy");
+  });
+
+  it("carries entries for every policy field", () => {
+    const keys = [
+      "policy.quiet_hours_start_local",
+      "policy.quiet_hours_end_local",
+      "policy.retry_delay_multiplier",
+      "policy.retry_max_attempts.no_answer",
+      "policy.retry_max_attempts.voicemail_left",
+      "policy.retry_max_attempts.busy",
+      "policy.retry_max_attempts.failed",
+    ];
+    for (const k of keys) {
+      expect(fieldMeta[k], k).toBeDefined();
+    }
+  });
+
+  it("documents chain-global attempts and final-rung repeat on retry_max_attempts", () => {
+    // Open Q2 disposition: no save-time warning for caps above the builtin ladder —
+    // the semantics live in the help text instead.
+    const help = fieldMeta["policy.retry_max_attempts"]!.help.toLowerCase();
+    expect(help).toContain("chain"); // chain-global attempt semantics
+    expect(help).toContain("final"); // extra attempts reuse the final rung's delay
   });
 });

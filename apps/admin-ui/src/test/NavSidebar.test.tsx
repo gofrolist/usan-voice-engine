@@ -73,6 +73,16 @@ describe("NavSidebar Operate group", () => {
     expect(screen.getByRole("link", { name: "Queues" })).toBeInTheDocument();
   });
 
+  it("shows Variables under Config for a viewer (not adminOnly)", async () => {
+    renderSidebar();
+    await screen.findByText("me@example.com");
+    expect(screen.getByText("Config")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Variables" })).toHaveAttribute(
+      "href",
+      "/custom-variables",
+    );
+  });
+
   it("groups render in order Build, Config, Operate, System", async () => {
     renderSidebar();
     await screen.findByText("me@example.com");

@@ -10,7 +10,8 @@ plugin default".
 
 import re
 import uuid
-from typing import Literal
+from datetime import time
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -114,18 +115,24 @@ SENSITIVE_PROMPT_FIELDS: tuple[str, ...] = (
 )
 
 
-def phi_tokens_in_sensitive_fields(prompts: PromptsConfig) -> list[str]:
+def phi_tokens_in_sensitive_fields(
+    prompts: PromptsConfig, *, phi_names: frozenset[str] = PHI_BUILTIN_NAMES
+) -> list[str]:
     """Advisory warnings for PHI variables used in pre-identity / voicemail fields.
 
     Non-fatal (warn-don't-block). One message per distinct (field, PHI token), in
     field-then-first-seen order, so the warning list reads deterministically.
+
+    ``phi_names`` lets the save path extend the check to declared custom
+    variables flagged phi=true (builtins ∪ custom PHI names, spec §3.2); the
+    keyword default keeps every existing caller builtin-only, zero-diff.
     """
     warnings: list[str] = []
     seen: set[tuple[str, str]] = set()
     for field in SENSITIVE_PROMPT_FIELDS:
         text: str = getattr(prompts, field)
         for name in _TOKEN_RE.findall(text):
-            if name in PHI_BUILTIN_NAMES and (field, name) not in seen:
+            if name in phi_names and (field, name) not in seen:
                 seen.add((field, name))
                 token = "{{" + name + "}}"
                 warnings.append(
@@ -202,6 +209,50 @@ def _reject_phi_in_templates(templates: list[SmsTemplate]) -> None:
             )
 
 
+def custom_phi_sms_violations(
+    config: dict[str, Any], phi_names: frozenset[str]
+) -> list[dict[str, Any]]:
+    """PRIMARY enforcement for custom PHI variables in SMS bodies (spec §3.2.1).
+
+    The pydantic validators above keep hard-blocking the 5 builtin PHI names
+    unchanged — but they cannot see the ``custom_variables`` table, so the
+    admin_profiles save/publish/rollback handlers (which have DB access) run
+    this helper and raise a non-empty result as ``HTTPException(422,
+    detail=violations)``. The client shows only a non-blocking notice for
+    customs (spec §6.3), so this server 422 is the authoritative gate and the
+    fabricated field-level ``loc`` —
+    ``["body", "config", "tools", "sms", "templates", <i>, "body"]`` — is
+    load-bearing: the client's ``tryParseFieldErrors`` parses it exactly like a
+    pydantic 422 and lands the error on the offending body input.
+
+    Walks ``config["tools"]["sms"]["templates"]`` tolerantly (absent keys /
+    ``None`` mean "no SMS templates" → no violations). The message carries
+    variable NAMES and field paths only — never per-call values (spec §7).
+    """
+    templates = ((config.get("tools") or {}).get("sms") or {}).get("templates") or []
+    violations: list[dict[str, Any]] = []
+    for i, tmpl in enumerate(templates):
+        body = tmpl.get("body") or ""
+        phi: list[str] = []
+        for name in _TOKEN_RE.findall(body):
+            if name in phi_names and name not in phi:
+                phi.append(name)
+        if phi:
+            joined = ", ".join("{{" + n + "}}" for n in phi)
+            violations.append(
+                {
+                    "loc": ["body", "config", "tools", "sms", "templates", i, "body"],
+                    "msg": (
+                        f"SMS template '{tmpl.get('key', '')}' body references protected "
+                        f"health information ({joined}); SMS bodies may use non-PHI "
+                        f"variables only"
+                    ),
+                    "type": "value_error.custom_phi_sms",
+                }
+            )
+    return violations
+
+
 class SmsToolConfig(BaseModel):
     templates: list[SmsTemplate] = Field(default_factory=list)
 
@@ -241,6 +292,31 @@ class ToolsConfig(BaseModel):
         return self
 
 
+def sms_renders_empty_warnings(tools: ToolsConfig | None) -> list[str]:
+    """Warn that non-builtin tokens in SMS bodies will render as empty text.
+
+    ``render_sms_body``'s substitution map is builtins-minus-PHI + clock vars
+    ONLY — ``dynamic_vars`` (the one channel carrying custom values) never
+    enters it, so every custom token in an SMS body renders ``""`` (spec
+    §3.2.1). Declared customs and undeclared tokens warn alike (hard-blocking
+    only declared names would be perverse: declare → blocked, leave undeclared
+    → allowed). Warn-don't-block: phi=true customs are 422-blocked first by
+    ``custom_phi_sms_violations``, so by the time these warnings are computed
+    no blocked name remains. De-duplicated, first-seen order.
+    """
+    if tools is None or tools.sms is None:
+        return []
+    seen: list[str] = []
+    for tmpl in tools.sms.templates:
+        for name in _TOKEN_RE.findall(tmpl.body):
+            if name not in BUILTIN_NAMES and name not in seen:
+                seen.append(name)
+    return [
+        "{{" + name + "}} is not substituted in SMS — it will render as empty text."
+        for name in seen
+    ]
+
+
 class VoicemailDetectionConfig(BaseModel):
     window_s: float = Field(default=3.0, ge=0.5, le=30.0)
     # Empty list means "use the agent's built-in detection patterns".
@@ -268,6 +344,98 @@ class SpeechAdvancedConfig(BaseModel):
         return self
 
 
+# --- per-profile policy (Phase A4 spec §3.3.1) ------------------------------
+# Quiet-hours times are STRINGS, full stop — "HH:MM" validated by format regex +
+# narrowing rules, parsed to datetime.time only inside the validator and at
+# consumption (resolve_call_policy). They are never stored as datetime.time on
+# the model: the save path persists model_dump() (python mode) into JSONB, where
+# a time object raises TypeError — and even mode="json" would round-trip as
+# "09:30:00", which the admin-ui zod HH:MM mirror rejects on
+# form.reset(profile.draft_config).
+_HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+# Statutory TCPA bounds (mirrors quiet_hours.QUIET_START_HOUR/QUIET_END_HOUR):
+# policy may only NARROW within [09:00, 21:00) local time, never widen.
+_STATUTORY_START = time(9, 0)
+_STATUTORY_END = time(21, 0)
+
+
+def _parse_hhmm(value: str) -> time:
+    """Parse an already-regex-validated ``"HH:MM"`` string to ``datetime.time``."""
+    hour, minute = value.split(":")
+    return time(int(hour), int(minute))
+
+
+class RetryMaxAttempts(BaseModel):
+    """Per-status retry caps in CHAIN-GLOBAL attempt semantics (spec §3.3.1).
+
+    ``<status> = N`` means "a call ending with this status schedules a retry iff
+    its chain-global attempt number <= N". There are no per-status counters —
+    status can change across a chain (no_answer → busy → no_answer), and the
+    attempt number is the chain's, not the status's. ``0`` disables retries for
+    that status; ``None`` keeps the builtin ladder behavior.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Builtin equivalents below are expressed in the same chain-global semantics
+    # (builtin busy: 1 means "retry a busy only when it was the chain's first
+    # attempt", not "at most one busy retry ever").
+    no_answer: int | None = Field(default=None, ge=0, le=4)  # builtin equivalent: 2
+    voicemail_left: int | None = Field(default=None, ge=0, le=4)  # builtin: 1
+    busy: int | None = Field(default=None, ge=0, le=4)  # builtin: 1
+    failed: int | None = Field(default=None, ge=0, le=4)  # builtin: 1
+
+
+class PolicyConfig(BaseModel):
+    """Optional per-profile quiet-hours narrowing + bounded retry overrides.
+
+    Enforced entirely API-side — re-resolved at every consumption site, never
+    snapshotted onto the Call (spec §3.3.2). The agent's AgentConfig mirror
+    ignores the riding-along key (pydantic default ``extra="ignore"``).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    quiet_hours_start_local: str | None = None  # "HH:MM", must be >= "09:00"
+    quiet_hours_end_local: str | None = None  # "HH:MM", must be <= "21:00"
+    retry_delay_multiplier: float | None = Field(default=None, ge=0.5, le=4.0)
+    retry_max_attempts: RetryMaxAttempts | None = None
+
+    @field_validator("quiet_hours_start_local", "quiet_hours_end_local")
+    @classmethod
+    def _hhmm_format(cls, v: str | None) -> str | None:
+        if v is not None and not _HHMM_RE.fullmatch(v):
+            raise ValueError('must be "HH:MM" (24-hour clock, minute granularity)')
+        return v
+
+    @model_validator(mode="after")
+    def _narrowing_only(self) -> PolicyConfig:
+        # NARROWING ONLY: each side may be set independently (the unset side
+        # stays statutory). next_allowed() does not re-clamp to statutory at
+        # consumption — this validator is the gate (spec §7).
+        start = (
+            _parse_hhmm(self.quiet_hours_start_local)
+            if self.quiet_hours_start_local is not None
+            else _STATUTORY_START
+        )
+        end = (
+            _parse_hhmm(self.quiet_hours_end_local)
+            if self.quiet_hours_end_local is not None
+            else _STATUTORY_END
+        )
+        if start < _STATUTORY_START:
+            raise ValueError("quiet_hours_start_local must be at or after the statutory 09:00")
+        if end > _STATUTORY_END:
+            raise ValueError("quiet_hours_end_local must be at or before the statutory 21:00")
+        if start >= end:
+            raise ValueError(
+                f"quiet_hours_start_local ({start:%H:%M}) must be before "
+                f"quiet_hours_end_local ({end:%H:%M})"
+            )
+        return self
+
+
 # FORWARD-COMPATIBILITY INVARIANT: version snapshots in agent_profile_versions.config
 # are immutable and long-lived, and are re-validated through AgentConfig on every read
 # (ProfileDetail/VersionDetail.from_model). Any NEW field added here MUST be Optional
@@ -289,6 +457,9 @@ class AgentConfig(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     voicemail_detection: VoicemailDetectionConfig = Field(default_factory=VoicemailDetectionConfig)
     speech_advanced: SpeechAdvancedConfig = Field(default_factory=SpeechAdvancedConfig)
+    # Optional-with-default per the forward-compat invariant above: every
+    # published snapshot and older draft (no `policy` key) keeps validating.
+    policy: PolicyConfig | None = None
 
 
 # Defaults below are copied verbatim from the agent's current constants so a new

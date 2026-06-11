@@ -3,6 +3,8 @@ import { Controller, useFieldArray, type UseFormReturn } from "react-hook-form";
 import type { AgentConfigForm, ToolName } from "../../../config/agentConfigSchema";
 import { TOOL_NAMES } from "../../../config/agentConfigSchema";
 import { useToolCatalog, type ToolSpec } from "../../../config/toolCatalog";
+import { useVariableCatalog } from "../../../config/variableCatalog";
+import { phiTokenNames } from "./phiTokens";
 
 // Retell-style "Functions" list: each enabled tool is a function the agent can call
 // mid-call. The catalog (useToolCatalog) is the runtime source of truth for what
@@ -116,6 +118,19 @@ function SmsTemplatesEditor({ form }: { form: UseFormReturn<AgentConfigForm> }) 
   const sendSmsEnabled = enabled.includes("send_sms");
   const needsTemplates = sendSmsEnabled && templates.length === 0;
 
+  // Catalog-driven SMS notices (spec §6.1): the fetched catalog drives two
+  // NON-blocking notices per body — a phi=true custom is blocked at save by the
+  // server (422), and ANY custom renders "" at send time (render_sms_body never
+  // sees dynamic_vars). The static zod builtin-PHI superRefine and PHI_TOKEN_NAMES
+  // in agentConfigSchema.ts stay frozen on the 5 builtins — never drifts; the
+  // server is authoritative for customs (spec §3.2.1 item 4).
+  const { data: variables } = useVariableCatalog();
+  const customs = (variables ?? []).filter((v) => v.tier === "custom");
+  const customNames: ReadonlySet<string> = new Set(customs.map((v) => v.name));
+  const customPhiNames: ReadonlySet<string> = new Set(
+    customs.filter((v) => v.phi).map((v) => v.name),
+  );
+
   return (
     <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-card">
       <div className="flex items-center justify-between">
@@ -157,6 +172,11 @@ function SmsTemplatesEditor({ form }: { form: UseFormReturn<AgentConfigForm> }) 
                 {form.formState.errors.tools.sms.templates[i]?.body?.message}
               </p>
             ) : null}
+            <SmsBodyNotices
+              body={templates[i]?.body ?? ""}
+              customNames={customNames}
+              customPhiNames={customPhiNames}
+            />
             <button
               type="button"
               className="text-xs text-red-700"
@@ -168,5 +188,40 @@ function SmsTemplatesEditor({ form }: { form: UseFormReturn<AgentConfigForm> }) 
         ))}
       </ul>
     </div>
+  );
+}
+
+// The two catalog-driven non-blocking notices for one SMS body (the phiTokens.ts
+// presentation pattern — amber text, never a Zod error, the form stays submittable).
+// phiTokenNames is a generic "{{tokens}} whose name is in the set" scan (the same
+// TOKEN_NAME_RE capture agentConfigSchema.ts uses), so it serves both notice tiers:
+// pass the custom-PHI names for the blocked-at-save notice and all custom names for
+// the renders-empty notice.
+function SmsBodyNotices({
+  body,
+  customNames,
+  customPhiNames,
+}: {
+  body: string;
+  customNames: ReadonlySet<string>;
+  customPhiNames: ReadonlySet<string>;
+}) {
+  const phiCustoms = phiTokenNames(body, customPhiNames);
+  const anyCustoms = phiTokenNames(body, customNames);
+  return (
+    <>
+      {phiCustoms.length > 0 ? (
+        <p className="text-xs font-medium text-amber-700">
+          ⚠ {phiCustoms.map((n) => `{{${n}}}`).join(", ")} is marked PHI — this template will
+          be blocked at save (the server rejects PHI custom variables in SMS bodies).
+        </p>
+      ) : null}
+      {anyCustoms.length > 0 ? (
+        <p className="text-xs font-medium text-amber-700">
+          {anyCustoms.map((n) => `{{${n}}}`).join(", ")}: custom variables are not substituted
+          in SMS — renders empty.
+        </p>
+      ) : null}
+    </>
   );
 }

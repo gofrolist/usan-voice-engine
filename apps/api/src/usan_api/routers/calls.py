@@ -15,6 +15,7 @@ from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Elder
 from usan_api.db.session import get_db
 from usan_api.phone import to_e164
+from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
@@ -31,15 +32,27 @@ from usan_api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/v1/calls", tags=["calls"])
 
+_OVERRIDE_ERROR = "profile_override must reference an active profile with a published version"
+
 
 def _idempotent_replay(existing: Call, body: CreateCallRequest, response: Response) -> CallResponse:
     """Return the existing call for a replayed key (200), or 409 on payload conflict."""
-    if existing.elder_id != body.elder_id or existing.dynamic_vars != body.dynamic_vars:
+    if (
+        existing.elder_id != body.elder_id
+        or existing.dynamic_vars != body.dynamic_vars
+        or existing.profile_override != body.profile_override
+    ):
         raise HTTPException(
             status_code=409, detail="idempotency_key reused with a different payload"
         )
     response.status_code = status.HTTP_200_OK
     return CallResponse.from_model(existing)
+
+
+async def _require_live_override(db: AsyncSession, profile_id: uuid.UUID) -> None:
+    """422 unless the override would actually take effect (ACTIVE + published, spec §3.1)."""
+    if not await agent_profiles_repo.is_live_profile(db, profile_id):
+        raise HTTPException(status_code=422, detail=_OVERRIDE_ERROR)
 
 
 async def _create_and_dispatch(
@@ -60,6 +73,7 @@ async def _create_and_dispatch(
             idempotency_key=body.idempotency_key,
             livekit_room=room,
             dynamic_vars=body.dynamic_vars,
+            profile_override=body.profile_override,
         )
         await db.commit()
     except IntegrityError as exc:
@@ -122,6 +136,15 @@ async def enqueue_call(
     if existing is not None:
         return _idempotent_replay(existing, body, response)
 
+    # Liveness runs on the create path only, AFTER the replay pre-check (ordering
+    # contract, spec §3.1): an identical replay must return the original call even
+    # when the override profile was archived since — that is the retry-on-timeout
+    # contract idempotency keys exist for. One check covers both create branches
+    # (dispatch + DNC). Auth tier: operator-token scope; the validation is identical
+    # to the admin-session schedules/batches gates and grants no new authority (§7).
+    if body.profile_override is not None:
+        await _require_live_override(db, body.profile_override)
+
     if await dnc_repo.is_blocked(db, elder.phone_e164):
         call = await calls_repo.create_call(
             db,
@@ -130,6 +153,7 @@ async def enqueue_call(
             status=CallStatus.DNC_BLOCKED,
             idempotency_key=body.idempotency_key,
             dynamic_vars=body.dynamic_vars,
+            profile_override=body.profile_override,
         )
         await db.commit()
         logger.bind(call_id=str(call.id)).info("Outbound call blocked by DNC")

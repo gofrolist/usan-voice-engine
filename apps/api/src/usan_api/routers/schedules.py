@@ -55,15 +55,22 @@ def _compute_next_run_at(schedule_like: CallSchedule | CreateScheduleRequest, tz
     else:
         days_mask = schedule_like.days_of_week
     try:
-        return next_run_at(
+        computed = next_run_at(
             datetime.now(UTC),
             tz,
             window_start=schedule_like.window_start_local,
             window_end=schedule_like.window_end_local,
             days_mask=days_mask,
         )
+        if computed is None:
+            # Defensive: None is policy-induced only (§3.3.3 rule 2) and this
+            # router never passes policy bounds — if ever reached, fail closed
+            # through the SAME handled 422 path as the other ValueErrors above,
+            # never an unhandled 500.
+            raise ValueError("schedule window produced no dialable time")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return computed
 
 
 async def _require_live_override(db: AsyncSession, profile_id: uuid.UUID) -> None:

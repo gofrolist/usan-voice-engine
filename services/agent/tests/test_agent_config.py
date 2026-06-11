@@ -85,3 +85,27 @@ def test_agent_config_roundtrips_sms_block():
     cfg = AgentConfig.model_validate(base)
     assert cfg.tools.sms is not None
     assert cfg.tools.sms.templates[0].key == "a"
+
+
+def test_unknown_policy_key_is_ignored():
+    # Regression pin: the API-side AgentConfig grows an optional `policy` section
+    # (quiet-hours narrowing + retry overrides) consumed exclusively server-side.
+    # The agent mirror must keep tolerating that riding-along key via pydantic's
+    # default extra="ignore" (agent_config.py:95 sets only frozen=True) — a future
+    # extra="forbid" cleanup would break runtime config fetch for every
+    # policy-carrying profile (spec §3.3.1).
+    payload = {
+        "prompts": {
+            "system_prompt": "sys",
+            "greeting": "hi",
+            "recording_disclosure": "rec",
+            "voicemail_message": "vm",
+            "checkin_flow_instructions": "flow",
+            "goodbye_message": "bye",
+            "inbound_opening": "open",
+            "inbound_personalization_template": "hello {elder_name} {last_check_in_line}",
+        },
+        "policy": {"quiet_hours_start_local": "10:00"},
+    }
+    cfg = AgentConfig.model_validate(payload)  # must not raise
+    assert not hasattr(cfg, "policy")

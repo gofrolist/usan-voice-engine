@@ -3,6 +3,7 @@ import { api } from "../../lib/api";
 import type { ApiError } from "../../lib/api";
 import { pushToast } from "../../components/ui/toast";
 import { profileKey } from "../editor/hooks";
+import { tryParseFieldErrors } from "../editor/ProfileEditorPage";
 import type { VersionSummary } from "../../types/api";
 
 // The single-version hook lives in editor/hooks (the publish diff uses it); re-export
@@ -28,6 +29,18 @@ export function useRollback(id: string) {
       void qc.invalidateQueries({ queryKey: versionsKey(id) });
       void qc.invalidateQueries({ queryKey: ["profiles"] });
     },
-    onError: (err) => pushToast(err.detail),
+    // Rollback can 422 with field-loc'd violations (e.g. a snapshot referencing a
+    // now-PHI custom variable in an SMS body) but has no form to land them on, so
+    // surface each parsed `msg` via toast; non-field errors keep the raw detail.
+    // This hook-level handler is the mutation's ONLY error handler — callers must
+    // not pass a per-mutate onError (react-query v5 runs both → double toast).
+    onError: (err) => {
+      const items = tryParseFieldErrors(err.detail);
+      if (items && items.length > 0) {
+        for (const item of items) pushToast(item.msg);
+      } else {
+        pushToast(err.detail);
+      }
+    },
   });
 }

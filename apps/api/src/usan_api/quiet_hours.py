@@ -13,15 +13,29 @@ attach a zone with ``.replace(tzinfo=...)`` and never substitute a pytz
 bound-offset tzinfo, which would NOT recompute.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+# Statutory TCPA bounds — exported constants other modules import; the keyword
+# defaults below derive from them so the no-kwargs behavior stays byte-for-byte.
 QUIET_START_HOUR = 9  # calls allowed from 09:00 local (inclusive)
 QUIET_END_HOUR = 21  # calls not allowed at/after 21:00 local (exclusive)
 
 
-def next_allowed(dt_utc: datetime, tz_name: str) -> datetime:
-    """Earliest aware-UTC instant >= dt_utc within [09:00, 21:00) local time.
+def next_allowed(
+    dt_utc: datetime,
+    tz_name: str,
+    *,
+    start_local: time = time(QUIET_START_HOUR, 0),
+    end_local: time = time(QUIET_END_HOUR, 0),
+) -> datetime:
+    """Earliest aware-UTC instant >= dt_utc within [start_local, end_local) local time.
+
+    Defaults are the statutory [09:00, 21:00) bounds — existing callers are
+    zero-diff. Policy bounds are validated to be WITHIN the statutory window
+    upstream (``PolicyConfig`` is the gate, spec §7); the re-clamp below is
+    defense-in-depth only, matching ``effective_window``'s statutory max/min —
+    a buggy caller must never produce an out-of-statutory dial.
 
     ``dt_utc`` must be timezone-aware. Raises ValueError for an unknown timezone.
     """
@@ -30,13 +44,19 @@ def next_allowed(dt_utc: datetime, tz_name: str) -> datetime:
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ValueError(f"unknown timezone: {tz_name!r}") from exc
 
+    start_local = max(start_local, time(QUIET_START_HOUR, 0))
+    end_local = min(end_local, time(QUIET_END_HOUR, 0))
+
     local = dt_utc.astimezone(tz)
-    if QUIET_START_HOUR <= local.hour < QUIET_END_HOUR:
+    local_t = local.time()
+    if start_local <= local_t < end_local:
         return dt_utc
-    if local.hour < QUIET_START_HOUR:
-        target = local.replace(hour=QUIET_START_HOUR, minute=0, second=0, microsecond=0)
-    else:  # at/after QUIET_END_HOUR -> next local morning
+    if local_t < start_local:
+        target = local.replace(
+            hour=start_local.hour, minute=start_local.minute, second=0, microsecond=0
+        )
+    else:  # at/after end_local -> next local morning at start_local
         target = (local + timedelta(days=1)).replace(
-            hour=QUIET_START_HOUR, minute=0, second=0, microsecond=0
+            hour=start_local.hour, minute=start_local.minute, second=0, microsecond=0
         )
     return target.astimezone(UTC)

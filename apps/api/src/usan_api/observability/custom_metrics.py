@@ -16,8 +16,12 @@ Structurally impossible usan_materialized_calls_total label combinations —
 never emitted (batch/scheduler spec §7):
 - result="skipped_elder_deleted" with source="schedule": deleting an elder
   CASCADE-deletes their schedules, so a schedule row never outlives its elder.
-- result="skipped_window" or result="rescheduled" with source="batch": batch
-  targets have no next_run_at, hence no window to miss or reschedule past.
+- result="rescheduled" with source="batch": batch targets have no next_run_at
+  to go stale, hence nothing to reschedule.
+result="skipped_window" with source="batch" IS emitted since the per-profile
+policy unlock (small-unlocks spec §3.3.3 rule 2): a narrowed policy can empty
+a batch dial window's intersection (policy ∩ window = ∅ → target skipped with
+reason="window") — it is no longer structurally impossible.
 """
 
 import functools

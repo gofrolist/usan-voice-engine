@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Spinner } from "../../components/ui/spinner";
 import { DiffView } from "../../components/DiffView";
+import { pushToast } from "../../components/ui/toast";
 import type { AgentConfig } from "../../types/api";
 import { usePublish, useVersion } from "./hooks";
 
@@ -15,6 +16,12 @@ interface PublishDialogProps {
   // The currently-published version number, or null if nothing is live yet.
   publishedVersion: number | null;
   onPublished: () => void;
+  // Receives ApiError.detail on publish failure so the editor can route 422 field
+  // errors through mapServerErrors. Exactly ONE error handler per mutation:
+  // react-query v5 runs this per-mutate onError IN ADDITION to any hook-level one,
+  // so usePublish deliberately has no hook-level onError (a second handler would
+  // double-toast). Absent the prop, the detail is toasted here — never swallowed.
+  onPublishError?: (detail: string) => void;
 }
 
 // Shows what publishing will change: the live version's config vs the current
@@ -27,6 +34,7 @@ export function PublishDialog({
   draftConfig,
   publishedVersion,
   onPublished,
+  onPublishError,
 }: PublishDialogProps) {
   const [note, setNote] = useState("");
   const publish = usePublish(profileId);
@@ -45,6 +53,11 @@ export function PublishDialog({
         onSuccess: () => {
           setNote("");
           onPublished();
+        },
+        // The mutation's ONLY error handler (see onPublishError prop comment).
+        onError: (err) => {
+          if (onPublishError) onPublishError(err.detail);
+          else pushToast(err.detail);
         },
       },
     );

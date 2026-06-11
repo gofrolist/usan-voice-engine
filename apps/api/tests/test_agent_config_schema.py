@@ -313,3 +313,165 @@ def test_sms_config_roundtrips_through_agent_config():
     cfg = AgentConfig.model_validate(base)
     assert cfg.tools.sms is not None
     assert cfg.tools.sms.templates[0].key == "a"
+
+
+# --- phi_names generalization (custom PHI variables, spec §3.2 / plan C5) ----
+
+
+def test_phi_tokens_in_sensitive_fields_accepts_custom_phi_names():
+    from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields
+    from usan_api.schemas.variable_catalog import PHI_BUILTIN_NAMES
+
+    prompts = _prompts_with(voicemail_message="Sorry we missed you. Re: {{diagnosis}}.")
+    warnings = phi_tokens_in_sensitive_fields(prompts, phi_names=PHI_BUILTIN_NAMES | {"diagnosis"})
+    assert len(warnings) == 1
+    # Existing message shape: token + quoted field name + the advisory sentence.
+    assert "{{diagnosis}}" in warnings[0]
+    assert "'voicemail_message'" in warnings[0]
+    assert "protected health information" in warnings[0]
+
+
+def test_phi_tokens_default_unchanged():
+    # Zero-diff pin: calling with no kwarg reproduces today's builtin-only output
+    # on the same prompts — a custom name is never flagged by default.
+    from usan_api.schemas.agent_config import phi_tokens_in_sensitive_fields
+
+    prompts = _prompts_with(
+        voicemail_message="We noted {{last_check_in}} and {{diagnosis}} last time."
+    )
+    warnings = phi_tokens_in_sensitive_fields(prompts)
+    assert len(warnings) == 1
+    assert "{{last_check_in}}" in warnings[0]
+    assert all("{{diagnosis}}" not in w for w in warnings)
+
+
+# --- custom_phi_sms_violations (custom PHI in SMS bodies, spec §3.2.1 / plan C6) ----
+
+
+def _config_with_sms_bodies(*bodies: str) -> dict:
+    base = DEFAULT_AGENT_CONFIG.model_dump()
+    base["tools"]["sms"] = {
+        "templates": [
+            {"key": f"t{i}", "label": f"T{i}", "body": body} for i, body in enumerate(bodies)
+        ]
+    }
+    return base
+
+
+def test_custom_phi_sms_violations_exact_loc():
+    from usan_api.schemas.agent_config import custom_phi_sms_violations
+
+    config = _config_with_sms_bodies("Hi {{first_name}}, see you soon.", "{{diagnosis}}")
+    violations = custom_phi_sms_violations(config, frozenset({"diagnosis"}))
+    assert len(violations) == 1
+    # The fabricated field-level loc is load-bearing (spec §3.2.1): the client
+    # maps it onto tools.sms.templates.1.body.
+    assert violations[0]["loc"] == ["body", "config", "tools", "sms", "templates", 1, "body"]
+    assert "{{diagnosis}}" in violations[0]["msg"]
+    assert violations[0]["type"] == "value_error.custom_phi_sms"
+
+
+def test_custom_phi_sms_violations_clean_and_absent_tools():
+    from usan_api.schemas.agent_config import custom_phi_sms_violations
+
+    phi = frozenset({"diagnosis"})
+    # Clean templates -> no violations.
+    clean = _config_with_sms_bodies("Hi {{first_name}}, this is USAN.")
+    assert custom_phi_sms_violations(clean, phi) == []
+    # tools.sms absent (None) and tools absent entirely -> tolerated, [].
+    base = DEFAULT_AGENT_CONFIG.model_dump()
+    assert base["tools"]["sms"] is None
+    assert custom_phi_sms_violations(base, phi) == []
+    no_tools = {k: v for k, v in base.items() if k != "tools"}
+    assert custom_phi_sms_violations(no_tools, phi) == []
+    # Builtin PHI names are NOT this helper's job (the pydantic validators block
+    # them earlier): with an empty phi_names set over a builtin-PHI-free body,
+    # nothing is flagged — the helper only knows the names it is handed.
+    tokens = _config_with_sms_bodies("About {{diagnosis}} and {{pet_name}}.")
+    assert custom_phi_sms_violations(tokens, frozenset()) == []
+
+
+# --- PolicyConfig / RetryMaxAttempts (per-profile policy, spec §3.3.1 / plan D1) ----
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "valid"),
+    [
+        ("08:59", None, False),  # widens past the statutory 09:00 start
+        (None, "21:01", False),  # widens past the statutory 21:00 end
+        ("12:00", "10:00", False),  # start >= end
+        ("12:00", "12:00", False),  # start == end
+        ("09:30", None, True),  # one-sided start narrowing
+        (None, "20:00", True),  # one-sided end narrowing
+        ("10:15", "18:45", True),  # both sides, minute granularity
+        # Exact statutory boundaries: >= 09:00 and <= 21:00 are INCLUSIVE bounds,
+        # so restating a statutory edge is a valid (no-op) narrowing...
+        ("09:00", None, True),  # start exactly at the statutory start
+        (None, "21:00", True),  # end exactly at the statutory end
+        ("09:00", "21:00", True),  # the full statutory window restated
+        # ...but start at the END boundary leaves an empty effective window
+        # (start 21:00 >= effective end 21:00) — rejected by start < end.
+        ("21:00", None, False),
+        ("21:00", "21:00", False),  # equal start/end at the boundary
+    ],
+)
+def test_policy_config_narrowing_only(start, end, valid):
+    from usan_api.schemas.agent_config import PolicyConfig
+
+    if valid:
+        cfg = PolicyConfig(quiet_hours_start_local=start, quiet_hours_end_local=end)
+        assert cfg.quiet_hours_start_local == start
+        assert cfg.quiet_hours_end_local == end
+    else:
+        with pytest.raises(ValidationError):
+            PolicyConfig(quiet_hours_start_local=start, quiet_hours_end_local=end)
+
+
+@pytest.mark.parametrize("value", ["9:00", "09:60", "24:00", "0900", "09:00:00"])
+def test_policy_config_hhmm_format(value):
+    from usan_api.schemas.agent_config import PolicyConfig
+
+    with pytest.raises(ValidationError):
+        PolicyConfig(quiet_hours_start_local=value)
+    with pytest.raises(ValidationError):
+        PolicyConfig(quiet_hours_end_local=value)
+
+
+def test_policy_time_fields_stay_strings():
+    # JSONB + zod round-trip contract (spec §3.3.1): times stay "HH:MM" strings.
+    # model_dump() (python mode, the save path) would TypeError on datetime.time
+    # at the JSONB write, and mode="json" would round-trip "09:30:00", which the
+    # admin-ui zod HH:MM mirror rejects on form.reset(profile.draft_config).
+    from usan_api.schemas.agent_config import PolicyConfig
+
+    dumped = PolicyConfig(quiet_hours_start_local="09:30").model_dump()
+    assert dumped["quiet_hours_start_local"] == "09:30"
+    assert isinstance(dumped["quiet_hours_start_local"], str)
+
+
+def test_retry_overrides_bounds():
+    from usan_api.schemas.agent_config import PolicyConfig, RetryMaxAttempts
+
+    with pytest.raises(ValidationError):
+        PolicyConfig(retry_delay_multiplier=0.4)
+    with pytest.raises(ValidationError):
+        PolicyConfig(retry_delay_multiplier=4.1)
+    assert PolicyConfig(retry_delay_multiplier=0.5).retry_delay_multiplier == 0.5
+    assert PolicyConfig(retry_delay_multiplier=4.0).retry_delay_multiplier == 4.0
+    for field in ("no_answer", "voicemail_left", "busy", "failed"):
+        with pytest.raises(ValidationError):
+            RetryMaxAttempts(**{field: -1})
+        with pytest.raises(ValidationError):
+            RetryMaxAttempts(**{field: 5})
+        assert getattr(RetryMaxAttempts(**{field: 0}), field) == 0
+        assert getattr(RetryMaxAttempts(**{field: 4}), field) == 4
+
+
+def test_agent_config_policy_optional_default_none():
+    # Forward-compat invariant (the AgentConfig comment block): extends
+    # test_legacy_config_still_deserializes — a prompts-only legacy dict (no
+    # `policy` key) must keep validating, with policy defaulting to None, or
+    # older agent_profile_versions snapshots would 500 on read.
+    legacy = {"prompts": DEFAULT_AGENT_CONFIG.prompts.model_dump()}
+    cfg = AgentConfig.model_validate(legacy)
+    assert cfg.policy is None

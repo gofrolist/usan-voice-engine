@@ -58,6 +58,30 @@ describe("VariablePalette", () => {
     expect(screen.queryByText("Built-in")).not.toBeInTheDocument();
   });
 
+  it("renders a phi=true custom in the Custom group (palette is phi-agnostic)", async () => {
+    // The palette renders no PHI badge by design — PHI surfacing lives in the
+    // PromptEditor warnings and the Custom Variables page badge. This pins that
+    // a phi=true custom from the fetched catalog still renders under Custom.
+    const user = userEvent.setup();
+    const withPhiCustom: VariableSpec[] = [
+      ...VARS,
+      {
+        name: "diagnosis",
+        tier: "custom",
+        description: "Latest diagnosis.",
+        default: "",
+        example: "stable",
+        phi: true,
+      },
+    ];
+    render(<VariablePalette variables={withPhiCustom} onInsert={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /insert variable/i }));
+
+    expect(screen.getByText("Custom")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /diagnosis/ })).toBeInTheDocument();
+  });
+
   it("omits an empty tier group", () => {
     const builtinOnly = VARS.filter((v) => v.tier === "builtin");
     render(<VariablePalette variables={builtinOnly} onInsert={vi.fn()} />);

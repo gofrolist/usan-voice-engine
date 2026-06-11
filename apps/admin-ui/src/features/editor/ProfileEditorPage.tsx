@@ -21,6 +21,7 @@ import { TimingSection } from "./sections/TimingSection";
 import { ToolsSection } from "./sections/ToolsSection";
 import { VoicemailSection } from "./sections/VoicemailSection";
 import { SpeechAdvancedSection } from "./sections/SpeechAdvancedSection";
+import { PolicySection } from "./sections/PolicySection";
 
 const SECTION_ORDER: SectionKey[] = [
   "prompts",
@@ -31,16 +32,19 @@ const SECTION_ORDER: SectionKey[] = [
   "timing",
   "tools",
   "voicemail_detection",
+  "policy",
 ];
 
 // Validation-error shape FastAPI/Pydantic returns on 422. The api wrapper
-// JSON-stringifies it into ApiError.detail, so we parse it back here.
-interface ValidationItem {
+// JSON-stringifies it into ApiError.detail, so we parse it back here. Exported:
+// useRollback (versions/hooks.ts) parses the same shape — rollback has no form to
+// land field errors on, so it surfaces each msg via toast instead.
+export interface ValidationItem {
   loc: (string | number)[];
   msg: string;
 }
 
-function tryParseFieldErrors(detail: string): ValidationItem[] | null {
+export function tryParseFieldErrors(detail: string): ValidationItem[] | null {
   try {
     const parsed: unknown = JSON.parse(detail);
     if (Array.isArray(parsed)) {
@@ -96,9 +100,14 @@ export function ProfileEditorPage() {
     if (!items || items.length === 0) return false;
     let mapped = false;
     for (const item of items) {
-      // loc is like ["body", "config", "prompts", "greeting"]; drop the leading
-      // "body"/"config" envelope to get the AgentConfig dotted path.
-      const path = item.loc.filter((p) => p !== "body" && p !== "config").join(".");
+      // loc is like ["body", "config", "prompts", "greeting"]; slice the leading
+      // ["body", "config"] envelope POSITIONALLY to get the AgentConfig dotted path.
+      // Never filter by value: the custom-PHI SMS loc ends in a field literally named
+      // "body" (["body","config","tools","sms","templates",0,"body"]) and a value
+      // filter would eat it, landing the error on the row instead of the input
+      // (spec §6.3).
+      if (item.loc[0] !== "body" || item.loc[1] !== "config") continue;
+      const path = item.loc.slice(2).join(".");
       if (path) {
         form.setError(path as keyof AgentConfigForm, { type: "server", message: item.msg });
         mapped = true;
@@ -136,7 +145,12 @@ export function ProfileEditorPage() {
     // misrepresent what goes live and unsaved changes would be silently dropped.
     if (form.formState.isDirty) {
       try {
-        await saveDraft.mutateAsync({ config: form.getValues() as AgentConfig });
+        // Normalize RAW form values through the schema before persisting:
+        // form.getValues() bypasses the resolver, so a cleared time input is ""
+        // — the zod ""→null transform never ran and the server's HH:MM regex
+        // would 422. parse() cannot throw here: form.trigger() above just passed.
+        const config = agentConfigSchema.parse(form.getValues()) as AgentConfig;
+        await saveDraft.mutateAsync({ config });
       } catch (err) {
         const e = err as ApiError;
         if (e.status === 422 && mapServerErrors(e.detail)) {
@@ -158,11 +172,16 @@ export function ProfileEditorPage() {
   const language = form.watch("voice.language");
   const toolsEnabled = form.watch("tools.enabled");
   const answerTimeout = form.watch("timing.answer_timeout_s");
+  // Policy rail summary: show the narrowed quiet-hours span only when a side is set
+  // ("" from a cleared time input counts as unset, like null/absent).
+  const policyStart = form.watch("policy.quiet_hours_start_local");
+  const policyEnd = form.watch("policy.quiet_hours_end_local");
   const summaries: Partial<Record<SectionKey, string>> = {
     llm: llmModel,
     voice: voiceId ?? "default",
     tools: `${toolsEnabled?.length ?? 0} on`,
     timing: Number.isFinite(answerTimeout) ? `${answerTimeout}s` : undefined,
+    policy: policyStart || policyEnd ? `${policyStart || "09:00"}–${policyEnd || "21:00"}` : undefined,
   };
 
   return (
@@ -198,6 +217,7 @@ export function ProfileEditorPage() {
                 {section === "timing" ? <TimingSection form={form} /> : null}
                 {section === "tools" ? <ToolsSection form={form} /> : null}
                 {section === "voicemail_detection" ? <VoicemailSection form={form} /> : null}
+                {section === "policy" ? <PolicySection form={form} /> : null}
               </fieldset>
             </form>
           </div>
@@ -221,6 +241,15 @@ export function ProfileEditorPage() {
         onPublished={() => {
           setPublishOpen(false);
           pushToast("Published.", "info");
+        }}
+        // Publish 422s (e.g. custom-PHI SMS violations from the server-authoritative
+        // gate) route through the same field-error mapping as save.
+        onPublishError={(detail) => {
+          if (mapServerErrors(detail)) {
+            pushToast("Some fields were rejected by the server — see the highlighted errors.");
+          } else {
+            pushToast(detail);
+          }
         }}
       />
     </div>

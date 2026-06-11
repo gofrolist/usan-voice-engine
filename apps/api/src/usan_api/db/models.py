@@ -619,3 +619,34 @@ class WebhookDelivery(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class CustomVariable(Base):
+    """Operator-declared prompt variable (catalog tier ``custom``, migration 0015).
+
+    Definitions are documentation/UX only — values arrive per call via
+    ``Call.dynamic_vars``, never through this table. ``name`` is immutable after
+    create (a rename would silently orphan ``{{tokens}}`` already saved in
+    templates; delete + recreate instead). Collisions with the 10 frozen builtin
+    names are enforced in the Pydantic layer — authority stays in code; the DB
+    enforces only slug shape + uniqueness.
+    """
+
+    __tablename__ = "custom_variables"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    example: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    phi: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
