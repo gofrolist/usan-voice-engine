@@ -6,6 +6,9 @@ import { ProfilesListPage } from "./features/profiles/ProfilesListPage";
 import { ProfileEditorPage } from "./features/editor/ProfileEditorPage";
 import { VersionHistoryPage } from "./features/versions/VersionHistoryPage";
 import { EldersPage } from "./features/elders/EldersPage";
+import { CallsPage } from "./features/calls/CallsPage";
+import { CallDetailPage } from "./features/calls/CallDetailPage";
+import { QueuesPage } from "./features/queues/QueuesPage";
 import { DefaultsPage } from "./features/defaults/DefaultsPage";
 import { AuditPage } from "./features/audit/AuditPage";
 import { AdminUsersPage } from "./features/adminUsers/AdminUsersPage";
@@ -30,6 +33,9 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <ProfilesListPage /> },
           { path: "profiles/:id/versions", element: <VersionHistoryPage /> },
+          { path: "calls", element: <CallsPage /> },
+          { path: "calls/:id", element: <CallDetailPage /> },
+          { path: "queues", element: <QueuesPage /> },
           { path: "elders", element: <EldersPage /> },
           { path: "defaults", element: <DefaultsPage /> },
           { path: "audit", element: <AuditPage /> },

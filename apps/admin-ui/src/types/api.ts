@@ -4,6 +4,9 @@
 //   - schemas/agent_profile.py (Profile/Version summaries + details + requests)
 //   - schemas/admin.py (AuditEntryOut, ElderSummary, AssignProfileRequest)
 //   - schemas/auth.py (MeResponse, AdminUserOut, AdminUserCreate)
+//   - schemas/admin_calls.py (AdminCallSummary, AdminCallDetail + CallOrigin,
+//     TranscriptSegment from schemas/call.py)
+//   - schemas/admin_tools.py (FollowupFlagSummary, CallbackRequestSummary, QueuesSummary)
 
 // ---------------------------------------------------------------------------
 // Agent config (agent_config.py)
@@ -186,4 +189,95 @@ export interface AdminUser {
 export interface AdminUserCreate {
   email: string;
   role: AdminUserRole;
+}
+
+// ---------------------------------------------------------------------------
+// Calls console (admin_calls.py + call.py)
+// ---------------------------------------------------------------------------
+
+export interface CallOrigin {
+  source: "schedule" | "batch";
+  id: string;
+  ordinal: string | number; // local_date for schedules, target_index for batches
+}
+
+export interface TranscriptSegment {
+  role: string;
+  content: string;
+  tool_name: string | null;
+  tool_args: Record<string, unknown> | null;
+  started_at: string;
+  ended_at: string | null;
+}
+
+export interface AdminCallSummary {
+  id: string;
+  elder_id: string | null;
+  elder_name: string | null;
+  masked_phone: string; // "***" + last 4 — the raw phone never reaches this plane
+  direction: string;
+  status: string;
+  origin: CallOrigin | null;
+  attempt: number;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_seconds: number | null;
+  end_reason: string | null;
+  has_recording: boolean;
+  created_at: string;
+}
+
+export interface AdminCallDetail extends AdminCallSummary {
+  livekit_room: string | null;
+  parent_call_id: string | null;
+  scheduled_at: string | null;
+  answered_at: string | null;
+  recording_status: string | null;
+  presigned_recording_url: string | null;
+  recording_url_ttl_s: number | null;
+  transcript: TranscriptSegment[];
+}
+
+// ---------------------------------------------------------------------------
+// Ops queues (admin_tools.py)
+// ---------------------------------------------------------------------------
+
+export type QueueStatus = "open" | "acknowledged" | "resolved";
+
+export interface FollowupFlagSummary {
+  id: number;
+  call_id: string;
+  elder_id: string;
+  elder_name: string | null;
+  masked_phone: string;
+  severity: string;
+  category: string;
+  reason: string | null;
+  status: QueueStatus;
+  status_updated_at: string | null;
+  status_updated_by: string | null;
+  created_at: string;
+}
+
+export interface CallbackRequestSummary {
+  id: number;
+  call_id: string;
+  elder_id: string;
+  elder_name: string | null;
+  masked_phone: string;
+  requested_time_text: string;
+  requested_at: string | null;
+  notes: string | null;
+  status: QueueStatus;
+  status_updated_at: string | null;
+  status_updated_by: string | null;
+  created_at: string;
+}
+
+export interface QueuesSummary {
+  flags_open: number;
+  flags_open_urgent: number;
+  flags_acknowledged: number;
+  callbacks_open: number;
+  callbacks_acknowledged: number;
 }

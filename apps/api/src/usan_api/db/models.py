@@ -363,6 +363,8 @@ class FollowUpFlag(Base):
     category: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'open'"))
+    status_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status_updated_by: Mapped[str | None] = mapped_column(Text)  # admin actor email
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -382,6 +384,8 @@ class CallbackRequest(Base):
     requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'open'"))
+    status_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status_updated_by: Mapped[str | None] = mapped_column(Text)  # admin actor email
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -234,17 +234,20 @@ def test_downgrade_then_upgrade_roundtrip(database_url: str, async_database_url:
         env=env,
         check=True,
     )
-    assert asyncio.run(_columns(async_database_url, "call_schedules")) == {}
-    assert asyncio.run(_columns(async_database_url, "call_batches")) == {}
-    assert asyncio.run(_columns(async_database_url, "call_batch_targets")) == {}
-    assert "idx_calls_in_flight" not in asyncio.run(_indexes(async_database_url, "calls"))
-
-    subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        cwd=API_DIR,
-        env=env,
-        check=True,
-    )
+    try:
+        assert asyncio.run(_columns(async_database_url, "call_schedules")) == {}
+        assert asyncio.run(_columns(async_database_url, "call_batches")) == {}
+        assert asyncio.run(_columns(async_database_url, "call_batch_targets")) == {}
+        assert "idx_calls_in_flight" not in asyncio.run(_indexes(async_database_url, "calls"))
+    finally:
+        # A mid-test failure must not strand the shared session DB at 0011 —
+        # every other module in the run assumes head.
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=API_DIR,
+            env=env,
+            check=True,
+        )
     for table in ("call_schedules", "call_batches", "call_batch_targets"):
         assert "id" in asyncio.run(_columns(async_database_url, table))
     assert "idx_calls_in_flight" in asyncio.run(_indexes(async_database_url, "calls"))

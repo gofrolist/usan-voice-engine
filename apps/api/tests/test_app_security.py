@@ -142,6 +142,29 @@ def test_schedules_and_batches_routes_throttled_pre_auth(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_admin_responses_are_no_store(client, admin_session):
+    # Transcript JSON and live bearer recording URLs must never be written to a
+    # shared nurse workstation's HTTP cache (spec §8): every /v1/admin/* response
+    # carries Cache-Control: no-store.
+    resp = client.get("/v1/admin/follow-up-flags")
+    assert resp.status_code == 200
+    assert resp.headers["Cache-Control"] == "no-store"
+    # The middleware wraps every admin-path response — auth rejections included.
+    client.cookies.clear()
+    unauth = client.get("/v1/admin/calls")
+    assert unauth.status_code == 401
+    assert unauth.headers["Cache-Control"] == "no-store"
+
+
+def test_public_routes_not_no_store(client):
+    # Scoped to the admin plane only: public/operator routes set no cache headers.
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert "Cache-Control" not in health.headers
+    call = client.get("/v1/calls/00000000-0000-0000-0000-000000000000")
+    assert "Cache-Control" not in call.headers
+
+
 def test_create_app_requires_operator_api_key(monkeypatch):
     for k, v in _BASE_ENV.items():
         if k == "OPERATOR_API_KEY":

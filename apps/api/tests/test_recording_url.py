@@ -1,10 +1,11 @@
 import asyncio
 import uuid
 
+from loguru import logger
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from usan_api import object_storage
+from usan_api import object_storage, phi_audit
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import elders as elders_repo
@@ -76,3 +77,33 @@ def test_get_call_signing_error_returns_200_with_null_url(client, async_database
     body = response.json()
     assert body["recording_uri"] == uri
     assert body["presigned_recording_url"] is None
+
+
+def test_operator_get_call_records_never_bind_actor(client, async_database_url, monkeypatch):
+    # Behavioral-refactor guard for the recording_urls extraction: the operator plane
+    # passes no actor, so the locked-sink record stays bit-identical — ids/host/flag
+    # only, never an actor key (and never the URL itself).
+    uri = "gs://test-bucket/recordings/2026-06-02/x.ogg"
+    call_id = asyncio.run(_seed(async_database_url, "usan-outbound-noactor", recording_uri=uri))
+    monkeypatch.setenv("GCS_BUCKET", "test-bucket")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        object_storage,
+        "generate_signed_url",
+        lambda gs_uri, ttl, *, expected_bucket=None: f"https://signed.example/{gs_uri}",
+    )
+    records: list[dict] = []
+    handler_id = logger.add(lambda m: records.append(m.record), level="INFO")
+    try:
+        response = client.get(f"/v1/calls/{call_id}", headers=_OP)
+        assert response.status_code == 200
+    finally:
+        logger.remove(handler_id)
+
+    accessed = [r for r in records if r["message"] == phi_audit.RECORDING_URL_ACCESSED]
+    assert len(accessed) == 1
+    extra = accessed[0]["extra"]
+    assert extra["call_id"] == str(call_id)
+    assert extra["client"]
+    assert extra["has_recording"] is True
+    assert "actor" not in extra

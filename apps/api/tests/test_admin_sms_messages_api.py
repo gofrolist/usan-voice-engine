@@ -10,10 +10,10 @@ from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import sms_messages as sms_repo
 
 
-async def _seed(url: str, *, status: str) -> uuid.UUID:
+async def _seed(url: str, *, status: str, phone: str | None = None) -> uuid.UUID:
     engine = create_async_engine(url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    phone = f"+1555{str(uuid.uuid4().int)[:7]}"
+    phone = phone or f"+1555{str(uuid.uuid4().int)[:7]}"
     try:
         async with factory() as db:
             elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
@@ -61,3 +61,14 @@ def test_sms_messages_status_filter(client, admin_session, async_database_url):
     assert r.status_code == 200
     assert len(r.json()) >= 1
     assert all(i["status"] == "failed" for i in r.json())
+
+
+def test_sms_list_masks_to_number(client, admin_session, async_database_url):
+    phone = f"+1555{str(uuid.uuid4().int)[:7]}"
+    sms_id = asyncio.run(_seed(async_database_url, status="pending", phone=phone))
+    r = client.get("/v1/admin/sms-messages")
+    assert r.status_code == 200
+    # Spec §4.6: the raw E.164 never leaves the server on this plane.
+    assert phone not in r.text
+    row = next(i for i in r.json() if i["id"] == str(sms_id))
+    assert row["to_number"] == "***" + phone[-4:]

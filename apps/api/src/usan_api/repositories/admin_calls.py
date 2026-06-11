@@ -1,0 +1,67 @@
+"""admin_calls repository: the admin-plane calls list read model (spec §4.1)."""
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import and_, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from usan_api.db.base import CallDirection, CallStatus
+from usan_api.db.models import Call, Elder
+
+MAX_ADMIN_CALLS_LIMIT = 500
+
+
+async def list_calls(
+    db: AsyncSession,
+    *,
+    elder_id: uuid.UUID | None = None,
+    status: CallStatus | None = None,
+    direction: CallDirection | None = None,
+    origin: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[tuple[Call, str | None, str | None]]:
+    """Admin calls list read model: Call + elder name/phone via outerjoin (spec §4.1).
+
+    `origin` translates to idempotency_key prefix predicates over the reserved
+    sched:/batch: namespace (A1); 'adhoc' is direction='outbound' AND (key IS NULL OR
+    neither prefix) — the direction guard keeps inbound NULL-key calls out of Ad hoc.
+    Documented caveats (spec §4.1): retry children carry no key (match adhoc, response
+    origin null — the chain root carries provenance); pre-A1 squatted prefixes ~0.
+    Ordered (created_at DESC, id DESC) — served exactly by idx_calls_created.
+    `limit` clamped silently to 1..MAX_ADMIN_CALLS_LIMIT; `created_to` is EXCLUSIVE.
+    """
+    limit = max(1, min(limit, MAX_ADMIN_CALLS_LIMIT))
+    offset = max(0, offset)
+    stmt = select(Call, Elder.name, Elder.phone_e164).outerjoin(Elder, Call.elder_id == Elder.id)
+    if elder_id is not None:
+        stmt = stmt.where(Call.elder_id == elder_id)
+    if status is not None:
+        stmt = stmt.where(Call.status == status)
+    if direction is not None:
+        stmt = stmt.where(Call.direction == direction)
+    if created_from is not None:
+        stmt = stmt.where(Call.created_at >= created_from)
+    if created_to is not None:
+        stmt = stmt.where(Call.created_at < created_to)
+    if origin == "schedule":
+        stmt = stmt.where(Call.idempotency_key.like("sched:%"))
+    elif origin == "batch":
+        stmt = stmt.where(Call.idempotency_key.like("batch:%"))
+    elif origin == "adhoc":
+        stmt = stmt.where(
+            Call.direction == CallDirection.OUTBOUND,
+            or_(
+                Call.idempotency_key.is_(None),
+                and_(
+                    Call.idempotency_key.not_like("sched:%"),
+                    Call.idempotency_key.not_like("batch:%"),
+                ),
+            ),
+        )
+    stmt = stmt.order_by(Call.created_at.desc(), Call.id.desc()).limit(limit).offset(offset)
+    result = await db.execute(stmt)
+    return [(row[0], row[1], row[2]) for row in result.all()]

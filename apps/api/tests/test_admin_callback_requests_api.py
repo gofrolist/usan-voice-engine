@@ -64,13 +64,20 @@ def test_list_callback_requests(client, admin_session, async_database_url):
         "id",
         "call_id",
         "elder_id",
+        "elder_name",
+        "masked_phone",
         "requested_time_text",
         "requested_at",
         "notes",
         "status",
+        "status_updated_at",
+        "status_updated_by",
         "created_at",
     }
     assert one["status"] == "open"
+    # C2 workflow stamps: NULL until the first transition (no backfill needed).
+    assert one["status_updated_at"] is None
+    assert one["status_updated_by"] is None
 
 
 def test_list_callback_requests_filters_by_status(client, admin_session, async_database_url):
@@ -98,6 +105,33 @@ def test_list_callback_requests_filters_by_elder(client, admin_session, async_da
 
 def test_list_callback_requests_over_cap_limit_422(client, admin_session):
     assert client.get("/v1/admin/callback-requests?limit=100000").status_code == 422
+
+
+def test_callbacks_list_elder_identity_and_offset(client, admin_session, async_database_url):
+    _call_a, elder_a = asyncio.run(
+        _seed_callback(async_database_url, requested_time_text="identity-a")
+    )
+    asyncio.run(_seed_callback(async_database_url, requested_time_text="identity-b"))
+    phone = f"+1555{str(uuid.UUID(elder_a).int)[:7].zfill(7)}"
+
+    r = client.get(f"/v1/admin/callback-requests?elder_id={elder_a}")
+    assert r.status_code == 200, r.text
+    [one] = r.json()
+    assert one["elder_name"] == "Ada"
+    assert one["masked_phone"] == "***" + phone[-4:]
+    # §9's "never the raw phone" applies to both queues — explicit, not implied.
+    assert phone not in r.text
+
+    # Offset shifts the newest-first window by one (ordering unchanged).
+    page0 = client.get("/v1/admin/callback-requests?limit=2").json()
+    page1 = client.get("/v1/admin/callback-requests?limit=2&offset=1").json()
+    assert page0[1]["id"] == page1[0]["id"]
+    assert client.get("/v1/admin/callback-requests?offset=-1").status_code == 422
+
+
+def test_callbacks_list_status_junk_422(client, admin_session):
+    # Deliberate change (spec §4.4): junk used to 200-empty; the typed Literal 422s.
+    assert client.get("/v1/admin/callback-requests?status=bogus").status_code == 422
 
 
 def test_callback_requests_read_is_audited_phi_free(client, admin_session, async_database_url):
