@@ -387,6 +387,15 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
                 await _delete_room(room, settings)
                 return
             if allowed > now:
+                # DELIBERATE ACCEPT (spec §7 / Open Q9): this re-check enforces
+                # the statutory + policy quiet hours ONLY — operator batch/
+                # schedule windows are materialization-time-only and are NOT
+                # re-intersected here. A policy tightening published AFTER
+                # materialization can therefore requeue a batch/schedule call to
+                # a time outside the operator's (non-statutory) dial window.
+                # Per the A1 precedent (a materialization throttle, not a dial
+                # cap — documented, not oversold): the compliance bounds are
+                # never breached; the operator window is a shaping preference.
                 await calls_repo.requeue_for_quiet_hours(db, call_id, scheduled_at=allowed)
                 await db.commit()
                 # After the commit: a crash between write and commit must not count.
