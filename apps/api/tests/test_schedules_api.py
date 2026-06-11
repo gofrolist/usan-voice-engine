@@ -102,6 +102,19 @@ def test_create_schedule_422_invalid_elder_timezone(client):
     assert r.status_code == 422
 
 
+def test_create_schedule_defensive_none_maps_to_422(client, monkeypatch):
+    # Defensive branch: next_run_at returns None only for policy-induced empty
+    # intersections (§3.3.3 rule 2) and this router never passes policy bounds —
+    # but if the branch is ever reached it must fail closed through the same
+    # handled 422 path as the other ValueErrors, never escape as a 500.
+    from usan_api.routers import schedules as schedules_router
+
+    elder_id = _seed_elder(client)
+    monkeypatch.setattr(schedules_router, "next_run_at", lambda *a, **k: None)
+    r = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP)
+    assert r.status_code == 422
+
+
 def test_create_schedule_422_window_outside_quiet_hours(client):
     elder_id = _seed_elder(client)
     r = client.post(
