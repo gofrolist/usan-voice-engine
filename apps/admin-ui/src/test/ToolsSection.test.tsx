@@ -7,8 +7,13 @@ import { useForm, type UseFormReturn } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { ReactNode } from "react";
 import { ToolsSection } from "../features/editor/sections/ToolsSection";
-import { agentConfigSchema, type AgentConfigForm } from "../config/agentConfigSchema";
+import {
+  agentConfigSchema,
+  smsTemplateSchema,
+  type AgentConfigForm,
+} from "../config/agentConfigSchema";
 import type { ToolSpec } from "../config/toolCatalog";
+import type { VariableSpec } from "../config/variableCatalog";
 
 const getMock = vi.fn();
 vi.mock("../lib/api", () => ({
@@ -173,5 +178,100 @@ describe("ToolsSection SMS", () => {
     render(wrapper(<SmsHarness enabled={["log_wellness", "end_call"]} />));
 
     expect(screen.queryByText(/needs templates/i)).not.toBeInTheDocument();
+  });
+});
+
+// Catalog slice for the catalog-driven SMS notices (spec §6.1): one PHI custom, one
+// non-PHI custom, one builtin. Served through the route-by-URL api mock — the real
+// useVariableCatalog hook fetches /v1/admin/variable-catalog.
+const VAR_CATALOG: VariableSpec[] = [
+  {
+    name: "first_name",
+    tier: "builtin",
+    description: "Elder first name",
+    default: "there",
+    example: "Rose",
+    phi: false,
+  },
+  {
+    name: "diagnosis",
+    tier: "custom",
+    description: "Primary diagnosis",
+    default: "",
+    example: "diabetes",
+    phi: true,
+  },
+  {
+    name: "pet_name",
+    tier: "custom",
+    description: "Pet name",
+    default: "",
+    example: "Biscuit",
+    phi: false,
+  },
+];
+
+function mockCatalogs(): void {
+  getMock.mockImplementation((url: string) =>
+    url === "/v1/admin/variable-catalog"
+      ? Promise.resolve({ variables: VAR_CATALOG })
+      : Promise.resolve({ tools: CATALOG }),
+  );
+}
+
+// Harness with one pre-populated SMS template body so the catalog-driven notices
+// (computed from the watched body value) can be asserted directly.
+function SmsBodyHarness({ body }: { body: string }) {
+  const form = useForm<AgentConfigForm>({
+    resolver: zodResolver(agentConfigSchema),
+    defaultValues: {
+      tools: {
+        enabled: ["send_sms", "end_call"],
+        sms: { templates: [{ key: "followup", label: "Follow up", body }] },
+      },
+    } as unknown as AgentConfigForm,
+  });
+  return <ToolsSection form={form} />;
+}
+
+describe("ToolsSection SMS catalog notices", () => {
+  it("sms body with phi custom shows blocked-at-save notice", async () => {
+    mockCatalogs();
+    render(wrapper(<SmsBodyHarness body="Hi {{diagnosis}}" />));
+
+    const notice = await screen.findByText(/blocked at save/i);
+    expect(notice.textContent).toContain("{{diagnosis}}");
+    expect(notice.textContent).toMatch(/PHI/);
+    // Non-blocking client-side: the static zod schema stays frozen on the 5 builtin
+    // PHI names, so a PHI *custom* still passes zod — the server 422 is authoritative.
+    expect(
+      smsTemplateSchema.safeParse({
+        key: "followup",
+        label: "Follow up",
+        body: "Hi {{diagnosis}}",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("sms body with any custom shows renders-empty notice", async () => {
+    mockCatalogs();
+    render(wrapper(<SmsBodyHarness body="Hi {{pet_name}}" />));
+
+    const notice = await screen.findByText(/not substituted in SMS/i);
+    expect(notice.textContent).toContain("{{pet_name}}");
+    expect(notice.textContent).toMatch(/renders empty/i);
+    // pet_name is not PHI, so the blocked-at-save notice must NOT render.
+    expect(screen.queryByText(/blocked at save/i)).not.toBeInTheDocument();
+  });
+
+  it("builtin non-phi token shows neither notice", async () => {
+    mockCatalogs();
+    render(wrapper(<SmsBodyHarness body="Hi {{first_name}}" />));
+
+    // Wait for the catalogs to settle so the absence assertions are meaningful.
+    await screen.findByText("Record the elder's wellness.");
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith("/v1/admin/variable-catalog"));
+    expect(screen.queryByText(/blocked at save/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not substituted in SMS/i)).not.toBeInTheDocument();
   });
 });
