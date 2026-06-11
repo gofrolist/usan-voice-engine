@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from usan_api import quiet_hours, webhook_events
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, CallBatch, CallBatchTarget, Elder
-from usan_api.repositories import webhook_outbox
+from usan_api.repositories import agent_profiles, webhook_outbox
 from usan_api.retry_policy import MAX_CHAIN_ATTEMPTS, next_retry_delay
 from usan_api.schemas.call import RESERVED_KEY_PREFIXES  # single source (spec §2.2 invariant 3)
 
@@ -265,14 +265,36 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
     parent = await db.get(Call, call_id)
     if parent is None or parent.elder_id is None:
         return None
-    delay = next_retry_delay(parent.status, parent.attempt)
-    if delay is None:
-        return None
     elder = await db.get(Elder, parent.elder_id)
     if elder is None:
         return None
+    # Policy is re-resolved at EVERY consumption site, never snapshotted onto
+    # the Call (TCPA dial-time truth, spec §3.3.2) — a compliance-tightening
+    # publish must bind retries of already-terminal parents. The resolve needs
+    # elder.agent_profile_id, so the delay computation moved after the elder
+    # load; the early-return order is otherwise preserved (parent/elder missing
+    # -> None, then delay-None -> None, then tz clamp, then batch-root walk).
+    policy = await agent_profiles.resolve_call_policy(
+        db,
+        profile_override=parent.profile_override,
+        elder_profile_id=elder.agent_profile_id,
+        direction="outbound",
+    )
+    delay = next_retry_delay(
+        parent.status,
+        parent.attempt,
+        max_attempts=policy.max_attempts_for(parent.status),
+        delay_multiplier=policy.delay_multiplier,
+    )
+    if delay is None:
+        return None
     try:
-        scheduled_at = quiet_hours.next_allowed(_utcnow() + delay, elder.timezone)
+        scheduled_at = quiet_hours.next_allowed(
+            _utcnow() + delay,
+            elder.timezone,
+            start_local=policy.start_local,
+            end_local=policy.end_local,
+        )
     except ValueError:
         logger.bind(call_id=str(call_id), timezone=elder.timezone).error(
             "Retry not scheduled: elder timezone is not a valid IANA zone"
