@@ -121,6 +121,21 @@ def test_next_allowed_defaults_equal_statutory(base, tz):
     assert next_allowed(base, tz) == next_allowed(base, tz, start_local=time(9), end_local=time(21))
 
 
+def test_next_allowed_reclamps_out_of_statutory_bounds():
+    # Defense-in-depth (matching effective_window's statutory max/min):
+    # PolicyConfig is the validation gate, but a buggy caller passing
+    # wider-than-statutory bounds must never produce a pre-09:00 or
+    # post-21:00 dial — the function re-clamps to [09:00, 21:00) itself.
+    before = datetime(2026, 5, 31, 6, 0, tzinfo=UTC)
+    assert next_allowed(before, "UTC", start_local=time(8, 0)) == datetime(
+        2026, 5, 31, 9, 0, tzinfo=UTC
+    )
+    late = datetime(2026, 5, 31, 21, 30, tzinfo=UTC)
+    assert next_allowed(late, "UTC", end_local=time(22, 0)) == datetime(
+        2026, 6, 1, 9, 0, tzinfo=UTC
+    )
+
+
 @pytest.mark.parametrize("bad_tz", ["Not/AZone", "", "Mars/Phobos"])
 def test_unknown_timezone_still_raises_with_kwargs(bad_tz):
     # Fail-CLOSED contract unchanged by the keyword generalization.

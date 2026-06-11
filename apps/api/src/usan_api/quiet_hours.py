@@ -32,9 +32,10 @@ def next_allowed(
     """Earliest aware-UTC instant >= dt_utc within [start_local, end_local) local time.
 
     Defaults are the statutory [09:00, 21:00) bounds — existing callers are
-    zero-diff. Callers passing policy bounds must pass values already validated
-    to be WITHIN the statutory window (``PolicyConfig`` is that gate, spec §7);
-    this function does not re-clamp to statutory.
+    zero-diff. Policy bounds are validated to be WITHIN the statutory window
+    upstream (``PolicyConfig`` is the gate, spec §7); the re-clamp below is
+    defense-in-depth only, matching ``effective_window``'s statutory max/min —
+    a buggy caller must never produce an out-of-statutory dial.
 
     ``dt_utc`` must be timezone-aware. Raises ValueError for an unknown timezone.
     """
@@ -42,6 +43,9 @@ def next_allowed(
         tz = ZoneInfo(tz_name)
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ValueError(f"unknown timezone: {tz_name!r}") from exc
+
+    start_local = max(start_local, time(QUIET_START_HOUR, 0))
+    end_local = min(end_local, time(QUIET_END_HOUR, 0))
 
     local = dt_utc.astimezone(tz)
     local_t = local.time()
