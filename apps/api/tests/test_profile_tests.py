@@ -193,6 +193,21 @@ def test_llm_rejects_unsupported_model_before_vertex_call(
     assert vertex_admin["n"] == 0
 
 
+def test_llm_rejects_oversized_sample_var_value(client, admin_session):
+    """sample_vars values are bounded at the schema layer: an over-long value is a
+    422 (not silently truncated post-parse), so the validated payload size is capped
+    (security review PR #61, LOW #2). Fails at body validation — no provider needed."""
+    pid = _new_profile(client)
+    r = client.post(
+        f"/v1/admin/profiles/{pid}/test/llm",
+        json={
+            "messages": [{"role": "user", "content": "hi"}],
+            "sample_vars": {"first_name": "x" * 2001},
+        },
+    )
+    assert r.status_code == 422, r.text
+
+
 # --- test/audio -----------------------------------------------------------
 
 

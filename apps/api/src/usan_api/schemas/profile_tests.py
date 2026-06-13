@@ -32,6 +32,10 @@ _MAX_SAMPLE_KEY_LEN = 128
 
 # A length-bounded sample-var key so a single test cannot carry unbounded key strings.
 SampleVarKey = Annotated[str, StringConstraints(max_length=_MAX_SAMPLE_KEY_LEN)]
+# A length-bounded sample-var VALUE: with the dict's max_length (count) and the key cap,
+# this bounds the validated payload (count x key-len x value-len) so an over-long value
+# is rejected at parse time rather than silently truncated post-parse (PR #61 review LOW #2).
+SampleVarValue = Annotated[str, StringConstraints(max_length=_MAX_SAMPLE_VALUE_LEN)]
 
 
 class TestMessage(BaseModel):
@@ -44,7 +48,9 @@ class TestMessage(BaseModel):
 class TestLlmRequest(BaseModel):
     messages: list[TestMessage] = Field(min_length=1, max_length=_MAX_MESSAGES)
     # name -> synthetic sample value. Capped count + length so a test run is bounded.
-    sample_vars: dict[SampleVarKey, str] = Field(default_factory=dict, max_length=_MAX_SAMPLE_VARS)
+    sample_vars: dict[SampleVarKey, SampleVarValue] = Field(
+        default_factory=dict, max_length=_MAX_SAMPLE_VARS
+    )
     # Omitted → use the profile's stored draft_config (re-validated handler-side).
     config: AgentConfig | None = None
 
@@ -66,7 +72,9 @@ class TestLlmResponse(BaseModel):
 
 
 class TestAudioRequest(BaseModel):
-    sample_vars: dict[SampleVarKey, str] = Field(default_factory=dict, max_length=_MAX_SAMPLE_VARS)
+    sample_vars: dict[SampleVarKey, SampleVarValue] = Field(
+        default_factory=dict, max_length=_MAX_SAMPLE_VARS
+    )
     config: AgentConfig | None = None
 
     def bounded_sample_vars(self) -> dict[str, str]:
