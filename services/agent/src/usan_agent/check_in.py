@@ -316,6 +316,126 @@ _TOOL_REGISTRY: dict[str, Any] = {
 }
 
 
+# --- Sandboxed test-mode tools (US5 / FR-027) -------------------------------
+# When a job is dispatched with session_kind=="test" (a pre-publish Test Audio run),
+# the agent MUST NOT touch the database or PHI: these stubs mirror the live tools'
+# names + docstrings (so the LLM sees the same tool surface) but return a canned
+# string and NEVER call api_client / POST to /v1/tools/*. This is the ONLY tool
+# registry reachable in test mode. _do_end_call still runs for end_call so a test
+# call can hang up gracefully (it reports best-effort then delete_room/shutdown), but
+# it does not write any call-outcome row that did not already exist (there is no Call).
+
+
+@function_tool
+async def noop_log_wellness(
+    ctx: RunContext[CheckInData],
+    mood: int | None = None,
+    pain_level: int | None = None,
+    notes: str | None = None,
+) -> str:
+    """Record the elder's wellness this call.
+
+    Args:
+        mood: Overall mood, 1 (low) to 5 (great).
+        pain_level: Pain level, 0 (none) to 10 (severe).
+        notes: A short free-text note about how they are doing.
+    """
+    return "Thank you, I've noted how you're feeling."
+
+
+@function_tool
+async def noop_log_medication(
+    ctx: RunContext[CheckInData],
+    medication_name: str,
+    taken: bool,
+    reported_time: str | None = None,
+) -> str:
+    """Record whether the elder has taken a medication.
+
+    Args:
+        medication_name: The medication's name.
+        taken: True if they have taken it, False if not.
+        reported_time: Optional ISO-8601 time they said they took it.
+    """
+    return "Got it, I've recorded that."
+
+
+@function_tool
+async def noop_get_today_meds(ctx: RunContext[CheckInData]) -> str:
+    """List the medications the elder is scheduled to take today."""
+    return "Today's medications are: (test mode) Example Medication at 9:00 AM."
+
+
+@function_tool
+async def noop_flag_for_followup(
+    ctx: RunContext[CheckInData],
+    severity: FlagSeverity,
+    category: FlagCategory,
+    reason: str,
+) -> str:
+    """Flag this call for a human to follow up on.
+
+    Args:
+        severity: "routine" for a non-urgent note, "urgent" for prompt attention.
+        category: One of "medical", "emotional", "medication", "safety", "other".
+        reason: A short description of what should be followed up on.
+    """
+    return "Thank you. I've flagged this so someone can follow up with you."
+
+
+@function_tool
+async def noop_schedule_callback(
+    ctx: RunContext[CheckInData],
+    requested_time_text: str,
+    requested_at: str | None = None,
+    notes: str | None = None,
+) -> str:
+    """Record that the elder would like a call back at a particular time.
+
+    Args:
+        requested_time_text: The elder's own words for when they'd like the call back.
+        requested_at: Optional best-effort ISO-8601 timestamp; omit if you can't resolve one.
+        notes: Optional short free-text note about the request.
+    """
+    return "Of course, I've noted that you'd like a call back then."
+
+
+@function_tool
+async def noop_send_sms(ctx: RunContext[CheckInData], template_key: str) -> str:
+    """Send the elder a pre-approved text message.
+
+    Args:
+        template_key: The id of the message template to send (choose from the
+            available templates; you cannot write custom text).
+    """
+    return "I've sent that text message for you."
+
+
+@function_tool
+async def noop_end_call(ctx: RunContext[CheckInData], reason: str = "check_in_complete") -> str:
+    """End the call once the check-in is complete.
+
+    Args:
+        reason: A short reason, e.g. "check_in_complete".
+    """
+    await _do_end_call(ctx.userdata, ctx.session, reason)
+    return ""
+
+
+# No-op registry: stub callables that return canned strings and NEVER call api_client.
+# Keyed by the SAME catalog names as _TOOL_REGISTRY so test mode offers the identical
+# tool surface to the LLM while writing nothing.
+_TEST_TOOL_REGISTRY: dict[str, Any] = {
+    "log_wellness": noop_log_wellness,
+    "log_medication": noop_log_medication,
+    "get_today_meds": noop_get_today_meds,
+    "flag_for_followup": noop_flag_for_followup,
+    "schedule_callback": noop_schedule_callback,
+    "send_sms": noop_send_sms,
+    "end_call": noop_end_call,
+}
+
+
 class _ToolsConfigLike(Protocol):
     """Structural view of what _select_tools requires off a ToolsConfig.
 
@@ -326,6 +446,23 @@ class _ToolsConfigLike(Protocol):
     """
 
     enabled: list[str]
+
+
+def _select_test_tools(tools: _ToolsConfigLike) -> list[Any]:
+    """Resolve enabled tool names to the no-op TEST callables, preserving order.
+
+    Sandbox parallel of ``_select_tools`` (FR-027): every callable comes from
+    ``_TEST_TOOL_REGISTRY`` so a pre-publish Test Audio run exercises the same tool
+    surface the LLM would see live, but no stub touches ``api_client``. The send_sms
+    template guard and the always-include-end_call rule are preserved so the test
+    behaves like a real call minus the database writes.
+    """
+    names = [n for n in tools.enabled if n in _TEST_TOOL_REGISTRY]  # preserve enabled order
+    if not _sms_templates(tools):
+        names = [n for n in names if n != "send_sms"]
+    if "end_call" not in names:
+        names.append("end_call")
+    return [_TEST_TOOL_REGISTRY[n] for n in names]
 
 
 def _select_tools(tools: _ToolsConfigLike) -> list[Any]:
@@ -432,4 +569,33 @@ def build_inbound_agent(
         instructions=substitute(cfg.prompts.inbound_personalization_template, values)
         + _sms_template_instructions(cfg.tools),
         tools=_select_tools(cfg.tools),
+    )
+
+
+def build_test_agent(
+    cfg: AgentConfig | None = None,
+    *,
+    resolved_vars: dict[str, str] | None = None,
+    custom_vars: dict[str, Any] | None = None,
+    timezone: str = "",
+    now: datetime | None = None,
+) -> Agent:
+    """The SANDBOXED test Agent: draft instructions + the no-op test tool registry.
+
+    Parallel of ``build_check_in_agent`` for ``session_kind=="test"`` (FR-027): it
+    substitutes the draft prompt with the admin-supplied SYNTHETIC vars exactly as a
+    live call would, but every tool is a no-op stub from ``_TEST_TOOL_REGISTRY`` so
+    the simulation writes nothing and calls no ``/v1/tools/*`` endpoint.
+    """
+    cfg = cfg or DEFAULT_AGENT_CONFIG
+    values = build_vars(
+        resolved_vars or {},
+        custom_vars or {},
+        timezone=timezone,
+        now=now or datetime.now(UTC),
+    )
+    return Agent(
+        instructions=substitute(cfg.prompts.checkin_flow_instructions, values)
+        + _sms_template_instructions(cfg.tools),
+        tools=_select_test_tools(cfg.tools),
     )

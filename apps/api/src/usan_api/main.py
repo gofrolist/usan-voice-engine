@@ -27,6 +27,7 @@ from usan_api.routers import (
     admin_defaults,
     admin_elders,
     admin_model_catalog,
+    admin_profile_tests,
     admin_profiles,
     admin_tool_catalog,
     admin_tools,
@@ -171,6 +172,7 @@ def create_app() -> FastAPI:
 
     app.include_router(admin_profiles.router)
     app.include_router(admin_defaults.router)
+    app.include_router(admin_profile_tests.router)
     app.include_router(admin_users.router)
     app.include_router(admin_audit.router)
     app.include_router(admin_elders.router)

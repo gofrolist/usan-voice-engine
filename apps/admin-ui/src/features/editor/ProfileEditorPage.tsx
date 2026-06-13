@@ -11,6 +11,8 @@ import type { ApiError } from "../../lib/api";
 import type { AgentConfig } from "../../types/api";
 import { useProfile, useSaveDraft } from "./hooks";
 import { PublishDialog } from "./PublishDialog";
+import { TestLLMPanel } from "./TestLLMPanel";
+import { TestAudioPanel } from "./TestAudioPanel";
 import { EditorToolbar } from "./EditorToolbar";
 import { SectionRail } from "./SectionRail";
 import { PromptsSection } from "./sections/PromptsSection";
@@ -67,6 +69,8 @@ export function ProfileEditorPage() {
 
   const [section, setSection] = useState<SectionKey>("prompts");
   const [publishOpen, setPublishOpen] = useState(false);
+  // Pre-publish test drawer (US5): null = closed; otherwise the active test tab.
+  const [testTab, setTestTab] = useState<"llm" | "audio" | null>(null);
   // Optimistic-concurrency conflict banner (FR-032): set when a save is rejected
   // with 409 because the draft changed since it was loaded.
   const [conflict, setConflict] = useState(false);
@@ -275,6 +279,45 @@ export function ProfileEditorPage() {
           />
         </aside>
       </div>
+
+      {isAdmin ? (
+        <div className="border-t border-slate-200 bg-white px-8 py-3">
+          <div className="mx-auto max-w-3xl">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-slate-700">Test before publishing</span>
+              <button
+                type="button"
+                className={`rounded px-2 py-1 text-xs font-medium ${testTab === "llm" ? "bg-sky-600 text-white" : "border border-slate-300 text-slate-700 hover:bg-slate-50"}`}
+                onClick={() => setTestTab((t) => (t === "llm" ? null : "llm"))}
+              >
+                Test LLM (text)
+              </button>
+              <button
+                type="button"
+                className={`rounded px-2 py-1 text-xs font-medium ${testTab === "audio" ? "bg-sky-600 text-white" : "border border-slate-300 text-slate-700 hover:bg-slate-50"}`}
+                onClick={() => setTestTab((t) => (t === "audio" ? null : "audio"))}
+              >
+                Test Audio (browser call)
+              </button>
+            </div>
+            {testTab ? (
+              <div className="mt-3">
+                {testTab === "llm" ? (
+                  <TestLLMPanel
+                    profileId={id}
+                    getConfig={() => agentConfigSchema.parse(form.getValues()) as AgentConfig}
+                  />
+                ) : (
+                  <TestAudioPanel
+                    profileId={id}
+                    getConfig={() => agentConfigSchema.parse(form.getValues()) as AgentConfig}
+                  />
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <PublishDialog
         open={publishOpen}

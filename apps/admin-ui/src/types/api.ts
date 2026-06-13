@@ -206,6 +206,44 @@ export interface DefaultsView {
 }
 
 // ---------------------------------------------------------------------------
+// Pre-publish agent tests (profile_tests.py) — US5
+// ---------------------------------------------------------------------------
+
+export interface TestMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface TestLlmRequest {
+  messages: TestMessage[];
+  // name -> synthetic sample value. No real contact PHI is ever loaded server-side.
+  sample_vars?: Record<string, string>;
+  // Omitted -> the server uses the profile's stored draft_config.
+  config?: AgentConfig | null;
+}
+
+export interface TestToolCall {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export interface TestLlmResponse {
+  assistant: string;
+  tool_calls: TestToolCall[];
+}
+
+export interface TestAudioRequest {
+  sample_vars?: Record<string, string>;
+  config?: AgentConfig | null;
+}
+
+export interface TestAudioResponse {
+  url: string; // wss:// LiveKit url for Room.connect
+  token: string; // short-TTL join-only browser token
+  room: string; // throwaway room name (usan-test-<uuid>)
+}
+
+// ---------------------------------------------------------------------------
 // Admin (admin.py)
 // ---------------------------------------------------------------------------
 
