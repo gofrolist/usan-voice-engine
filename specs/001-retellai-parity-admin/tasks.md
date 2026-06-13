@@ -34,8 +34,8 @@ independently testable increment.
 
 - [ ] T001 [P] Add `google-genai` (Vertex AI / `vertexai=True`) dependency for the text-test LLM path in `apps/api/pyproject.toml`, then `cd apps/api && uv sync`
 - [ ] T002 [P] Add `livekit-client` (^2.x) dependency for the audio-test webcall in `apps/admin-ui/package.json`, then `cd apps/admin-ui && npm ci`
-- [ ] T003 Add startup-validated settings fields in `apps/api/src/usan_api/settings.py`: `cartesia_api_key: SecretStr`, `cartesia_api_url`, `cartesia_version`, `cartesia_sample_model`, `gcp_project`, `vertex_location` (Pydantic, fail-fast at startup per Constitution III)
-- [ ] T004 [P] Add the new keys to `infra/.env.example` and document the "VM `.env` before the deploy tag" ordering for `CARTESIA_API_KEY` / `GCP_PROJECT` / `VERTEX_LOCATION` in `infra/README.md`
+- [X] T003 Add startup-validated settings fields in `apps/api/src/usan_api/settings.py`: `cartesia_api_key: SecretStr`, `cartesia_api_url`, `cartesia_version`, `cartesia_sample_model`, `gcp_project`, `vertex_location` (Pydantic, fail-fast at startup per Constitution III)
+- [X] T004 [P] Add the new keys to `infra/.env.example` and document the "VM `.env` before the deploy tag" ordering for `CARTESIA_API_KEY` / `GCP_PROJECT` / `VERTEX_LOCATION` in `infra/README.md`
 
 ---
 
