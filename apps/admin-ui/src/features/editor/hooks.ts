@@ -23,13 +23,20 @@ export function useProfile(id: string) {
 interface SaveDraftVars {
   config: AgentConfig;
   description?: string | null;
+  // Optimistic concurrency (FR-032): the draft_revision the editor loaded. A
+  // stale value makes the server reject the save with 409 instead of clobbering.
+  expectedRevision?: number;
 }
 
 export function useSaveDraft(id: string) {
   const qc = useQueryClient();
   return useMutation<ProfileDetail, ApiError, SaveDraftVars>({
     mutationFn: (vars) => {
-      const body: DraftUpdate = { config: vars.config, description: vars.description };
+      const body: DraftUpdate = {
+        config: vars.config,
+        description: vars.description,
+        expected_revision: vars.expectedRevision,
+      };
       return api.put<ProfileDetail>(`/v1/admin/profiles/${id}/draft`, body);
     },
     onSuccess: (detail) => {

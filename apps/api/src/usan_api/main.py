@@ -19,16 +19,21 @@ from usan_api.logging_config import configure_logging
 from usan_api.observability.instrumentation import setup_metrics
 from usan_api.ratelimit import OperatorRateLimitMiddleware
 from usan_api.repositories import admin_users as admin_users_repo
+from usan_api.repositories import custom_variables as custom_variables_repo
 from usan_api.routers import (
     admin_audit,
     admin_calls,
     admin_custom_variables,
+    admin_defaults,
     admin_elders,
+    admin_model_catalog,
+    admin_profile_tests,
     admin_profiles,
     admin_tool_catalog,
     admin_tools,
     admin_users,
     admin_variable_catalog,
+    admin_voice_catalog,
     auth,
     batches,
     calls,
@@ -66,10 +71,22 @@ async def _seed_admin_allowlist(settings: Settings) -> None:
         logger.exception("Failed to seed bootstrap admin allow-list")
 
 
+async def _check_contact_name_shadow() -> None:
+    """Deploy-time guard (US4 / FR-024): warn (name-only) if a pre-existing custom
+    ``contact_name`` row is shadowed by the new builtin alias. Best-effort — a DB
+    hiccup logs and never crashes startup."""
+    try:
+        async with get_session_factory()() as db:
+            await custom_variables_repo.warn_if_contact_name_custom_exists(db)
+    except Exception:  # noqa: BLE001 - startup must not crash on a check failure
+        logger.exception("Failed to run the contact_name shadow check")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     await _seed_admin_allowlist(settings)
+    await _check_contact_name_shadow()
     stop = asyncio.Event()
     poller_tasks: list[asyncio.Task[None]] = []
     if settings.retry_poller_enabled:
@@ -154,12 +171,16 @@ def create_app() -> FastAPI:
         return HealthResponse(status="ok")
 
     app.include_router(admin_profiles.router)
+    app.include_router(admin_defaults.router)
+    app.include_router(admin_profile_tests.router)
     app.include_router(admin_users.router)
     app.include_router(admin_audit.router)
     app.include_router(admin_elders.router)
     app.include_router(admin_variable_catalog.router)
     app.include_router(admin_custom_variables.router)
     app.include_router(admin_tool_catalog.router)
+    app.include_router(admin_voice_catalog.router)
+    app.include_router(admin_model_catalog.router)
     app.include_router(admin_tools.router)
     app.include_router(admin_calls.router)
     app.include_router(auth.router)

@@ -57,7 +57,7 @@ export function ProfilesListPage() {
             <Th>Defaults</Th>
             <Th>Live version</Th>
             <Th>Draft</Th>
-            <Th>Elders</Th>
+            <Th>Contacts</Th>
             <Th className="text-right">Actions</Th>
           </Tr>
         </Thead>
@@ -145,8 +145,8 @@ export function ProfilesListPage() {
         body={
           <>
             Archive <strong>{toArchive?.name}</strong>? Archived profiles can no longer be set as a
-            default and stop appearing in elder assignment. A profile that is still a default or
-            assigned to elders cannot be archived (the server will reject it).
+            default and stop appearing in contact assignment. A profile that is still a default or
+            assigned to contacts cannot be archived (the server will reject it).
           </>
         }
         confirmLabel="Archive"

@@ -5,12 +5,13 @@ from zoneinfo import ZoneInfo
 from usan_agent.prompt_vars import BUILTIN_DEFAULTS, BUILTIN_NAMES, build_vars, substitute
 
 
-def test_builtin_mirror_has_the_ten_names():
+def test_builtin_mirror_has_the_expected_names():
     assert (
         frozenset(
             {
                 "first_name",
                 "elder_name",
+                "contact_name",  # US4 alias of elder_name (FR-024)
                 "call_direction",
                 "current_time",
                 "current_date",
@@ -23,11 +24,33 @@ def test_builtin_mirror_has_the_ten_names():
         )
         == BUILTIN_NAMES
     )
-    # Only first_name / elder_name carry a non-empty default ("there"); rest are "".
+    # first_name / elder_name / contact_name carry a non-empty default ("there"); rest are "".
     assert BUILTIN_DEFAULTS["first_name"] == "there"
     assert BUILTIN_DEFAULTS["elder_name"] == "there"
     assert BUILTIN_DEFAULTS["call_direction"] == ""
     assert set(BUILTIN_DEFAULTS) == BUILTIN_NAMES
+
+
+def test_contact_name_mirror_aliases_elder_name():
+    # The agent-side mirror must carry contact_name with the same default as
+    # elder_name, or {{contact_name}} would render empty agent-side (R6 cross-layer).
+    assert "contact_name" in BUILTIN_NAMES
+    assert BUILTIN_DEFAULTS["contact_name"] == "there"
+    assert BUILTIN_DEFAULTS["contact_name"] == BUILTIN_DEFAULTS["elder_name"]
+
+
+def test_substitute_contact_name_resolves_identically_to_elder_name():
+    # Given the same resolved value, {{contact_name}} and {{elder_name}} substitute
+    # to the same string (the API stamps both from elder.name).
+    values = {"contact_name": "Margaret Doe", "elder_name": "Margaret Doe"}
+    assert substitute("Hi {{contact_name}}!", values) == "Hi Margaret Doe!"
+    assert substitute("Hi {{contact_name}}!", values) == substitute("Hi {{elder_name}}!", values)
+
+
+def test_build_vars_contact_name_defaults_to_there():
+    out = build_vars({}, {}, timezone="", now=_NOW)
+    assert out["contact_name"] == "there"
+    assert out["contact_name"] == out["elder_name"]
 
 
 def test_substitute_replaces_double_brace_token():

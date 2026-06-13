@@ -163,6 +163,20 @@ class Settings(BaseSettings):
         default=10, ge=1, le=100, alias="WEBHOOK_DELIVERY_CIRCUIT_BREAKER_THRESHOLD"
     )
 
+    # --- Voice sample proxy (Cartesia TTS) + text-test LLM (Vertex AI). All optional
+    # like gcs_bucket/telnyx_* above: the API boots without them; the consuming
+    # endpoints (admin voice-sample, admin profile test/llm) check presence and fail
+    # with a clear error when unconfigured. CARTESIA_API_KEY is the only secret and
+    # stays server-side (the browser never calls Cartesia directly). The text-test
+    # path authenticates to Vertex via ADC (not the Gemini Developer API), so it needs
+    # the project + region only — never an API key (Constitution II PHI containment).
+    cartesia_api_key: SecretStr | None = Field(default=None, alias="CARTESIA_API_KEY")
+    cartesia_api_url: str = Field(default="https://api.cartesia.ai", alias="CARTESIA_API_URL")
+    cartesia_version: str = Field(default="2024-11-13", alias="CARTESIA_VERSION")
+    cartesia_sample_model: str = Field(default="sonic-2", alias="CARTESIA_SAMPLE_MODEL")
+    gcp_project: str | None = Field(default=None, alias="GCP_PROJECT")
+    vertex_location: str = Field(default="us-central1", alias="VERTEX_LOCATION")
+
     @model_validator(mode="after")
     def _reserved_below_max(self) -> Settings:
         # The gate computes max - reserved - in_flight; reserved >= max means the
@@ -199,6 +213,9 @@ class Settings(BaseSettings):
         "telnyx_messaging_api_key",
         "telnyx_messaging_profile_id",
         "telnyx_from_number",
+        # Compose passes these unset optionals as "" (${VAR:-}); blank => None.
+        "cartesia_api_key",
+        "gcp_project",
         mode="before",
     )
     @classmethod
@@ -216,11 +233,13 @@ class Settings(BaseSettings):
             raise ValueError("must be a ws:// or wss:// URL")
         return v
 
-    @field_validator("telnyx_messaging_api_url")
+    @field_validator("telnyx_messaging_api_url", "cartesia_api_url")
     @classmethod
     def _https_scheme(cls, v: str) -> str:
-        # The SMS flush POSTs the rendered body + the elder's phone to this URL, so a
-        # plaintext/hostile endpoint would leak PHI. Require https:// (operator config).
+        # Both carry a bearer secret in the Authorization header (the Telnyx / Cartesia
+        # API key), and the SMS flush also POSTs the rendered body + the elder's phone;
+        # a plaintext/hostile endpoint would leak the secret (and PHI). Require https://
+        # (operator config).
         if not v.startswith("https://"):
             raise ValueError("must be an https:// URL")
         return v

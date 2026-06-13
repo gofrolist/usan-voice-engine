@@ -113,6 +113,8 @@ export interface ProfileSummary {
   published_version: number | null;
   has_unpublished_draft: boolean;
   assigned_elder_count: number;
+  // Optimistic-concurrency token (FR-032); see ProfileDetail.draft_revision.
+  draft_revision: number;
   updated_at: string;
 }
 
@@ -125,6 +127,9 @@ export interface ProfileDetail {
   is_default_outbound: boolean;
   published_version: number | null;
   draft_config: AgentConfig;
+  // Optimistic-concurrency token (FR-032): loaded with the draft, echoed back as
+  // DraftUpdate.expected_revision on save; a stale value yields HTTP 409.
+  draft_revision: number;
   created_by: string | null;
   updated_by: string | null;
   created_at: string;
@@ -153,6 +158,9 @@ export interface ProfileCreate {
 export interface DraftUpdate {
   config: AgentConfig;
   description?: string | null;
+  // Optimistic concurrency (FR-032): the draft_revision the editor loaded. Omitted
+  // -> unconditional save (backward compatible); the editor always sends it.
+  expected_revision?: number;
 }
 
 export interface PublishRequest {
@@ -161,6 +169,78 @@ export interface PublishRequest {
 
 export interface SetDefaultRequest {
   direction: Direction;
+}
+
+// ---------------------------------------------------------------------------
+// Defaults area read model (schemas/admin_defaults.py — US3 / FR-016..020)
+// ---------------------------------------------------------------------------
+
+// Why a flagged default is no longer effective (FR-020). null when it resolves.
+export type IneligibleReason = "archived" | "unpublished";
+
+// The profile currently flagged default for a direction (name/id only — no PHI).
+export interface DefaultProfileRef {
+  id: string;
+  name: string;
+  status: ProfileStatus;
+  published_version: number | null;
+  // True iff this default actually resolves for a call (active + published).
+  eligible: boolean;
+}
+
+export interface DirectionDefault {
+  direction: Direction;
+  // null when no profile is flagged default for this direction.
+  default_profile: DefaultProfileRef | null;
+  // True when a default IS flagged but no longer effective (archived/unpublished).
+  ineligible: boolean;
+  ineligible_reason: IneligibleReason | null;
+}
+
+export interface DefaultsView {
+  directions: DirectionDefault[];
+  // Plain-language resolution order, highest precedence first (FR-017).
+  resolution_order: string[];
+  // The built-in last-resort fallback config, read-only (FR-017/FR-019).
+  builtin_fallback: AgentConfig;
+}
+
+// ---------------------------------------------------------------------------
+// Pre-publish agent tests (profile_tests.py) — US5
+// ---------------------------------------------------------------------------
+
+export interface TestMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface TestLlmRequest {
+  messages: TestMessage[];
+  // name -> synthetic sample value. No real contact PHI is ever loaded server-side.
+  sample_vars?: Record<string, string>;
+  // Omitted -> the server uses the profile's stored draft_config.
+  config?: AgentConfig | null;
+}
+
+export interface TestToolCall {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export interface TestLlmResponse {
+  assistant: string;
+  tool_calls: TestToolCall[];
+}
+
+export interface TestAudioRequest {
+  sample_vars?: Record<string, string>;
+  config?: AgentConfig | null;
+}
+
+export interface TestAudioResponse {
+  url: string; // wss:// LiveKit url for Room.connect
+  token: string; // short-TTL join-only browser token
+  room: string; // throwaway room name (usan-test-<uuid>)
 }
 
 // ---------------------------------------------------------------------------

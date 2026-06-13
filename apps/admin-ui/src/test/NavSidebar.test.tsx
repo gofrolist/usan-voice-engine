@@ -55,20 +55,24 @@ describe("NavSidebar Operate group", () => {
     expect(screen.getByRole("link", { name: "Queues" })).toHaveAttribute("href", "/queues");
   });
 
-  it("regression: Elders stays hidden for the viewer", async () => {
+  it("regression: Contacts stays hidden for the viewer", async () => {
     renderSidebar();
     await screen.findByText("me@example.com");
+    expect(screen.queryByRole("link", { name: "Contacts" })).not.toBeInTheDocument();
+    // The legacy "Elders" label is fully gone from the nav (US4 / SC-007).
     expect(screen.queryByRole("link", { name: "Elders" })).not.toBeInTheDocument();
     // Operate links are not adminOnly — still present for the viewer.
     expect(screen.getByRole("link", { name: "Calls" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Queues" })).toBeInTheDocument();
   });
 
-  it("regression: Elders is visible for admin", async () => {
+  it("regression: Contacts is visible for admin (label + /contacts href)", async () => {
     role = "admin";
     renderSidebar();
     await screen.findByText("me@example.com");
-    expect(screen.getByRole("link", { name: "Elders" })).toHaveAttribute("href", "/elders");
+    // US4: the nav reads "Contacts" and the user-visible route token is /contacts.
+    expect(screen.getByRole("link", { name: "Contacts" })).toHaveAttribute("href", "/contacts");
+    expect(screen.queryByRole("link", { name: "Elders" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Calls" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Queues" })).toBeInTheDocument();
   });

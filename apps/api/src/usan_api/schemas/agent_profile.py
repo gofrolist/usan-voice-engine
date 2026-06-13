@@ -22,6 +22,10 @@ class ProfileCreate(BaseModel):
 class DraftUpdate(BaseModel):
     config: AgentConfig
     description: str | None = Field(default=None, max_length=DESCRIPTION_MAX_LENGTH)
+    # Optimistic concurrency (FR-032): the revision the editor loaded. When present
+    # and != the current draft_revision, the guarded UPDATE matches 0 rows -> 409.
+    # Omitted -> unconditional save (backward compatible); the editor always sends it.
+    expected_revision: int | None = None
 
 
 class PublishRequest(BaseModel):
@@ -42,6 +46,7 @@ class ProfileSummary(BaseModel):
     published_version: int | None
     has_unpublished_draft: bool
     assigned_elder_count: int
+    draft_revision: int
     updated_at: datetime
 
     @classmethod
@@ -62,6 +67,7 @@ class ProfileSummary(BaseModel):
             published_version=profile.published_version,
             has_unpublished_draft=has_unpublished_draft,
             assigned_elder_count=assigned_elder_count,
+            draft_revision=profile.draft_revision,
             updated_at=profile.updated_at,
         )
 
@@ -75,6 +81,9 @@ class ProfileDetail(BaseModel):
     is_default_outbound: bool
     published_version: int | None
     draft_config: AgentConfig
+    # Optimistic-concurrency token (FR-032): the editor loads this with the draft
+    # and echoes it back as DraftUpdate.expected_revision on save.
+    draft_revision: int
     created_by: str | None
     updated_by: str | None
     created_at: datetime
@@ -96,6 +105,7 @@ class ProfileDetail(BaseModel):
             is_default_outbound=profile.is_default_outbound,
             published_version=profile.published_version,
             draft_config=AgentConfig.model_validate(profile.draft_config),
+            draft_revision=profile.draft_revision,
             created_by=profile.created_by,
             updated_by=profile.updated_by,
             created_at=profile.created_at,

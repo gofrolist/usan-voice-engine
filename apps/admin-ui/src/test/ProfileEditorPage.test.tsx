@@ -76,6 +76,7 @@ function profile(): ProfileDetail {
     is_default_outbound: false,
     published_version: 1,
     draft_config: baseConfig(),
+    draft_revision: 1,
     created_by: null,
     updated_by: null,
     created_at: "2026-06-01T00:00:00Z",

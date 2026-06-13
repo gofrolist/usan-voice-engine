@@ -20,6 +20,7 @@ DATA_BUILTIN_NAMES: frozenset[str] = frozenset(
     {
         "first_name",
         "elder_name",
+        "contact_name",  # US4 alias of elder_name (FR-024) — same elder.name source
         "call_direction",
         "last_check_in",
         "last_check_in_line",
@@ -81,6 +82,7 @@ def resolve_builtin_vars(
     resolved: dict[str, str] = {
         "first_name": "",
         "elder_name": "",
+        "contact_name": "",  # US4 alias of elder_name (FR-024)
         "call_direction": direction,
         "last_check_in": "",
         "last_check_in_line": "",
@@ -92,6 +94,8 @@ def resolve_builtin_vars(
     if elder is not None:
         full = elder.name or ""
         resolved["elder_name"] = full
+        # contact_name aliases elder_name from the same elder.name source (FR-024).
+        resolved["contact_name"] = full
         resolved["first_name"] = full.split()[0] if full.split() else ""
         resolved["today_meds"] = _today_meds(elder)
         timezone = elder.timezone or ""

@@ -11,8 +11,13 @@ from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
 from usan_api.repositories import custom_variables as custom_variables_repo
-from usan_api.repositories.agent_profiles import CloneSourceNotFoundError, ProfileInUseError
+from usan_api.repositories.agent_profiles import (
+    CloneSourceNotFoundError,
+    ProfileInUseError,
+    StaleDraftError,
+)
 from usan_api.schemas.agent_config import (
+    catalog_violations,
     custom_phi_sms_violations,
     phi_tokens_in_sensitive_fields,
     sms_renders_empty_warnings,
@@ -110,16 +115,36 @@ async def update_draft(
     # save BEFORE persistence — the draft stays unchanged. The client shows only a
     # non-blocking notice for customs, so this server gate is primary; the
     # field-level loc detail parses client-side exactly like a pydantic 422.
-    violations = custom_phi_sms_violations(body.config.model_dump(), custom_phi)
+    config_dump = body.config.model_dump()
+    # AUTHORITATIVE 422 (FR-014): a voice/model id outside the curated catalogs blocks
+    # the save (handler-layer, not a frozen-config Literal, so published snapshots with
+    # a withdrawn id still deserialize). Combined with the custom-PHI-SMS gate below so
+    # every blocking reason surfaces in one field-level 422 detail list.
+    violations = custom_phi_sms_violations(config_dump, custom_phi) + catalog_violations(
+        config_dump
+    )
     if violations:
         raise HTTPException(status_code=422, detail=violations)
-    profile = await repo.update_draft(
-        db,
-        profile_id,
-        config=body.config.model_dump(),
-        description=body.description,
-        actor_email=actor,
-    )
+    try:
+        profile = await repo.update_draft(
+            db,
+            profile_id,
+            config=config_dump,
+            description=body.description,
+            actor_email=actor,
+            expected_revision=body.expected_revision,
+        )
+    except StaleDraftError as exc:
+        # Optimistic-concurrency conflict (FR-032): the draft moved on since the
+        # editor loaded it. Generic, PHI-free message — no other actor's identity.
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This draft was changed by someone else since you opened it. "
+                "Reload to see the latest, then re-apply your changes."
+            ),
+        ) from exc
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
     # Compute non-fatal unknown-{{var}} warnings across every prompt field so the
@@ -180,7 +205,12 @@ async def publish(
     # AUTHORITATIVE 422 (spec §3.2.1): re-check the draft at publish time — a
     # variable may have been flipped to phi=true after the draft was saved.
     custom_phi = await custom_variables_repo.phi_names(db)
-    violations = custom_phi_sms_violations(profile.draft_config, custom_phi)
+    # Re-check voice/model catalog membership at publish (FR-014), alongside the
+    # custom-PHI-SMS gate: a model/voice withdrawn after the draft was saved must not
+    # be (re)published cleanly.
+    violations = custom_phi_sms_violations(profile.draft_config, custom_phi) + catalog_violations(
+        profile.draft_config
+    )
     if violations:
         raise HTTPException(status_code=422, detail=violations)
     version = await repo.publish(db, profile_id, note=body.note, actor_email=actor)
@@ -240,7 +270,13 @@ async def rollback(
     # copies only a draft (no publish), so the next save/publish catches it there —
     # accepted (spec §3.2.1).
     custom_phi = await custom_variables_repo.phi_names(db)
-    violations = custom_phi_sms_violations(target.config, custom_phi)
+    # Re-check voice/model catalog membership on rollback (FR-014): rollback
+    # re-publishes an old snapshot via repo.rollback → repo.publish with no pydantic
+    # re-entry, so without this gate a snapshot referencing a now-withdrawn voice/model
+    # would republish cleanly.
+    violations = custom_phi_sms_violations(target.config, custom_phi) + catalog_violations(
+        target.config
+    )
     if violations:
         raise HTTPException(status_code=422, detail=violations)
     new_version = await repo.rollback(db, profile_id, target_version=version, actor_email=actor)

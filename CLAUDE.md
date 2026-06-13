@@ -53,3 +53,9 @@ image; raw `docker compose up` will fail with "pull access denied" on
 - Docker: multi-stage, non-root UID 1001 `appuser`, BuildKit cache mounts.
 - Env validated at startup.
 - ruff: line-length 100, target py312 (agent) / py314 (api).
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan:
+`specs/001-retellai-parity-admin/plan.md`
+<!-- SPECKIT END -->

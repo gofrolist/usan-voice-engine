@@ -7,11 +7,12 @@ from usan_api.schemas.variable_catalog import (
 )
 
 
-def test_builtin_variables_are_the_ten_contract_names_in_order():
+def test_builtin_variables_are_the_contract_names_in_order():
     names = [v.name for v in BUILTIN_VARIABLES]
     assert names == [
         "first_name",
         "elder_name",
+        "contact_name",  # US4 alias of elder_name (FR-024) — adjacent to elder_name
         "call_direction",
         "current_time",
         "current_date",
@@ -36,6 +37,8 @@ def test_every_builtin_is_tier_builtin_and_specced():
 def test_first_name_and_elder_name_default_to_there():
     assert BUILTIN_DEFAULTS["first_name"] == "there"
     assert BUILTIN_DEFAULTS["elder_name"] == "there"
+    # contact_name aliases elder_name and shares its "there" default (FR-024).
+    assert BUILTIN_DEFAULTS["contact_name"] == "there"
 
 
 def test_data_builtins_default_to_empty_string():
@@ -52,9 +55,9 @@ def test_data_builtins_default_to_empty_string():
         assert BUILTIN_DEFAULTS[name] == ""
 
 
-def test_builtin_names_is_frozenset_of_all_ten():
+def test_builtin_names_is_frozenset_of_all_builtins():
     assert frozenset(v.name for v in BUILTIN_VARIABLES) == BUILTIN_NAMES
-    assert len(BUILTIN_NAMES) == 10
+    assert len(BUILTIN_NAMES) == 11  # 10 originals + contact_name (US4 / FR-024)
 
 
 def test_builtin_defaults_cover_every_name():

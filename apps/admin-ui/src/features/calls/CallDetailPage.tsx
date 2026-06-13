@@ -79,9 +79,9 @@ export function CallDetailPage() {
             <Link
               to={`/calls?elder_id=${c.elder_id}`}
               className="text-lg font-medium text-indigo-600 hover:underline"
-              title="View this elder's calls"
+              title="View this contact's calls"
             >
-              {c.elder_name ?? "Unknown elder"}
+              {c.elder_name ?? "Unknown contact"}
             </Link>
           ) : (
             <span className="text-lg font-medium text-slate-900">{c.elder_name ?? "—"}</span>
