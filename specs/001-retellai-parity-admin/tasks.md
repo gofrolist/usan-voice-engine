@@ -32,8 +32,8 @@ independently testable increment.
 
 **Purpose**: Dependencies and validated configuration that later phases rely on. No behavior change.
 
-- [ ] T001 [P] Add `google-genai` (Vertex AI / `vertexai=True`) dependency for the text-test LLM path in `apps/api/pyproject.toml`, then `cd apps/api && uv sync`
-- [ ] T002 [P] Add `livekit-client` (^2.x) dependency for the audio-test webcall in `apps/admin-ui/package.json`, then `cd apps/admin-ui && npm ci`
+- [X] T001 [P] Add `google-genai` (Vertex AI / `vertexai=True`) dependency for the text-test LLM path in `apps/api/pyproject.toml`, then `cd apps/api && uv sync`
+- [X] T002 [P] Add `livekit-client` (^2.x) dependency for the audio-test webcall in `apps/admin-ui/package.json`, then `cd apps/admin-ui && npm ci`
 - [X] T003 Add startup-validated settings fields in `apps/api/src/usan_api/settings.py`: `cartesia_api_key: SecretStr`, `cartesia_api_url`, `cartesia_version`, `cartesia_sample_model`, `gcp_project`, `vertex_location` (Pydantic, fail-fast at startup per Constitution III)
 - [X] T004 [P] Add the new keys to `infra/.env.example` and document the "VM `.env` before the deploy tag" ordering for `CARTESIA_API_KEY` / `GCP_PROJECT` / `VERTEX_LOCATION` in `infra/README.md`
 
@@ -99,24 +99,24 @@ the final contract. Independently testable (SC-011).
 
 ### Tests for User Story 2 ⚠️ (write first, confirm RED)
 
-- [ ] T025 [P] [US2] API tests in `apps/api/tests/test_catalog_endpoints.py`: `GET /voice-catalog` + `GET /model-catalog`; sample endpoint streams `audio/mpeg` for a catalog id and 404s otherwise; assert ONLY `SAMPLE_PHRASE` can reach synthesis (no contact field path); handler-layer 422 for unsupported voice/model in `update_draft`/`publish`/`rollback`; a frozen config with a withdrawn id still deserializes (`test_legacy_config_still_deserializes` stays green)
-- [ ] T026 [P] [US2] Vitest in `apps/admin-ui/src/test/VoiceModelPickers.test.tsx`: voice search + play control; LLM/STT curated selects; deprecation marker for withdrawn values; Zod stays permissive
+- [X] T025 [P] [US2] API tests in `apps/api/tests/test_catalog_endpoints.py`: `GET /voice-catalog` + `GET /model-catalog`; sample endpoint streams `audio/mpeg` for a catalog id and 404s otherwise; assert ONLY `SAMPLE_PHRASE` can reach synthesis (no contact field path); handler-layer 422 for unsupported voice/model in `update_draft`/`publish`/`rollback`; a frozen config with a withdrawn id still deserializes (`test_legacy_config_still_deserializes` stays green)
+- [X] T026 [P] [US2] Vitest in `apps/admin-ui/src/test/VoiceModelPickers.test.tsx`: voice search + play control; LLM/STT curated selects; deprecation marker for withdrawn values; Zod stays permissive
 
 ### Implementation — API catalogs (FR-009–FR-014)
 
-- [ ] T027 [P] [US2] New `apps/api/src/usan_api/schemas/voice_catalog.py` (`VoiceSpec`, `VOICE_CATALOG`, `VOICE_IDS`, `SAMPLE_PHRASE` constant, `VoiceCatalogResponse`) mirroring `tool_catalog.py`
-- [ ] T028 [P] [US2] New `apps/api/src/usan_api/schemas/model_catalog.py` (`ModelSpec`, `MODEL_CATALOG`, `LLM_MODEL_NAMES`, `STT_MODEL_NAMES`, `ModelCatalogResponse`; seed Vertex Gemini ids + `ink-whisper`)
-- [ ] T029 [US2] New `apps/api/src/usan_api/routers/admin_voice_catalog.py`: `GET /v1/admin/voice-catalog` + `GET /v1/admin/voice-catalog/{voice_id}/sample` (httpx → Cartesia `/tts/bytes` with `SAMPLE_PHRASE`, cache bytes per `(voice_id, model)`, `StreamingResponse` audio/mpeg, `require_admin_session` + rate limiter)
-- [ ] T030 [P] [US2] New `apps/api/src/usan_api/routers/admin_model_catalog.py`: `GET /v1/admin/model-catalog`
-- [ ] T031 [US2] Register both routers in `apps/api/src/usan_api/main.py` (beside `admin_tool_catalog.router`)
-- [ ] T032 [US2] Add `model_catalog_violations(...)` and voice-membership-violation helpers in `apps/api/src/usan_api/schemas/agent_config.py` (handler-layer, fabricated field-level `loc`; do NOT add `Literal`/enum to the frozen `LLMConfig`/`STTConfig`/`VoiceConfig` fields — preserve the forward-compat invariant)
-- [ ] T033 [US2] Wire voice + model validation into `update_draft`, `publish`, and `rollback` in `apps/api/src/usan_api/routers/admin_profiles.py` (alongside `custom_phi_sms_violations`)
+- [X] T027 [P] [US2] New `apps/api/src/usan_api/schemas/voice_catalog.py` (`VoiceSpec`, `VOICE_CATALOG`, `VOICE_IDS`, `SAMPLE_PHRASE` constant, `VoiceCatalogResponse`) mirroring `tool_catalog.py`
+- [X] T028 [P] [US2] New `apps/api/src/usan_api/schemas/model_catalog.py` (`ModelSpec`, `MODEL_CATALOG`, `LLM_MODEL_NAMES`, `STT_MODEL_NAMES`, `ModelCatalogResponse`; seed Vertex Gemini ids + `ink-whisper`)
+- [X] T029 [US2] New `apps/api/src/usan_api/routers/admin_voice_catalog.py`: `GET /v1/admin/voice-catalog` + `GET /v1/admin/voice-catalog/{voice_id}/sample` (httpx → Cartesia `/tts/bytes` with `SAMPLE_PHRASE`, cache bytes per `(voice_id, model)`, `StreamingResponse` audio/mpeg, `require_admin_session` + rate limiter)
+- [X] T030 [P] [US2] New `apps/api/src/usan_api/routers/admin_model_catalog.py`: `GET /v1/admin/model-catalog`
+- [X] T031 [US2] Register both routers in `apps/api/src/usan_api/main.py` (beside `admin_tool_catalog.router`)
+- [X] T032 [US2] Add `model_catalog_violations(...)` and voice-membership-violation helpers in `apps/api/src/usan_api/schemas/agent_config.py` (handler-layer, fabricated field-level `loc`; do NOT add `Literal`/enum to the frozen `LLMConfig`/`STTConfig`/`VoiceConfig` fields — preserve the forward-compat invariant)
+- [X] T033 [US2] Wire voice + model validation into `update_draft`, `publish`, and `rollback` in `apps/api/src/usan_api/routers/admin_profiles.py` (alongside `custom_phi_sms_violations`)
 
 ### Implementation — admin-ui pickers
 
-- [ ] T034 [P] [US2] New `apps/admin-ui/src/config/voiceCatalog.ts` (`useVoiceCatalog`) and `apps/admin-ui/src/config/modelCatalog.ts` (`useModelCatalog`), 5-min staleTime, mirroring `toolCatalog.ts`
-- [ ] T035 [US2] Rebuild `apps/admin-ui/src/features/editor/sections/VoiceSection.tsx`: searchable curated picker (language/gender/style) + per-voice play button hitting the sample endpoint + deprecation handling (FR-009, FR-010)
-- [ ] T036 [P] [US2] Convert `apps/admin-ui/src/features/editor/sections/LLMSection.tsx` and `STTSection.tsx` to curated kind-filtered selects with a deprecation marker; keep `model`/voice as `str` in `apps/admin-ui/src/config/agentConfigSchema.ts`; update `apps/admin-ui/src/config/fieldMeta.ts` help text
+- [X] T034 [P] [US2] New `apps/admin-ui/src/config/voiceCatalog.ts` (`useVoiceCatalog`) and `apps/admin-ui/src/config/modelCatalog.ts` (`useModelCatalog`), 5-min staleTime, mirroring `toolCatalog.ts`
+- [X] T035 [US2] Rebuild `apps/admin-ui/src/features/editor/sections/VoiceSection.tsx`: searchable curated picker (language/gender/style) + per-voice play button hitting the sample endpoint + deprecation handling (FR-009, FR-010)
+- [X] T036 [P] [US2] Convert `apps/admin-ui/src/features/editor/sections/LLMSection.tsx` and `STTSection.tsx` to curated kind-filtered selects with a deprecation marker; keep `model`/voice as `str` in `apps/admin-ui/src/config/agentConfigSchema.ts`; update `apps/admin-ui/src/config/fieldMeta.ts` help text
 
 **Checkpoint**: Voice/model are chosen from curated lists with audio preview; unsupported selections blocked (SC-003, SC-004).
 
@@ -130,12 +130,12 @@ the final contract. Independently testable (SC-011).
 
 ### Tests for User Story 3 ⚠️ (write first, confirm RED)
 
-- [ ] T037 [P] [US3] Vitest in `apps/admin-ui/src/test/DefaultsPage.test.tsx`: renders per-direction current default, plain-language resolution order, read-only built-in fallback, edit-link to the default profile, and an ineligible-default (archived/unpublished) warning + replacement prompt
+- [X] T037 [P] [US3] Vitest in `apps/admin-ui/src/test/DefaultsPage.test.tsx`: renders per-direction current default, plain-language resolution order, read-only built-in fallback, edit-link to the default profile, and an ineligible-default (archived/unpublished) warning + replacement prompt
 
 ### Implementation (FR-016–FR-020)
 
-- [ ] T038 [US3] Add a read-only defaults endpoint `GET /v1/admin/defaults` in `apps/api/src/usan_api/routers/admin_profiles.py` (or a sibling router) returning the per-direction default profile ids/names + the built-in `DEFAULT_AGENT_CONFIG` (read-only) + a resolution-order descriptor — names/non-PHI only
-- [ ] T039 [US3] Rework `apps/admin-ui/src/features/defaults/DefaultsPage.tsx`: per-direction current default, plain-language resolution order (override → contact assignment → per-direction default → built-in fallback), read-only fallback panel, edit-link to the chosen default profile, ineligible-default warning + replacement prompt
+- [X] T038 [US3] Add a read-only defaults endpoint `GET /v1/admin/defaults` in `apps/api/src/usan_api/routers/admin_profiles.py` (or a sibling router) returning the per-direction default profile ids/names + the built-in `DEFAULT_AGENT_CONFIG` (read-only) + a resolution-order descriptor — names/non-PHI only
+- [X] T039 [US3] Rework `apps/admin-ui/src/features/defaults/DefaultsPage.tsx`: per-direction current default, plain-language resolution order (override → contact assignment → per-direction default → built-in fallback), read-only fallback panel, edit-link to the chosen default profile, ineligible-default warning + replacement prompt
 
 **Checkpoint**: An admin can correctly state what runs for an unassigned call and edit the default (SC-005, SC-006).
 
@@ -149,15 +149,15 @@ the final contract. Independently testable (SC-011).
 
 ### Tests for User Story 4 ⚠️ (write first, confirm RED)
 
-- [ ] T040 [P] [US4] Cross-layer tests: `contact_name` resolves identically to `elder_name` in `apps/api/tests/test_builtin_vars.py` AND the agent mirror `services/agent/tests/test_prompt_vars.py`; update `apps/admin-ui/src/test/NavSidebar.test.tsx` to assert the "Contacts" label + `/contacts` href. **(G2 / FR-022, SC-008)** Add a backward-compat regression test in `apps/api/tests/test_elders_backcompat.py` asserting the legacy recipient surfaces still work post-rename: `/v1/admin/elders` (and `/v1/elders` CRUD) respond unchanged, and the outbound webhook payload still carries the `elder_id` key (no route/field rename).
+- [X] T040 [P] [US4] Cross-layer tests: `contact_name` resolves identically to `elder_name` in `apps/api/tests/test_builtin_vars.py` AND the agent mirror `services/agent/tests/test_prompt_vars.py`; update `apps/admin-ui/src/test/NavSidebar.test.tsx` to assert the "Contacts" label + `/contacts` href. **(G2 / FR-022, SC-008)** Add a backward-compat regression test in `apps/api/tests/test_elders_backcompat.py` asserting the legacy recipient surfaces still work post-rename: `/v1/admin/elders` (and `/v1/elders` CRUD) respond unchanged, and the outbound webhook payload still carries the `elder_id` key (no route/field rename).
 
 ### Implementation — `contact_name` builtin (FR-024) + relabel (FR-021)
 
-- [ ] T041 [US4] Add the `contact_name` `VariableSpec` (tier=builtin, phi=false, default "there") adjacent to `elder_name` in `apps/api/src/usan_api/schemas/variable_catalog.py`
-- [ ] T042 [US4] Add `"contact_name"` to `DATA_BUILTIN_NAMES` and stamp `resolved["contact_name"] = full` (same source as `elder_name`) in `apps/api/src/usan_api/builtin_vars.py`
-- [ ] T043 [US4] Add `"contact_name": "there"` to the `BUILTIN_DEFAULTS` mirror in `services/agent/src/usan_agent/prompt_vars.py` (lockstep with T041/T042)
-- [ ] T044 [P] [US4] User-facing relabel sweep to "Contact/Contacts": `apps/admin-ui/src/components/NavSidebar.tsx` (label + `to: '/contacts'`), `apps/admin-ui/src/routes.tsx` (path `/elders`→`/contacts`), `features/elders/EldersPage.tsx`, `features/defaults/DefaultsPage.tsx`, `features/calls/CallsPage.tsx` + `CallDetailPage.tsx`, `features/queues/QueueTable.tsx`, `features/profiles/ProfilesListPage.tsx`, `config/fieldMeta.ts` — KEEP internal identifiers and the literal `{elder_name}`/`elder_name` token references
-- [ ] T045 [US4] Add a deploy-time guard: warn (name-only log) if a custom variable named `contact_name` already exists so it isn't silently shadowed — in `apps/api/src/usan_api/repositories/custom_variables.py` startup check or a migration note
+- [X] T041 [US4] Add the `contact_name` `VariableSpec` (tier=builtin, phi=false, default "there") adjacent to `elder_name` in `apps/api/src/usan_api/schemas/variable_catalog.py`
+- [X] T042 [US4] Add `"contact_name"` to `DATA_BUILTIN_NAMES` and stamp `resolved["contact_name"] = full` (same source as `elder_name`) in `apps/api/src/usan_api/builtin_vars.py`
+- [X] T043 [US4] Add `"contact_name": "there"` to the `BUILTIN_DEFAULTS` mirror in `services/agent/src/usan_agent/prompt_vars.py` (lockstep with T041/T042)
+- [X] T044 [P] [US4] User-facing relabel sweep to "Contact/Contacts": `apps/admin-ui/src/components/NavSidebar.tsx` (label + `to: '/contacts'`), `apps/admin-ui/src/routes.tsx` (path `/elders`→`/contacts`), `features/elders/EldersPage.tsx`, `features/defaults/DefaultsPage.tsx`, `features/calls/CallsPage.tsx` + `CallDetailPage.tsx`, `features/queues/QueueTable.tsx`, `features/profiles/ProfilesListPage.tsx`, `config/fieldMeta.ts` — KEEP internal identifiers and the literal `{elder_name}`/`elder_name` token references
+- [X] T045 [US4] Add a deploy-time guard: warn (name-only log) if a custom variable named `contact_name` already exists so it isn't silently shadowed — in `apps/api/src/usan_api/repositories/custom_variables.py` startup check or a migration note
 
 **Checkpoint**: Zero user-facing "elder" remains (SC-007); external contracts unbroken (SC-008).
 
@@ -171,27 +171,27 @@ the final contract. Independently testable (SC-011).
 
 ### Tests for User Story 5 ⚠️ (write first, confirm RED)
 
-- [ ] T046 [P] [US5] API tests in `apps/api/tests/test_profile_tests.py`: `POST .../test/llm` runs Vertex-direct with stub tools and writes no DB rows; `POST .../test/audio` mints a join-only short-TTL token + dispatches `session_kind="test"`; viewers get 403; **(C1)** each test invocation records exactly one PHI-free audit/log entry (actor + profile + `kind`, with no sample-var values)
-- [ ] T047 [P] [US5] Agent tests in `services/agent/tests/test_test_session.py`: `session_kind=="test"` writes no `Call`/wellness/medication/audit row, makes no `/v1/tools/*` call, starts no egress, has no SIP; only the no-op tool registry is reachable; waits for a participant generically (no `sip.*` reads). **(G1 / FR-015)** Also assert the test session builds the pipeline with the draft `test_config`'s selected voice (`voice.cartesia_voice_id`), `llm.model`, and `stt.model` — i.e. a test uses exactly the chosen voice/models, the same guarantee as a live call.
-- [ ] T048 [P] [US5] Contract test asserting the api-side prompt substitutor matches the agent's `prompt_vars.substitute` on a shared corpus, in `apps/api/tests/test_prompt_substitution_parity.py`
+- [X] T046 [P] [US5] API tests in `apps/api/tests/test_profile_tests.py`: `POST .../test/llm` runs Vertex-direct with stub tools and writes no DB rows; `POST .../test/audio` mints a join-only short-TTL token + dispatches `session_kind="test"`; viewers get 403; **(C1)** each test invocation records exactly one PHI-free audit/log entry (actor + profile + `kind`, with no sample-var values)
+- [X] T047 [P] [US5] Agent tests in `services/agent/tests/test_test_session.py`: `session_kind=="test"` writes no `Call`/wellness/medication/audit row, makes no `/v1/tools/*` call, starts no egress, has no SIP; only the no-op tool registry is reachable; waits for a participant generically (no `sip.*` reads). **(G1 / FR-015)** Also assert the test session builds the pipeline with the draft `test_config`'s selected voice (`voice.cartesia_voice_id`), `llm.model`, and `stt.model` — i.e. a test uses exactly the chosen voice/models, the same guarantee as a live call.
+- [X] T048 [P] [US5] Contract test asserting the api-side prompt substitutor matches the agent's `prompt_vars.substitute` on a shared corpus, in `apps/api/tests/test_prompt_substitution_parity.py`
 
 ### Implementation — API (FR-025–FR-027)
 
-- [ ] T049 [US5] New `apps/api/src/usan_api/schemas/profile_tests.py`: `TestLlmRequest/Response`, `TestAudioRequest/Response`
-- [ ] T050 [US5] New `apps/api/src/usan_api/prompt_substitution.py` — api-side parallel copy of the agent's `substitute`/`build_vars` (Service Isolation; guarded by T048)
-- [ ] T051 [US5] In `apps/api/src/usan_api/livekit_dispatch.py`: add `mint_browser_token(...)` (`VideoGrants(room_join, can_publish, can_subscribe)`, short TTL) and `dispatch_test_agent(...)` (embeds `session_kind="test"` + inline `test_config` + sample vars in metadata)
-- [ ] T052 [US5] New `apps/api/src/usan_api/routers/admin_profile_tests.py`: `POST /v1/admin/profiles/{id}/test/llm` (Vertex via ADC, stub tools from `TOOL_CATALOG`, bounded multi-turn loop) + `POST .../test/audio`; `require_admin_role(ADMIN)`; reuse voice/model validation on the draft. **(C1 / FR-029, Constitution VI)** Each test invocation MUST emit a structured audit/log entry (actor email + profile id + `kind="test_llm"|"test_audio"`, PHI-free — never sample-var values) so live-provider test usage is observable; cover this in T046.
-- [ ] T053 [US5] Register the test router in `apps/api/src/usan_api/main.py`
+- [X] T049 [US5] New `apps/api/src/usan_api/schemas/profile_tests.py`: `TestLlmRequest/Response`, `TestAudioRequest/Response`
+- [X] T050 [US5] New `apps/api/src/usan_api/prompt_substitution.py` — api-side parallel copy of the agent's `substitute`/`build_vars` (Service Isolation; guarded by T048)
+- [X] T051 [US5] In `apps/api/src/usan_api/livekit_dispatch.py`: add `mint_browser_token(...)` (`VideoGrants(room_join, can_publish, can_subscribe)`, short TTL) and `dispatch_test_agent(...)` (embeds `session_kind="test"` + inline `test_config` + sample vars in metadata)
+- [X] T052 [US5] New `apps/api/src/usan_api/routers/admin_profile_tests.py`: `POST /v1/admin/profiles/{id}/test/llm` (Vertex via ADC, stub tools from `TOOL_CATALOG`, bounded multi-turn loop) + `POST .../test/audio`; `require_admin_role(ADMIN)`; reuse voice/model validation on the draft. **(C1 / FR-029, Constitution VI)** Each test invocation MUST emit a structured audit/log entry (actor email + profile id + `kind="test_llm"|"test_audio"`, PHI-free — never sample-var values) so live-provider test usage is observable; cover this in T046.
+- [X] T053 [US5] Register the test router in `apps/api/src/usan_api/main.py`
 
 ### Implementation — agent sandbox (FR-027, FR-028)
 
-- [ ] T054 [US5] In `services/agent/src/usan_agent/worker.py`: extend `CallMetadata` + `parse_metadata` with `session_kind`/`test_config`; branch `entrypoint()` for test mode (build `AgentConfig` from `test_config`; skip inbound-lookup/transcript-flush/metrics-flush/recording/SIP; generic `wait_for_participant`)
-- [ ] T055 [US5] In `services/agent/src/usan_agent/check_in.py`: add a no-op `_TEST_TOOL_REGISTRY` selected when `session_kind=="test"` (stub `@function_tool` callables that never call `api_client`)
+- [X] T054 [US5] In `services/agent/src/usan_agent/worker.py`: extend `CallMetadata` + `parse_metadata` with `session_kind`/`test_config`; branch `entrypoint()` for test mode (build `AgentConfig` from `test_config`; skip inbound-lookup/transcript-flush/metrics-flush/recording/SIP; generic `wait_for_participant`)
+- [X] T055 [US5] In `services/agent/src/usan_agent/check_in.py`: add a no-op `_TEST_TOOL_REGISTRY` selected when `session_kind=="test"` (stub `@function_tool` callables that never call `api_client`)
 
 ### Implementation — admin-ui (FR-025, FR-028)
 
-- [ ] T056 [P] [US5] Add the test endpoints to `apps/admin-ui/src/lib/api.ts` and build a `TestLLMPanel` chat component under `apps/admin-ui/src/features/editor/`
-- [ ] T057 [US5] Build `TestAudioPanel` (livekit-client `Room.connect` + mic publish + subscribed-audio playback) and wire both panels into `apps/admin-ui/src/features/editor/ProfileEditorPage.tsx`
+- [X] T056 [P] [US5] Add the test endpoints to `apps/admin-ui/src/lib/api.ts` and build a `TestLLMPanel` chat component under `apps/admin-ui/src/features/editor/`
+- [X] T057 [US5] Build `TestAudioPanel` (livekit-client `Room.connect` + mic publish + subscribed-audio playback) and wire both panels into `apps/admin-ui/src/features/editor/ProfileEditorPage.tsx`
 
 **Checkpoint**: A draft can be tested (text + audio) with zero production records and no real PHI (SC-009).
 
@@ -199,11 +199,11 @@ the final contract. Independently testable (SC-011).
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T058 [P] Viewer permission sweep (FR-030): confirm catalog GETs are admin-session, all mutations/tests require admin role, and the admin-ui hides mutate/test actions for viewers; add tests
-- [ ] T059 [P] Verify field-level error mapping for the new voice/model 422 `loc`s in `apps/admin-ui/src/lib/` `tryParseFieldErrors` (FR-031)
-- [ ] T060 [P] Observability/audit pass (FR-029, Constitution VI): config-affecting actions audited; confirm no PHI in logs, the 409 detail, or audit entries
-- [ ] T061 [P] Docs: relabel curl examples in `infra/README.md`, document the new env keys + deploy ordering, and update `docs/` as needed
-- [ ] T062 Run all gates: `cd apps/api && uv run pytest --cov` (≥80%) + `ruff check .` + `uv run mypy`; `cd services/agent && uv run pytest && ruff check .`; `cd apps/admin-ui && npm test && npm run build`; then execute `quickstart.md` scenarios 1–6
+- [X] T058 [P] Viewer permission sweep (FR-030): confirm catalog GETs are admin-session, all mutations/tests require admin role, and the admin-ui hides mutate/test actions for viewers; add tests
+- [X] T059 [P] Verify field-level error mapping for the new voice/model 422 `loc`s in `apps/admin-ui/src/lib/` `tryParseFieldErrors` (FR-031)
+- [X] T060 [P] Observability/audit pass (FR-029, Constitution VI): config-affecting actions audited; confirm no PHI in logs, the 409 detail, or audit entries
+- [X] T061 [P] Docs: relabel curl examples in `infra/README.md`, document the new env keys + deploy ordering, and update `docs/` as needed
+- [ ] T062 Run all gates: `cd apps/api && uv run pytest --cov` (≥80%) + `ruff check .` + `uv run mypy`; `cd services/agent && uv run pytest && ruff check .`; `cd apps/admin-ui && npm test && npm run build`; then execute `quickstart.md` scenarios 1–6  **(automated gates green: api pytest+ruff+mypy, agent pytest+ruff+mypy, admin-ui vitest+typecheck+build; interactive quickstart scenarios 1-6 require `make up` + live providers + browser — pending manual run.)**
 
 ---
 

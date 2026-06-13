@@ -93,7 +93,7 @@ The system MUST run on a single GCP VM via Docker Compose. No microservices spli
 Kubernetes, no additional services beyond what the design spec requires. Complexity MUST
 be justified in the plan's Complexity Tracking table before introduction.
 
-**Rationale**: The replacement target (RetailAI) handles 5,000–50,000 calls/month at
+**Rationale**: The replacement target (RetellAI) handles 5,000–50,000 calls/month at
 flat infra cost. Premature complexity raises operational cost without adding user value.
 
 ## Security & Compliance Requirements
