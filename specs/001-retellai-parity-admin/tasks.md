@@ -203,7 +203,7 @@ the final contract. Independently testable (SC-011).
 - [X] T059 [P] Verify field-level error mapping for the new voice/model 422 `loc`s in `apps/admin-ui/src/lib/` `tryParseFieldErrors` (FR-031)
 - [X] T060 [P] Observability/audit pass (FR-029, Constitution VI): config-affecting actions audited; confirm no PHI in logs, the 409 detail, or audit entries
 - [X] T061 [P] Docs: relabel curl examples in `infra/README.md`, document the new env keys + deploy ordering, and update `docs/` as needed
-- [ ] T062 Run all gates: `cd apps/api && uv run pytest --cov` (≥80%) + `ruff check .` + `uv run mypy`; `cd services/agent && uv run pytest && ruff check .`; `cd apps/admin-ui && npm test && npm run build`; then execute `quickstart.md` scenarios 1–6  **(automated gates green: api pytest+ruff+mypy, agent pytest+ruff+mypy, admin-ui vitest+typecheck+build; interactive quickstart scenarios 1-6 require `make up` + live providers + browser — pending manual run.)**
+- [ ] T062 Run all gates: `cd apps/api && uv run pytest --cov` (≥80%) + `ruff check .` + `uv run mypy`; `cd services/agent && uv run pytest && ruff check .`; `cd apps/admin-ui && npm test && npm run build`; then execute `quickstart.md` scenarios 1–6  **(automated gates re-verified green 2026-06-13: api `pytest` 1315 passed/1 skipped @ 96% coverage [≥80% ✓ — measured via ephemeral `pytest-cov`; repo/CI ship no coverage tooling, so the `--cov` flag is not installed by default] + ruff/format/mypy clean; agent `pytest` 222 passed + ruff/format/mypy clean; admin-ui vitest 212 passed + tsc/vite build OK. STILL PENDING: interactive `quickstart.md` scenarios 1-6 require `make up` + live Cartesia/Vertex providers + a browser — manual run only.)**
 
 ---
 
