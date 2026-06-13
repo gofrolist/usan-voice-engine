@@ -317,6 +317,25 @@ async def get_default_profile(
     return result.scalar_one_or_none()
 
 
+async def get_default_holder(
+    db: AsyncSession, direction: Literal["inbound", "outbound"]
+) -> AgentProfile | None:
+    """The profile flagged default for this direction, REGARDLESS of eligibility.
+
+    Unlike :func:`get_default_profile` (which filters to ACTIVE), this returns the
+    raw ``is_default_*`` holder even when it is archived or unpublished, so the
+    Defaults area can surface an ineligible-default warning (FR-020). The
+    partial-unique index guarantees at most one true per direction.
+    """
+    column = (
+        AgentProfile.is_default_inbound
+        if direction == "inbound"
+        else AgentProfile.is_default_outbound
+    )
+    result = await db.execute(select(AgentProfile).where(column.is_(True)))
+    return result.scalar_one_or_none()
+
+
 async def get_published_config(
     db: AsyncSession, profile: AgentProfile
 ) -> AgentProfileVersion | None:

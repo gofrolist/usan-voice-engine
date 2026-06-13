@@ -172,6 +172,40 @@ export interface SetDefaultRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Defaults area read model (schemas/admin_defaults.py — US3 / FR-016..020)
+// ---------------------------------------------------------------------------
+
+// Why a flagged default is no longer effective (FR-020). null when it resolves.
+export type IneligibleReason = "archived" | "unpublished";
+
+// The profile currently flagged default for a direction (name/id only — no PHI).
+export interface DefaultProfileRef {
+  id: string;
+  name: string;
+  status: ProfileStatus;
+  published_version: number | null;
+  // True iff this default actually resolves for a call (active + published).
+  eligible: boolean;
+}
+
+export interface DirectionDefault {
+  direction: Direction;
+  // null when no profile is flagged default for this direction.
+  default_profile: DefaultProfileRef | null;
+  // True when a default IS flagged but no longer effective (archived/unpublished).
+  ineligible: boolean;
+  ineligible_reason: IneligibleReason | null;
+}
+
+export interface DefaultsView {
+  directions: DirectionDefault[];
+  // Plain-language resolution order, highest precedence first (FR-017).
+  resolution_order: string[];
+  // The built-in last-resort fallback config, read-only (FR-017/FR-019).
+  builtin_fallback: AgentConfig;
+}
+
+// ---------------------------------------------------------------------------
 // Admin (admin.py)
 // ---------------------------------------------------------------------------
 

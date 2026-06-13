@@ -24,6 +24,7 @@ from usan_api.routers import (
     admin_audit,
     admin_calls,
     admin_custom_variables,
+    admin_defaults,
     admin_elders,
     admin_profiles,
     admin_tool_catalog,
@@ -167,6 +168,7 @@ def create_app() -> FastAPI:
         return HealthResponse(status="ok")
 
     app.include_router(admin_profiles.router)
+    app.include_router(admin_defaults.router)
     app.include_router(admin_users.router)
     app.include_router(admin_audit.router)
     app.include_router(admin_elders.router)
