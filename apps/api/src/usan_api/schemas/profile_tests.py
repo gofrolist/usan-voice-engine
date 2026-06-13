@@ -14,9 +14,9 @@ loaded in either mode (Constitution II). ``config`` reuses the frozen
 ``AgentConfig`` so the test runs exactly the document the editor would publish.
 """
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from usan_api.schemas.agent_config import AgentConfig
 
@@ -26,6 +26,12 @@ _MAX_MESSAGES = 50
 _MAX_CONTENT_LEN = 8000
 _MAX_SAMPLE_VARS = 100
 _MAX_SAMPLE_VALUE_LEN = 2000
+# Cap each sample-var NAME length too (values are capped in bounded_sample_vars). Real
+# variable names are <=64 chars; this just bounds a pathological key (defense in depth).
+_MAX_SAMPLE_KEY_LEN = 128
+
+# A length-bounded sample-var key so a single test cannot carry unbounded key strings.
+SampleVarKey = Annotated[str, StringConstraints(max_length=_MAX_SAMPLE_KEY_LEN)]
 
 
 class TestMessage(BaseModel):
@@ -38,7 +44,7 @@ class TestMessage(BaseModel):
 class TestLlmRequest(BaseModel):
     messages: list[TestMessage] = Field(min_length=1, max_length=_MAX_MESSAGES)
     # name -> synthetic sample value. Capped count + length so a test run is bounded.
-    sample_vars: dict[str, str] = Field(default_factory=dict, max_length=_MAX_SAMPLE_VARS)
+    sample_vars: dict[SampleVarKey, str] = Field(default_factory=dict, max_length=_MAX_SAMPLE_VARS)
     # Omitted → use the profile's stored draft_config (re-validated handler-side).
     config: AgentConfig | None = None
 
@@ -60,7 +66,7 @@ class TestLlmResponse(BaseModel):
 
 
 class TestAudioRequest(BaseModel):
-    sample_vars: dict[str, str] = Field(default_factory=dict, max_length=_MAX_SAMPLE_VARS)
+    sample_vars: dict[SampleVarKey, str] = Field(default_factory=dict, max_length=_MAX_SAMPLE_VARS)
     config: AgentConfig | None = None
 
     def bounded_sample_vars(self) -> dict[str, str]:

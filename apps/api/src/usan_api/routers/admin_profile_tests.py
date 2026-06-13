@@ -18,6 +18,7 @@ profile id + ``kind``) so live-provider test usage is observable — never the
 sample-var values or message content (C1 / FR-029, Constitution VI).
 """
 
+import json
 import uuid
 from datetime import UTC, datetime
 
@@ -54,6 +55,12 @@ router = APIRouter(
 # Bound the model→stub-tool→continue loop so a misbehaving prompt cannot rack up
 # unbounded Vertex calls in a single test invocation (research R3 iteration cap ~5).
 _MAX_TOOL_ITERATIONS = 5
+
+# The draft config + sample vars ride inside the LiveKit dispatch metadata for the audio
+# test; LiveKit's CreateAgentDispatchRequest.metadata has an undocumented size limit
+# (~64KB). Reject an oversized config with a clear 422 rather than failing opaquely at
+# the gRPC layer.
+_MAX_DISPATCH_METADATA_BYTES = 50_000
 
 # A stub tool always returns this synthetic string — it is never the result of any
 # real /v1/tools/* call (FR-027). The model sees a plausible-but-fake result so the
@@ -207,6 +214,20 @@ async def run_audio_test(
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> TestAudioResponse:
     cfg = await _resolve_draft_config(db, profile_id, body.config)
+
+    # Reject an oversized config before dispatch: the draft config + sample vars are
+    # embedded in the LiveKit dispatch metadata (size-limited); exceeding it would fail
+    # opaquely at the gRPC layer. Admin-only path, so a 422 is the clear signal.
+    metadata_bytes = len(
+        json.dumps(
+            {"test_config": cfg.model_dump(), "sample_vars": body.bounded_sample_vars()}
+        ).encode("utf-8")
+    )
+    if metadata_bytes > _MAX_DISPATCH_METADATA_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="config is too large to run an audio test; shorten the prompt/template fields",
+        )
 
     room = f"usan-test-{uuid.uuid4().hex}"
     identity = f"tester-{uuid.uuid4().hex[:8]}"

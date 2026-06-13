@@ -26,7 +26,7 @@ from usan_agent.agent_config import DEFAULT_AGENT_CONFIG
 from usan_agent.worker import parse_metadata
 
 
-def _settings(monkeypatch):
+def _settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
@@ -118,6 +118,48 @@ async def test_test_tools_never_call_api_client(monkeypatch):
         except TypeError:
             # Tool requires extra args; the point is only that no api_client fired.
             pass
+
+
+def test_test_registry_shares_no_callable_with_live_registry() -> None:
+    # Every test-mode tool must be a DISTINCT no-op stub, never a live (api-calling)
+    # tool object — a copy-paste that reused a live callable would silently write data.
+    live_ids = {id(tool) for tool in check_in._TOOL_REGISTRY.values()}
+    for name, tool in check_in._TEST_TOOL_REGISTRY.items():
+        assert id(tool) not in live_ids, f"{name} reuses the live tool callable in test mode"
+
+
+@pytest.mark.asyncio
+async def test_noop_end_call_hangs_up_without_calling_api_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression guard (the bug where noop_end_call delegated to _do_end_call): the
+    # test-mode end_call stub must hang up gracefully — say goodbye, delete_room,
+    # shutdown — but NEVER call api_client.report_end_call (no Call row exists in test
+    # mode, so test mode makes no /v1/tools/* request; FR-027).
+    import usan_agent.api_client as api_client
+
+    report = AsyncMock(side_effect=AssertionError("report_end_call must not run in test mode"))
+    monkeypatch.setattr(api_client, "report_end_call", report)
+
+    userdata = MagicMock()
+    userdata.goodbye_message = "Goodbye for now."
+    userdata.job_ctx.delete_room = AsyncMock()
+    userdata.job_ctx.shutdown = MagicMock()
+    session = MagicMock()
+    session.say = AsyncMock()  # say(...) returns an awaitable handle; _hang_up awaits it
+
+    ctx = MagicMock()
+    ctx.userdata = userdata
+    ctx.session = session
+
+    tool = check_in._TEST_TOOL_REGISTRY["end_call"]
+    fn = getattr(tool, "_callable", None) or getattr(tool, "__wrapped__", None) or tool
+    await fn(ctx)
+
+    report.assert_not_called()
+    session.say.assert_called_once()
+    userdata.job_ctx.delete_room.assert_awaited_once()
+    userdata.job_ctx.shutdown.assert_called_once()
 
 
 # --- entrypoint test branch -----------------------------------------------

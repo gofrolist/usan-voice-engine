@@ -233,11 +233,13 @@ class Settings(BaseSettings):
             raise ValueError("must be a ws:// or wss:// URL")
         return v
 
-    @field_validator("telnyx_messaging_api_url")
+    @field_validator("telnyx_messaging_api_url", "cartesia_api_url")
     @classmethod
     def _https_scheme(cls, v: str) -> str:
-        # The SMS flush POSTs the rendered body + the elder's phone to this URL, so a
-        # plaintext/hostile endpoint would leak PHI. Require https:// (operator config).
+        # Both carry a bearer secret in the Authorization header (the Telnyx / Cartesia
+        # API key), and the SMS flush also POSTs the rendered body + the elder's phone;
+        # a plaintext/hostile endpoint would leak the secret (and PHI). Require https://
+        # (operator config).
         if not v.startswith("https://"):
             raise ValueError("must be an https:// URL")
         return v

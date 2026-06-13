@@ -1,11 +1,10 @@
 import { Link } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
 import { Select } from "../../components/ui/select";
 import { Spinner } from "../../components/ui/spinner";
 import { Badge } from "../../components/ui/badge";
 import { useIsAdmin } from "../../auth/useSession";
 import { useProfiles, useSetDefault } from "../profiles/hooks";
-import { DEFAULTS_KEY, useDefaults } from "./hooks";
+import { useDefaults } from "./hooks";
 import type { Direction, DirectionDefault, ProfileSummary, AgentConfig } from "../../types/api";
 
 const DIRECTION_HELP: Record<Direction, string> = {
@@ -145,7 +144,6 @@ function BuiltinFallbackPanel({ config }: { config: AgentConfig }) {
 
 export function DefaultsPage() {
   const isAdmin = useIsAdmin();
-  const qc = useQueryClient();
   const { data: view, isLoading, isError, error } = useDefaults();
   const { data: profiles } = useProfiles();
   const setDefault = useSetDefault();
@@ -170,10 +168,8 @@ export function DefaultsPage() {
   );
 
   function change(direction: Direction, id: string): void {
-    setDefault.mutate(
-      { id, direction },
-      { onSuccess: () => void qc.invalidateQueries({ queryKey: DEFAULTS_KEY }) },
-    );
+    // useSetDefault invalidates both the profiles list and the Defaults view on success.
+    setDefault.mutate({ id, direction });
   }
 
   return (

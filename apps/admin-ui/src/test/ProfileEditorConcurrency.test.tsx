@@ -178,4 +178,36 @@ describe("ProfileEditorPage optimistic concurrency", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     confirmSpy.mockRestore();
   });
+
+  it("Reload discards dirty edits even when the refetched draft is byte-identical", async () => {
+    // Regression guard: a revision-only 409 refetches a STRUCTURALLY-IDENTICAL draft, so
+    // React Query's structuralSharing keeps the same `profile` reference and the load
+    // effect never re-runs. The discard must still happen (explicit reset in
+    // handleReloadDraft) — otherwise the operator's discarded edits silently survive.
+    const { ApiError } = await import("../lib/api");
+    putMock.mockRejectedValue(new ApiError(409, CONFLICT_DETAIL));
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Save draft" });
+
+    // Dirty the voicemail textarea; capture its server value first, then confirm it changed.
+    await user.click(screen.getByRole("tab", { name: "Voicemail" }));
+    const textarea = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    const original = textarea.value;
+    await user.type(textarea, "DIRTY");
+    expect(textarea.value).not.toBe(original);
+
+    // 409, then Reload (refetch returns the identical revision-1 draft → same ref).
+    await user.click(screen.getByRole("button", { name: "Save draft" }));
+    await screen.findByRole("alert");
+    await user.click(screen.getByRole("button", { name: "Reload" }));
+
+    // The dirty edit is dropped: the field is back to the server's value, not kept.
+    await waitFor(() =>
+      expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(original),
+    );
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    confirmSpy.mockRestore();
+  });
 });

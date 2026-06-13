@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -7,12 +7,11 @@ import { SECTION_LABELS, type SectionKey } from "../../config/fieldMeta";
 import { Spinner } from "../../components/ui/spinner";
 import { useIsAdmin } from "../../auth/useSession";
 import { pushToast } from "../../components/ui/toast";
-import type { ApiError } from "../../lib/api";
+import { ApiError } from "../../lib/api";
 import type { AgentConfig } from "../../types/api";
 import { useProfile, useSaveDraft } from "./hooks";
 import { PublishDialog } from "./PublishDialog";
 import { TestLLMPanel } from "./TestLLMPanel";
-import { TestAudioPanel } from "./TestAudioPanel";
 import { EditorToolbar } from "./EditorToolbar";
 import { SectionRail } from "./SectionRail";
 import { PromptsSection } from "./sections/PromptsSection";
@@ -24,6 +23,13 @@ import { ToolsSection } from "./sections/ToolsSection";
 import { VoicemailSection } from "./sections/VoicemailSection";
 import { SpeechAdvancedSection } from "./sections/SpeechAdvancedSection";
 import { PolicySection } from "./sections/PolicySection";
+
+// Lazy-load the audio test panel: it pulls in livekit-client (~966 kB of WebRTC) which
+// must not ship in the main bundle or block first paint. Only admins who open the audio
+// test tab download it.
+const TestAudioPanel = lazy(() =>
+  import("./TestAudioPanel").then((m) => ({ default: m.TestAudioPanel })),
+);
 
 const SECTION_ORDER: SectionKey[] = [
   "prompts",
@@ -83,8 +89,16 @@ export function ProfileEditorPage() {
   // Initialize the form once the profile draft_config is loaded. The server-side
   // AgentConfig types tools.enabled as string[]; the form schema narrows it to the
   // tool-name enum, so cast through the known-valid server payload.
+  //
+  // keepDirtyValues so edits typed DURING an in-flight save survive: useSaveDraft's
+  // onSuccess writes the server response into the cache, re-running this effect — a
+  // plain reset would silently wipe keystrokes made while the request was in flight.
+  // The conflict-reload DISCARD is handled explicitly in handleReloadDraft (a full
+  // reset onto the refetched draft), so it does not depend on this effect re-running:
+  // React Query's structuralSharing can return the same `profile` reference for a
+  // byte-identical (revision-only) draft, which would otherwise skip the effect.
   useEffect(() => {
-    if (profile) form.reset(profile.draft_config as AgentConfigForm);
+    if (profile) form.reset(profile.draft_config as AgentConfigForm, { keepDirtyValues: true });
   }, [profile, form]);
 
   if (isLoading) {
@@ -139,16 +153,25 @@ export function ProfileEditorPage() {
   }
 
   async function handleReloadDraft(): Promise<void> {
-    // Confirm-before-discard: never trade a silent SERVER overwrite for a silent
-    // LOCAL loss. Refetch the latest draft + revision; the load effect form.resets.
+    // Confirm-before-discard: never trade a silent SERVER overwrite for a silent LOCAL
+    // loss. The operator chose to discard, so FULL-reset onto the refetched draft
+    // (dropping their dirty edits). We reset explicitly from the refetched data rather
+    // than rely on the [profile] load effect, because React Query's structuralSharing
+    // can return the same object for a byte-identical draft (a revision-only conflict),
+    // which would skip the effect and silently keep the stale edits.
     if (
       form.formState.isDirty &&
       !window.confirm("Discard your unsaved changes and load the latest version of this draft?")
     ) {
       return;
     }
-    await refetch();
-    setConflict(false);
+    const { data } = await refetch();
+    // Only clear the conflict banner when the reload actually landed new data — a failed
+    // refetch (e.g. a flaky connection) leaves the draft stale, so keep the warning up.
+    if (data) {
+      form.reset(data.draft_config as AgentConfigForm);
+      setConflict(false);
+    }
   }
 
   const onSave = form.handleSubmit((values: AgentConfigForm) => {
@@ -187,7 +210,13 @@ export function ProfileEditorPage() {
         const config = agentConfigSchema.parse(form.getValues()) as AgentConfig;
         await saveDraft.mutateAsync({ config, expectedRevision: profile.draft_revision });
       } catch (err) {
-        handleMutationError(err as ApiError);
+        // A 4xx/409 from the pre-publish save is an ApiError → field/conflict mapping.
+        // A network failure (TypeError) is NOT an ApiError — never pushToast(undefined).
+        if (err instanceof ApiError) {
+          handleMutationError(err);
+        } else {
+          pushToast("Couldn't save your draft before publishing. Please try again.");
+        }
         return;
       }
     }
@@ -308,10 +337,14 @@ export function ProfileEditorPage() {
                     getConfig={() => agentConfigSchema.parse(form.getValues()) as AgentConfig}
                   />
                 ) : (
-                  <TestAudioPanel
-                    profileId={id}
-                    getConfig={() => agentConfigSchema.parse(form.getValues()) as AgentConfig}
-                  />
+                  <Suspense
+                    fallback={<div className="text-xs text-slate-500">Loading audio test…</div>}
+                  >
+                    <TestAudioPanel
+                      profileId={id}
+                      getConfig={() => agentConfigSchema.parse(form.getValues()) as AgentConfig}
+                    />
+                  </Suspense>
                 )}
               </div>
             ) : null}

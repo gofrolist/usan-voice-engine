@@ -182,16 +182,25 @@ async def _do_send_sms(data: CheckInData, *, template_key: str) -> str:
     return "I've sent that text message for you."
 
 
+async def _hang_up(data: CheckInData, session: Any) -> None:
+    """Say goodbye and tear the room down. Makes NO api_client / network call.
+
+    Shared by the live ``_do_end_call`` (which reports the end reason first) and the
+    test-mode ``noop_end_call`` (which must hang up without any ``/v1/tools/*`` call).
+    """
+    handle = session.say(data.goodbye_message, allow_interruptions=False, add_to_chat_ctx=False)
+    await handle
+    await data.job_ctx.delete_room()
+    data.job_ctx.shutdown(reason="ended_by_agent")
+
+
 async def _do_end_call(data: CheckInData, session: Any, reason: str) -> None:
     """Report the end reason (best-effort), say goodbye, then hang up."""
     try:
         await api_client.report_end_call(data.call_id, data.settings, reason)
     except Exception:
         logger.bind(call_id=data.call_id).warning("report_end_call failed; hanging up anyway")
-    handle = session.say(data.goodbye_message, allow_interruptions=False, add_to_chat_ctx=False)
-    await handle
-    await data.job_ctx.delete_room()
-    data.job_ctx.shutdown(reason="ended_by_agent")
+    await _hang_up(data, session)
 
 
 @function_tool
@@ -321,9 +330,9 @@ _TOOL_REGISTRY: dict[str, Any] = {
 # the agent MUST NOT touch the database or PHI: these stubs mirror the live tools'
 # names + docstrings (so the LLM sees the same tool surface) but return a canned
 # string and NEVER call api_client / POST to /v1/tools/*. This is the ONLY tool
-# registry reachable in test mode. _do_end_call still runs for end_call so a test
-# call can hang up gracefully (it reports best-effort then delete_room/shutdown), but
-# it does not write any call-outcome row that did not already exist (there is no Call).
+# registry reachable in test mode. noop_end_call hangs up via _hang_up (say goodbye +
+# delete_room + shutdown) WITHOUT calling api_client.report_end_call — there is no Call
+# row to report an end reason for, so test mode makes no /v1/tools/* request at all.
 
 
 @function_tool
@@ -418,7 +427,9 @@ async def noop_end_call(ctx: RunContext[CheckInData], reason: str = "check_in_co
     Args:
         reason: A short reason, e.g. "check_in_complete".
     """
-    await _do_end_call(ctx.userdata, ctx.session, reason)
+    # Test mode hangs up gracefully but makes NO api_client / /v1/tools/* call: there
+    # is no Call row to report an end reason for (FR-027).
+    await _hang_up(ctx.userdata, ctx.session)
     return ""
 
 

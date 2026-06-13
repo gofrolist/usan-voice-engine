@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import type { ApiError } from "../../lib/api";
 import { pushToast } from "../../components/ui/toast";
+import { DEFAULTS_KEY } from "../defaults/hooks";
 import type { ProfileCreate, ProfileDetail, ProfileSummary, SetDefaultRequest } from "../../types/api";
 
 const LIST_KEY = ["profiles"] as const;
@@ -51,6 +52,8 @@ export function useSetDefault() {
       api.post<ProfileDetail>(`/v1/admin/profiles/${id}/set-default`, { direction }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: LIST_KEY });
+      // Setting a default also changes the Defaults view (current default per direction).
+      void qc.invalidateQueries({ queryKey: DEFAULTS_KEY });
     },
     onError: onApiError,
   });

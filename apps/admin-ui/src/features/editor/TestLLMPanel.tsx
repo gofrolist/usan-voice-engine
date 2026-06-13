@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ApiError, testProfileLlm } from "../../lib/api";
 import { pushToast } from "../../components/ui/toast";
 import type { AgentConfig, TestMessage, TestToolCall } from "../../types/api";
@@ -11,6 +11,7 @@ interface TestLLMPanelProps {
 }
 
 interface TranscriptTurn {
+  id: number;
   role: "user" | "assistant";
   content: string;
   toolCalls?: TestToolCall[];
@@ -35,11 +36,14 @@ export function TestLLMPanel({ profileId, getConfig }: TestLLMPanelProps) {
   const [sampleVarsRaw, setSampleVarsRaw] = useState("");
   const [turns, setTurns] = useState<TranscriptTurn[]>([]);
   const [busy, setBusy] = useState(false);
+  // Monotonic ids give transcript turns stable React keys (append-only today, but an
+  // index key would remount the wrong rows if turns are ever inserted/reordered).
+  const idRef = useRef(0);
 
   async function onSend(): Promise<void> {
     const content = input.trim();
     if (!content || busy) return;
-    const nextTurns: TranscriptTurn[] = [...turns, { role: "user", content }];
+    const nextTurns: TranscriptTurn[] = [...turns, { id: idRef.current++, role: "user", content }];
     setTurns(nextTurns);
     setInput("");
     setBusy(true);
@@ -55,7 +59,12 @@ export function TestLLMPanel({ profileId, getConfig }: TestLLMPanelProps) {
       });
       setTurns((prev) => [
         ...prev,
-        { role: "assistant", content: res.assistant, toolCalls: res.tool_calls },
+        {
+          id: idRef.current++,
+          role: "assistant",
+          content: res.assistant,
+          toolCalls: res.tool_calls,
+        },
       ]);
     } catch (err) {
       const detail = err instanceof ApiError ? err.detail : "Test failed.";
@@ -89,14 +98,14 @@ export function TestLLMPanel({ profileId, getConfig }: TestLLMPanelProps) {
         {turns.length === 0 ? (
           <span className="text-slate-400">No messages yet. Send one to start.</span>
         ) : (
-          turns.map((t, i) => (
-            <div key={i} className={t.role === "user" ? "text-slate-900" : "text-sky-800"}>
+          turns.map((t) => (
+            <div key={t.id} className={t.role === "user" ? "text-slate-900" : "text-sky-800"}>
               <span className="font-semibold">{t.role === "user" ? "You" : "Agent"}:</span>{" "}
               {t.content}
               {t.toolCalls && t.toolCalls.length > 0 ? (
                 <ul className="mt-1 list-disc pl-5 text-xs text-amber-700">
                   {t.toolCalls.map((tc, j) => (
-                    <li key={j}>
+                    <li key={`${t.id}-${j}`}>
                       tool: <code>{tc.name}</code>({JSON.stringify(tc.args)})
                     </li>
                   ))}

@@ -129,7 +129,7 @@ async def update_draft(
         profile = await repo.update_draft(
             db,
             profile_id,
-            config=body.config.model_dump(),
+            config=config_dump,
             description=body.description,
             actor_email=actor,
             expected_revision=body.expected_revision,

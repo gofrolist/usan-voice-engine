@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 import { Controller } from "react-hook-form";
 import type { AgentConfigForm } from "../../../config/agentConfigSchema";
@@ -13,23 +13,6 @@ import { NumberControl, TextControl } from "./controls";
 // loads. The picker offers only ACTIVE catalog voices for new selection but renders a
 // deprecation marker when the currently-selected voice is deprecated or no longer in the
 // catalog. tts_model / speed / language remain free knobs below the picker.
-
-// Fetch the fixed PHI-free sample for a voice from the server proxy and play it. Uses
-// fetch (not the JSON `api` wrapper) because the endpoint streams audio/mpeg bytes. The
-// secret stays server-side; the browser only ever sees the audio blob.
-async function playVoiceSample(voiceId: string): Promise<void> {
-  const res = await fetch(`/v1/admin/voice-catalog/${encodeURIComponent(voiceId)}/sample`, {
-    credentials: "include",
-  });
-  if (!res.ok) {
-    throw new Error("voice sample unavailable");
-  }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const audio = new Audio(url);
-  audio.addEventListener("ended", () => URL.revokeObjectURL(url));
-  await audio.play();
-}
 
 function VoicePicker({ form }: { form: UseFormReturn<AgentConfigForm> }) {
   const { data: voices, isError, isLoading } = useVoiceCatalog();
@@ -61,15 +44,50 @@ function VoicePicker({ form }: { form: UseFormReturn<AgentConfigForm> }) {
   const selectedSpec = selected ? byId.get(selected) : undefined;
   const selectedIsWithdrawn = Boolean(selected) && (selectedSpec?.deprecated ?? !selectedSpec);
 
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Stop any in-flight sample and free its blob URL. Called before starting a new
+  // sample and on unmount, so navigating away never leaves audio playing or leaks a
+  // blob URL (the previous fire-and-forget `new Audio()` did both).
+  const stopSample = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    if (audio.src.startsWith("blob:")) URL.revokeObjectURL(audio.src);
+    audio.src = "";
+    audioRef.current = null;
+  }, []);
+
+  useEffect(() => stopSample, [stopSample]);
+
+  // Fetch the fixed PHI-free sample from the server proxy (raw fetch, not the JSON
+  // `api` wrapper, because it streams audio/mpeg) and play it. The Cartesia secret
+  // stays server-side; the browser only ever sees the audio blob.
   async function onPlay(voiceId: string): Promise<void> {
     setPlayError(null);
+    stopSample();
     setPlaying(voiceId);
     try {
-      await playVoiceSample(voiceId);
+      const res = await fetch(`/v1/admin/voice-catalog/${encodeURIComponent(voiceId)}/sample`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("voice sample unavailable");
+      const blob = await res.blob();
+      const audio = new Audio(URL.createObjectURL(blob));
+      audioRef.current = audio;
+      const finish = (failed: boolean): void => {
+        if (audio.src.startsWith("blob:")) URL.revokeObjectURL(audio.src);
+        if (audioRef.current === audio) audioRef.current = null;
+        setPlaying((p) => (p === voiceId ? null : p));
+        if (failed) setPlayError("Could not play this voice sample. Please try again.");
+      };
+      audio.addEventListener("ended", () => finish(false));
+      audio.addEventListener("error", () => finish(true));
+      await audio.play();
     } catch {
-      setPlayError("Could not play this voice sample. Please try again.");
-    } finally {
+      stopSample();
       setPlaying(null);
+      setPlayError("Could not play this voice sample. Please try again.");
     }
   }
 

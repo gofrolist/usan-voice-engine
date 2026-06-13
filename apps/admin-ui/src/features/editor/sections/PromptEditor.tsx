@@ -84,11 +84,14 @@ export function PromptEditor(props: PromptEditorProps) {
   const create = useCreateCustomVariable();
   const [declareName, setDeclareName] = useState<string | null>(null);
 
-  function declareAllRemaining(): void {
-    // Quick bulk declare: create each undeclared token with an empty definition.
-    for (const name of unknown) {
-      create.mutate({ name, description: "", example: "", phi: false });
-    }
+  async function declareAllRemaining(): Promise<void> {
+    // Quick bulk declare: create each undeclared token with an empty definition. Use
+    // mutateAsync + allSettled so one collision/422 doesn't leave the rest as unhandled
+    // rejections (the hook's onError still toasts each failure); the ["variable-catalog"]
+    // invalidation then refetches knownNames once all settle so the warnings self-clear.
+    await Promise.allSettled(
+      unknown.map((name) => create.mutateAsync({ name, description: "", example: "", phi: false })),
+    );
   }
 
   const isSensitive = fieldKey !== undefined && SENSITIVE_PROMPT_FIELDS.has(fieldKey);
@@ -187,7 +190,7 @@ export function PromptEditor(props: PromptEditorProps) {
             {unknown.length > 1 ? (
               <button
                 type="button"
-                onClick={declareAllRemaining}
+                onClick={() => void declareAllRemaining()}
                 disabled={create.isPending}
                 className="rounded border border-amber-500 bg-white px-2 py-0.5 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
               >
