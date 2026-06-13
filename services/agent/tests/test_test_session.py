@@ -16,6 +16,7 @@ Written FIRST (Constitution IV); fails until the worker test branch + the no-op
 registry land.
 """
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -243,6 +244,55 @@ async def test_test_mode_waits_for_participant_generically(test_mode_ctx):
     # The browser join is awaited; no SIP attribute read happens (would KeyError if
     # the branch tried sip.phoneNumber on the empty-attrs participant — it must not).
     ctx.wait_for_participant.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_test_mode_times_out_when_no_browser_participant_joins(monkeypatch):
+    """A dispatched test where no browser ever joins must NOT hang the worker slot
+    forever: the participant wait is bounded by answer_timeout_s, then the job shuts
+    down without starting the conversation (security review PR #61, LOW #3)."""
+    _settings(monkeypatch)
+
+    session = MagicMock()
+    session.start = AsyncMock()
+    session.generate_reply = AsyncMock()
+    session.say = AsyncMock()
+    session.on = MagicMock()
+    monkeypatch.setattr(worker, "build_session", lambda *a, **k: session)
+    monkeypatch.setattr(worker, "build_test_agent", lambda *a, **k: MagicMock())
+
+    async def _never_joins(*_a, **_k):
+        await asyncio.Event().wait()  # hang forever — no participant ever arrives
+
+    # A test config with a tiny answer timeout so the bound is exercised in ~50ms.
+    no_join_cfg = _TEST_CONFIG.model_copy(
+        update={"timing": _TEST_CONFIG.timing.model_copy(update={"answer_timeout_s": 0.05})}
+    )
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = _never_joins
+    ctx.shutdown = MagicMock()
+    ctx.room.name = "usan-test-nojoin"
+    ctx.job.metadata = json.dumps(
+        {
+            "session_kind": "test",
+            "test_config": no_join_cfg.model_dump(),
+            "call_id": None,
+            "direction": "outbound",
+            "dynamic_vars": {},
+            "resolved_vars": {},
+            "timezone": "",
+        }
+    )
+
+    # The production bound must make entrypoint return on its own; the 5s harness cap
+    # only fails (loudly) if the wait is NOT bounded — i.e. the unfixed hang.
+    await asyncio.wait_for(worker.entrypoint(ctx), timeout=5)
+
+    ctx.shutdown.assert_called_once()
+    assert ctx.shutdown.call_args.kwargs.get("reason") == "test_no_participant"
+    # Never proceeded to the conversation — no slot held open.
+    session.generate_reply.assert_not_called()
 
 
 @pytest.mark.asyncio

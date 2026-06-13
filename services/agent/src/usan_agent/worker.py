@@ -246,8 +246,17 @@ async def _run_test_session(ctx: JobContext, settings: Settings, meta: CallMetad
     )
     await session.start(agent=agent, room=ctx.room)
     log.info("Test session started; waiting for browser participant")
-    # Wait GENERICALLY for the browser WebRTC join — no sip.* attribute reads.
-    await ctx.wait_for_participant()
+    # Wait GENERICALLY for the browser WebRTC join — no sip.* attribute reads. Bound the
+    # wait by answer_timeout_s (mirrors the outbound no-answer backstop): a test where the
+    # browser never connects must not pin a worker slot until LiveKit reaps the room
+    # (security review PR #61, LOW #3).
+    try:
+        await asyncio.wait_for(ctx.wait_for_participant(), timeout=cfg.timing.answer_timeout_s)
+    except TimeoutError:
+        # asyncio.TimeoutError is an alias of builtin TimeoutError on 3.11+.
+        log.info("No browser participant within answer timeout; ending test job")
+        ctx.shutdown(reason="test_no_participant")
+        return
     # Arm the max-duration guard as the only bound on the test (no answer-timeout path,
     # no recording, no voicemail detection on a sandbox session).
     _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
