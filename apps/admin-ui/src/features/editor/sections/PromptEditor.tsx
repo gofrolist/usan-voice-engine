@@ -1,4 +1,4 @@
-import { Suspense, lazy, useRef } from "react";
+import { Suspense, lazy, useRef, useState } from "react";
 import type { EditorProps, OnChange, OnMount } from "@monaco-editor/react";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { Textarea } from "../../../components/ui/textarea";
@@ -6,6 +6,8 @@ import { matchPromptTokens } from "./promptTokens";
 import { unknownTokenNames } from "./unknownTokens";
 import { phiTokenNames, SENSITIVE_PROMPT_FIELDS } from "./phiTokens";
 import { VariablePalette } from "./VariablePalette";
+import { DeclareVariableDialog } from "../../customVariables/DeclareVariableDialog";
+import { useCreateCustomVariable } from "../../customVariables/hooks";
 import type { VariableSpec } from "../../../config/variableCatalog";
 
 // Lazy-load Monaco so it is split out of the main bundle and never blocks first
@@ -75,6 +77,19 @@ export function PromptEditor(props: PromptEditorProps) {
 
   const known = knownNames ?? EMPTY_KNOWN;
   const unknown = unknownTokenNames(value, known);
+
+  // Inline declaration (US1): declare an undeclared {{token}} without leaving the
+  // editor. Reuses useCreateCustomVariable — its ["variable-catalog"] invalidation
+  // refetches knownNames, so the warning + Monaco "unknown" decoration auto-clear.
+  const create = useCreateCustomVariable();
+  const [declareName, setDeclareName] = useState<string | null>(null);
+
+  function declareAllRemaining(): void {
+    // Quick bulk declare: create each undeclared token with an empty definition.
+    for (const name of unknown) {
+      create.mutate({ name, description: "", example: "", phi: false });
+    }
+  }
 
   const isSensitive = fieldKey !== undefined && SENSITIVE_PROMPT_FIELDS.has(fieldKey);
   const phiWarnings =
@@ -153,10 +168,34 @@ export function PromptEditor(props: PromptEditorProps) {
         </ErrorBoundary>
       </div>
       {unknown.length > 0 ? (
-        <p className="text-xs font-medium text-amber-700">
-          unknown variable: {unknown.join(", ")} — will resolve to empty unless declared as a
-          custom variable.
-        </p>
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-amber-700">
+            unknown variable: {unknown.join(", ")} — will resolve to empty unless declared as a
+            custom variable.
+          </p>
+          <div className="flex flex-wrap items-center gap-1">
+            {unknown.map((name) => (
+              <button
+                key={name}
+                type="button"
+                onClick={() => setDeclareName(name)}
+                className="rounded border border-amber-400 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-900 hover:bg-amber-100"
+              >
+                Declare <code className="font-mono">{`{{${name}}}`}</code>
+              </button>
+            ))}
+            {unknown.length > 1 ? (
+              <button
+                type="button"
+                onClick={declareAllRemaining}
+                disabled={create.isPending}
+                className="rounded border border-amber-500 bg-white px-2 py-0.5 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+              >
+                Declare all remaining
+              </button>
+            ) : null}
+          </div>
+        </div>
       ) : null}
       {phiWarnings.length > 0 ? (
         <p className="text-xs font-medium text-amber-700">
@@ -164,6 +203,14 @@ export function PromptEditor(props: PromptEditorProps) {
           spoken before the caller&apos;s identity is confirmed (or to voicemail). Avoid health
           variables in this field.
         </p>
+      ) : null}
+      {declareName !== null ? (
+        <DeclareVariableDialog
+          name={declareName}
+          busy={create.isPending}
+          onCancel={() => setDeclareName(null)}
+          onCreate={(body) => create.mutate(body, { onSuccess: () => setDeclareName(null) })}
+        />
       ) : null}
     </div>
   );

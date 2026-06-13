@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Badge } from "../../../components/ui/badge";
 import { groupByTier, type VariableSpec } from "../../../config/variableCatalog";
 
 interface VariablePaletteProps {
@@ -51,6 +52,11 @@ export function VariablePalette({ variables, onInsert }: VariablePaletteProps) {
                     className="block w-full rounded px-1 py-1 text-left hover:bg-indigo-50"
                   >
                     <code className="font-mono text-xs text-indigo-700">{`{{${v.name}}}`}</code>
+                    {v.phi ? (
+                      <span className="ml-2">
+                        <Badge tone="red">PHI</Badge>
+                      </span>
+                    ) : null}
                     <span className="ml-2 text-xs text-slate-500">{v.description}</span>
                   </button>
                 ))}

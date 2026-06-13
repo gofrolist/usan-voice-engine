@@ -62,11 +62,14 @@ export function tryParseFieldErrors(detail: string): ValidationItem[] | null {
 export function ProfileEditorPage() {
   const { id = "" } = useParams();
   const isAdmin = useIsAdmin();
-  const { data: profile, isLoading, isError, error } = useProfile(id);
+  const { data: profile, isLoading, isError, error, refetch } = useProfile(id);
   const saveDraft = useSaveDraft(id);
 
   const [section, setSection] = useState<SectionKey>("prompts");
   const [publishOpen, setPublishOpen] = useState(false);
+  // Optimistic-concurrency conflict banner (FR-032): set when a save is rejected
+  // with 409 because the draft changed since it was loaded.
+  const [conflict, setConflict] = useState(false);
 
   const form = useForm<AgentConfigForm>({
     resolver: zodResolver(agentConfigSchema),
@@ -116,23 +119,51 @@ export function ProfileEditorPage() {
     return mapped;
   }
 
+  function handleMutationError(err: ApiError): void {
+    // Optimistic-concurrency conflict (FR-032) is checked BEFORE 422 field mapping:
+    // show a reload affordance so no edits are silently overwritten.
+    if (err.status === 409) {
+      setConflict(true);
+      pushToast(err.detail);
+      return;
+    }
+    if (err.status === 422 && mapServerErrors(err.detail)) {
+      pushToast("Some fields were rejected by the server — see the highlighted errors.");
+      return;
+    }
+    pushToast(err.detail);
+  }
+
+  async function handleReloadDraft(): Promise<void> {
+    // Confirm-before-discard: never trade a silent SERVER overwrite for a silent
+    // LOCAL loss. Refetch the latest draft + revision; the load effect form.resets.
+    if (
+      form.formState.isDirty &&
+      !window.confirm("Discard your unsaved changes and load the latest version of this draft?")
+    ) {
+      return;
+    }
+    await refetch();
+    setConflict(false);
+  }
+
   const onSave = form.handleSubmit((values: AgentConfigForm) => {
     saveDraft.mutate(
-      { config: values as AgentConfig },
+      { config: values as AgentConfig, expectedRevision: profile.draft_revision },
       {
-        onError: (err: ApiError) => {
-          if (err.status === 422 && mapServerErrors(err.detail)) {
-            pushToast("Some fields were rejected by the server — see the highlighted errors.");
-          } else {
-            pushToast(err.detail);
-          }
+        onError: handleMutationError,
+        onSuccess: () => {
+          setConflict(false);
+          pushToast("Draft saved.", "info");
         },
-        onSuccess: () => pushToast("Draft saved.", "info"),
       },
     );
   });
 
   async function onPublishClick(): Promise<void> {
+    // Hoisted declaration: re-narrow profile (the early return above only narrows the
+    // synchronous render path, not this hoisted closure).
+    if (!profile) return;
     // Validate before opening the diff so the live-vs-draft comparison reflects a
     // config the server will accept.
     const valid = await form.trigger();
@@ -150,14 +181,9 @@ export function ProfileEditorPage() {
         // — the zod ""→null transform never ran and the server's HH:MM regex
         // would 422. parse() cannot throw here: form.trigger() above just passed.
         const config = agentConfigSchema.parse(form.getValues()) as AgentConfig;
-        await saveDraft.mutateAsync({ config });
+        await saveDraft.mutateAsync({ config, expectedRevision: profile.draft_revision });
       } catch (err) {
-        const e = err as ApiError;
-        if (e.status === 422 && mapServerErrors(e.detail)) {
-          pushToast("Some fields were rejected by the server — see the highlighted errors.");
-        } else {
-          pushToast(e.detail);
-        }
+        handleMutationError(err as ApiError);
         return;
       }
     }
@@ -201,6 +227,24 @@ export function ProfileEditorPage() {
         onSave={() => void onSave()}
         onPublish={() => void onPublishClick()}
       />
+      {conflict ? (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-8 py-2 text-sm text-amber-900"
+        >
+          <span>
+            This draft changed since you opened it. Reload to load the latest before saving — your
+            unsaved edits are kept until you choose.
+          </span>
+          <button
+            type="button"
+            className="shrink-0 rounded border border-amber-400 bg-white px-2 py-1 font-medium hover:bg-amber-100"
+            onClick={() => void handleReloadDraft()}
+          >
+            Reload
+          </button>
+        </div>
+      ) : null}
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto max-w-3xl">

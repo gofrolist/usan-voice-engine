@@ -272,6 +272,11 @@ class AgentProfile(Base):
     # The live version number (joins agent_profile_versions on (id, version));
     # NULL means the profile has never been published.
     published_version: Mapped[int | None] = mapped_column(Integer)
+    # Optimistic-concurrency token (migration 0016). Monotonic; bumped by every
+    # row-mutating path (update_draft / publish / rollback). The PUT /draft body
+    # carries the loaded value as expected_revision; a guarded UPDATE that matches
+    # 0 rows means the draft changed since it was loaded -> 409 (FR-032 / SC-011).
+    draft_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     is_default_outbound: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )

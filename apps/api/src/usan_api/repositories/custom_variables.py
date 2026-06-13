@@ -9,15 +9,17 @@ House rules: functions take the request session, ``flush()`` (+``refresh()``
 for returned rows), and never commit — routers own the transaction boundary.
 """
 
+import re
 import uuid
 from collections.abc import Iterable
+from typing import Any
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import Text, cast, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api.db.models import CustomVariable
+from usan_api.db.models import AgentProfile, AgentProfileVersion, CustomVariable
 from usan_api.schemas.variable_catalog import BUILTIN_NAMES
 
 
@@ -117,3 +119,92 @@ async def phi_names(db: AsyncSession) -> frozenset[str]:
     """Non-builtin-shadowed names declared phi=true (the save-path fetch, spec §3.2)."""
     result = await db.execute(select(CustomVariable.name).where(CustomVariable.phi.is_(True)))
     return _drop_builtin_shadowed(result.scalars().all())
+
+
+# The 8 prompt fields scanned for {{token}} references (mirrors agent_config
+# PromptsConfig + the save-path warning scan). SMS template bodies are scanned too.
+_PROMPT_FIELDS: tuple[str, ...] = (
+    "system_prompt",
+    "greeting",
+    "recording_disclosure",
+    "voicemail_message",
+    "checkin_flow_instructions",
+    "goodbye_message",
+    "inbound_opening",
+    "inbound_personalization_template",
+)
+
+
+def _token_re(name: str) -> re.Pattern[str]:
+    """Exact {{name}} matcher (mirrors agent_config._TOKEN_RE's inner-space rule).
+
+    Built per-name with re.escape so a scan for ``state`` never matches
+    ``{{state_full}}`` (exact token, not substring).
+    """
+    return re.compile(r"\{\{\s*" + re.escape(name) + r"\s*\}\}")
+
+
+def _locations_in_config(config: dict[str, Any], pattern: re.Pattern[str]) -> list[str]:
+    """Field identifiers within one AgentConfig dict whose text contains the token.
+
+    Returns prompt field names (e.g. ``greeting``) and ``sms[<key>]`` for matching
+    SMS template bodies. Names/locations only — never the prompt text itself.
+    """
+    locs: list[str] = []
+    prompts = config.get("prompts") or {}
+    for field in _PROMPT_FIELDS:
+        text = prompts.get(field)
+        if isinstance(text, str) and pattern.search(text):
+            locs.append(field)
+    templates = ((config.get("tools") or {}).get("sms") or {}).get("templates") or []
+    for tmpl in templates:
+        if not isinstance(tmpl, dict):
+            continue
+        body = tmpl.get("body")
+        if isinstance(body, str) and pattern.search(body):
+            locs.append(f"sms[{tmpl.get('key', '')}]")
+    return locs
+
+
+async def references_to(db: AsyncSession, name: str) -> list[dict[str, Any]]:
+    """Profiles referencing ``{{name}}`` across the live draft AND every version.
+
+    JSONB ``::text ILIKE '%{{name}}%'`` prefilters the rows to scan, then an exact
+    ``_token_re`` confirm over the 8 prompt fields + SMS bodies avoids substring
+    false positives. Returns ``[{id, name, where}]`` grouped per profile, where
+    ``where`` items are ``"draft:<field>"`` / ``"v<N>:<field>"`` — names/locations
+    only, never prompt text or per-call values (spec §7 / FR-007).
+    """
+    pattern = _token_re(name)
+    like = "%{{" + name + "}}%"
+    by_profile: dict[uuid.UUID, dict[str, Any]] = {}
+
+    draft_rows = await db.execute(
+        select(AgentProfile.id, AgentProfile.name, AgentProfile.draft_config).where(
+            cast(AgentProfile.draft_config, Text).ilike(like)
+        )
+    )
+    for pid, pname, cfg in draft_rows.all():
+        locs = _locations_in_config(cfg or {}, pattern)
+        if locs:
+            entry = by_profile.setdefault(pid, {"id": pid, "name": pname, "where": []})
+            entry["where"].extend(f"draft:{loc}" for loc in locs)
+
+    version_rows = await db.execute(
+        select(
+            AgentProfileVersion.profile_id,
+            AgentProfile.name,
+            AgentProfileVersion.version,
+            AgentProfileVersion.config,
+        )
+        .join(AgentProfile, AgentProfile.id == AgentProfileVersion.profile_id)
+        .where(cast(AgentProfileVersion.config, Text).ilike(like))
+        .order_by(AgentProfileVersion.version)
+    )
+    for pid, pname, version, cfg in version_rows.all():
+        locs = _locations_in_config(cfg or {}, pattern)
+        if locs:
+            entry = by_profile.setdefault(pid, {"id": pid, "name": pname, "where": []})
+            entry["where"].extend(f"v{version}:{loc}" for loc in locs)
+
+    return list(by_profile.values())

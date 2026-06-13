@@ -27,6 +27,16 @@ class CloneSourceNotFoundError(Exception):
     """Raised when create_profile(clone_from=...) references a profile that doesn't exist."""
 
 
+class StaleDraftError(Exception):
+    """The draft changed since the editor loaded it (optimistic concurrency, FR-032).
+
+    Raised by update_draft only when an ``expected_revision`` was supplied and the
+    guarded UPDATE matched 0 rows while the row still exists. The router maps it to
+    HTTP 409 with a generic reload-prompt detail — never any PHI or other actor's
+    identity (spec §7).
+    """
+
+
 async def create_profile(
     db: AsyncSession,
     *,
@@ -71,7 +81,47 @@ async def update_draft(
     config: dict[str, Any],
     description: str | None,
     actor_email: str,
+    expected_revision: int | None = None,
 ) -> AgentProfile | None:
+    """Persist the draft config, bumping draft_revision.
+
+    With ``expected_revision`` set, do a guarded conditional UPDATE
+    (``WHERE id = :id AND draft_revision = :expected``). A 0-rowcount result is
+    disambiguated by a re-SELECT: row absent -> return None (404); row present ->
+    raise StaleDraftError (409). Omitting ``expected_revision`` keeps the old
+    unconditional behavior (still bumps the revision) for backward compatibility.
+    """
+    if expected_revision is not None:
+        values: dict[Any, Any] = {
+            AgentProfile.draft_config: config,
+            AgentProfile.updated_by: actor_email,
+            AgentProfile.draft_revision: AgentProfile.draft_revision + 1,
+            # Bulk update bypasses onupdate=func.now() — set it explicitly.
+            AgentProfile.updated_at: func.now(),
+        }
+        if description is not None:
+            values[AgentProfile.description] = description
+        result = await db.execute(
+            update(AgentProfile)
+            .where(
+                AgentProfile.id == profile_id,
+                AgentProfile.draft_revision == expected_revision,
+            )
+            .values(values)
+        )
+        # execute() of a DML statement returns a CursorResult (has rowcount); the
+        # statically-inferred Result type does not expose it.
+        if result.rowcount == 0:  # type: ignore[attr-defined]
+            # Re-SELECT to tell 404 (no such profile) from 409 (revision moved on).
+            exists = await db.get(AgentProfile, profile_id)
+            if exists is None:
+                return None
+            raise StaleDraftError(str(profile_id))
+        await db.flush()
+        # The bulk UPDATE bypasses the identity map; re-fetch the fresh row.
+        db.expire_all()
+        return await db.get(AgentProfile, profile_id)
+
     profile = await db.get(AgentProfile, profile_id)
     if profile is None:
         return None
@@ -79,6 +129,7 @@ async def update_draft(
     if description is not None:
         profile.description = description
     profile.updated_by = actor_email
+    profile.draft_revision = profile.draft_revision + 1
     await db.flush()
     await db.refresh(profile)
     return profile
@@ -123,6 +174,9 @@ async def publish(
     db.add(version)
     profile.published_version = version_number
     profile.updated_by = actor_email
+    # Bump the concurrency token so an editor holding a pre-publish revision is
+    # told to reload (FR-032). rollback() funnels through here, so it bumps too.
+    profile.draft_revision = profile.draft_revision + 1
     await db.flush()
     await db.refresh(version)
     return version

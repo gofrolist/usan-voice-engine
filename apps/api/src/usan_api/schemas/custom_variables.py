@@ -82,3 +82,23 @@ class CustomVariableOut(BaseModel):
             created_at=v.created_at,
             updated_at=v.updated_at,
         )
+
+
+class VariableReference(BaseModel):
+    """One profile that references a custom variable's ``{{name}}`` token.
+
+    ``where`` lists the locations as ``"<source>:<field>"`` — source is ``draft``
+    or ``v<N>`` (a published version), field is a prompt field name or
+    ``sms[<key>]``. Names + locations only, never prompt text or per-call values
+    (spec §7).
+    """
+
+    id: uuid.UUID
+    name: str
+    where: list[str]
+
+
+class CustomVariableReferences(BaseModel):
+    """Delete-guard payload (FR-007): the profiles still referencing the variable."""
+
+    profiles: list[VariableReference]

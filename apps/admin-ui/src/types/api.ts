@@ -113,6 +113,8 @@ export interface ProfileSummary {
   published_version: number | null;
   has_unpublished_draft: boolean;
   assigned_elder_count: number;
+  // Optimistic-concurrency token (FR-032); see ProfileDetail.draft_revision.
+  draft_revision: number;
   updated_at: string;
 }
 
@@ -125,6 +127,9 @@ export interface ProfileDetail {
   is_default_outbound: boolean;
   published_version: number | null;
   draft_config: AgentConfig;
+  // Optimistic-concurrency token (FR-032): loaded with the draft, echoed back as
+  // DraftUpdate.expected_revision on save; a stale value yields HTTP 409.
+  draft_revision: number;
   created_by: string | null;
   updated_by: string | null;
   created_at: string;
@@ -153,6 +158,9 @@ export interface ProfileCreate {
 export interface DraftUpdate {
   config: AgentConfig;
   description?: string | null;
+  // Optimistic concurrency (FR-032): the draft_revision the editor loaded. Omitted
+  // -> unconditional save (backward compatible); the editor always sends it.
+  expected_revision?: number;
 }
 
 export interface PublishRequest {
