@@ -131,3 +131,49 @@ async def test_names_helpers_exclude_builtin_shadowed_rows(session_factory) -> N
     shadowed = [r for r in records if "shadowed by builtin" in r["message"]]
     assert shadowed, "expected the logged drop, mirroring the catalog merge"
     assert all(r["extra"].get("name") == "elder_name" for r in shadowed)
+
+
+# ---------------------------------------------------------------------------
+# US4 (T045) — deploy-time guard: warn if a pre-existing custom `contact_name`
+# row exists so the new builtin alias doesn't silently shadow it.
+# ---------------------------------------------------------------------------
+
+
+async def test_contact_name_deploy_check_warns_when_custom_row_exists(session_factory) -> None:
+    records: list[dict] = []
+    handler_id = logger.add(lambda m: records.append(m.record), level="WARNING")
+    try:
+        async with session_factory() as db:
+            # Repo-level insert bypasses the pydantic builtin-collision gate, exactly
+            # like a row declared before the contact_name builtin was introduced.
+            await custom_variables_repo.create_custom_variable(
+                db, name="contact_name", description="legacy", example="", phi=True
+            )
+            await db.commit()
+
+        async with session_factory() as db:
+            shadowed = await custom_variables_repo.warn_if_contact_name_custom_exists(db)
+        assert shadowed is True
+    finally:
+        logger.remove(handler_id)
+    hits = [r for r in records if "contact_name" in r["message"]]
+    assert hits, "expected a name-only warning about the shadowed contact_name custom"
+    # Name-only: the warning must not carry the row's description/example/values.
+    assert all("legacy" not in r["message"] for r in hits)
+
+
+async def test_contact_name_deploy_check_silent_when_absent(session_factory) -> None:
+    records: list[dict] = []
+    handler_id = logger.add(lambda m: records.append(m.record), level="WARNING")
+    try:
+        async with session_factory() as db:
+            await custom_variables_repo.create_custom_variable(
+                db, name="pet_name", description="", example="", phi=False
+            )
+            await db.commit()
+        async with session_factory() as db:
+            shadowed = await custom_variables_repo.warn_if_contact_name_custom_exists(db)
+        assert shadowed is False
+    finally:
+        logger.remove(handler_id)
+    assert not [r for r in records if "contact_name" in r["message"]]

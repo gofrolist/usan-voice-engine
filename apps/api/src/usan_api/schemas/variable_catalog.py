@@ -29,7 +29,7 @@ class VariableSpec(BaseModel):
     phi: bool = False
 
 
-# The 10 built-in variables, in catalog/display order (design §3.1). Keep this
+# The built-in variables, in catalog/display order (design §3.1). Keep this
 # list and the agent-side mirror (services/agent/.../prompt_vars.py) in lockstep.
 BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
     VariableSpec(
@@ -43,6 +43,16 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
         name="elder_name",
         tier="builtin",
         description="The elder's full name.",
+        default="there",
+        example="Margaret Doe",
+    ),
+    # contact_name is a permanent alias of elder_name (US4 / FR-024): same
+    # elder.name source, same "there" default, PHI-free. Kept adjacent so the
+    # two builtins stay in lockstep with the agent mirror (prompt_vars.py).
+    VariableSpec(
+        name="contact_name",
+        tier="builtin",
+        description="The contact's full name (alias of elder_name).",
         default="there",
         example="Margaret Doe",
     ),

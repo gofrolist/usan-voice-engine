@@ -38,8 +38,8 @@ function SeverityBadge({ severity }: { severity: string }) {
   );
 }
 
-// The console never shows a dialable number: elder identity is name + masked
-// phone only, with the name deep-linking to that elder's call history.
+// The console never shows a dialable number: contact identity is name + masked
+// phone only, with the name deep-linking to that contact's call history.
 function ElderCell({
   elderId,
   name,
@@ -137,7 +137,7 @@ export function QueueTable(props: QueueTableProps) {
       <Thead>
         <Tr>
           <Th>Created</Th>
-          <Th>Elder</Th>
+          <Th>Contact</Th>
           {props.kind === "flags" ? (
             <>
               <Th>Severity</Th>

@@ -121,6 +121,35 @@ async def phi_names(db: AsyncSession) -> frozenset[str]:
     return _drop_builtin_shadowed(result.scalars().all())
 
 
+# US4 (FR-024): contact_name became a builtin alias of elder_name. A custom row
+# named contact_name declared BEFORE that change is now silently shadowed by the
+# builtin (the catalog merge / _drop_builtin_shadowed drops it). This is a
+# deploy-time guard so the operator is told once, by name only (spec §7).
+_CONTACT_NAME = "contact_name"
+
+
+async def warn_if_contact_name_custom_exists(db: AsyncSession) -> bool:
+    """Log a name-only warning if a custom variable named ``contact_name`` exists.
+
+    Run at startup (deploy time). The new ``contact_name`` builtin shadows any
+    pre-existing custom row of the same name; the catalog merge already drops it
+    with a logged warning, but operators won't see that unless prompted. Returns
+    ``True`` when a row was found (and warned). Never raises on a missing row;
+    the message carries only the name — never the row's description/example/values.
+    """
+    result = await db.execute(
+        select(CustomVariable.name).where(CustomVariable.name == _CONTACT_NAME).limit(1)
+    )
+    if result.scalar_one_or_none() is None:
+        return False
+    logger.bind(name=_CONTACT_NAME).warning(
+        "custom variable {name} is now shadowed by the builtin alias of elder_name; "
+        "its definition is ignored — rename or remove it",
+        name=_CONTACT_NAME,
+    )
+    return True
+
+
 # The 8 prompt fields scanned for {{token}} references (mirrors agent_config
 # PromptsConfig + the save-path warning scan). SMS template bodies are scanned too.
 _PROMPT_FIELDS: tuple[str, ...] = (

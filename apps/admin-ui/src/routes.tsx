@@ -37,7 +37,7 @@ export const router = createBrowserRouter([
           { path: "calls", element: <CallsPage /> },
           { path: "calls/:id", element: <CallDetailPage /> },
           { path: "queues", element: <QueuesPage /> },
-          { path: "elders", element: <EldersPage /> },
+          { path: "contacts", element: <EldersPage /> },
           { path: "defaults", element: <DefaultsPage /> },
           { path: "custom-variables", element: <CustomVariablesPage /> },
           { path: "audit", element: <AuditPage /> },
