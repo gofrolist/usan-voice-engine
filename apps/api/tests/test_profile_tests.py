@@ -28,6 +28,13 @@ def _new_profile(client: TestClient) -> str:
     return client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
 
 
+def _draft_config_json() -> dict:
+    """A JSON-serializable copy of the server default config, for inline overrides."""
+    from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG
+
+    return DEFAULT_AGENT_CONFIG.model_dump(mode="json")
+
+
 async def _seed_admin_user(async_database_url: str, email: str, role: str) -> None:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -166,6 +173,26 @@ def test_llm_emits_single_phi_free_audit_entry(
     assert pid in detail_str or pid in str(entries[0])
 
 
+def test_llm_rejects_unsupported_model_before_vertex_call(
+    client, admin_session, async_database_url, vertex_admin
+):
+    """FR-014 parity: an inline config with an off-catalog llm.model is blocked with a
+    field-level 422 BEFORE any Vertex call — the test path must not forward an
+    unvalidated model id to the provider (security review PR #61, LOW #1)."""
+    pid = _new_profile(client)
+    cfg = _draft_config_json()
+    cfg["llm"]["model"] = "totally-made-up-model"
+    r = client.post(
+        f"/v1/admin/profiles/{pid}/test/llm",
+        json={"messages": [{"role": "user", "content": "hi"}], "config": cfg},
+    )
+    assert r.status_code == 422, r.text
+    locs = {tuple(d["loc"]) for d in r.json()["detail"]}
+    assert ("body", "config", "llm", "model") in locs
+    # The gate ran BEFORE the provider — no Vertex turn was attempted.
+    assert vertex_admin["n"] == 0
+
+
 # --- test/audio -----------------------------------------------------------
 
 
@@ -233,6 +260,25 @@ def test_audio_mints_join_token_and_dispatches_test_session(
     # No Call row was created (no PSTN, no production record).
     counts = asyncio.run(_table_counts(async_database_url))
     assert counts["calls"] == 0
+
+
+def test_audio_rejects_unsupported_voice_before_dispatch(
+    client, admin_session, async_database_url, mock_livekit
+):
+    """FR-014 parity: an inline config with an off-catalog voice is blocked with a
+    field-level 422 BEFORE the agent is dispatched (security review PR #61, LOW #1)."""
+    pid = _new_profile(client)
+    cfg = _draft_config_json()
+    cfg["voice"]["cartesia_voice_id"] = "not-a-real-voice"
+    r = client.post(
+        f"/v1/admin/profiles/{pid}/test/audio",
+        json={"sample_vars": {}, "config": cfg},
+    )
+    assert r.status_code == 422, r.text
+    locs = {tuple(d["loc"]) for d in r.json()["detail"]}
+    assert ("body", "config", "voice", "cartesia_voice_id") in locs
+    # The gate ran BEFORE dispatch — no agent/room was created.
+    mock_livekit["fake"].agent_dispatch.create_dispatch.assert_not_awaited()
 
 
 def test_audio_emits_single_phi_free_audit_entry(

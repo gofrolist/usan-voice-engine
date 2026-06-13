@@ -34,7 +34,7 @@ from usan_api.db.session import get_db
 from usan_api.prompt_substitution import build_vars, substitute
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
-from usan_api.schemas.agent_config import AgentConfig
+from usan_api.schemas.agent_config import AgentConfig, catalog_violations
 from usan_api.schemas.profile_tests import (
     TestAudioRequest,
     TestAudioResponse,
@@ -84,6 +84,20 @@ async def _resolve_draft_config(
     return AgentConfig.model_validate(profile.draft_config)
 
 
+def _reject_off_catalog(cfg: AgentConfig) -> None:
+    """Block a test run whose voice/model id is outside the curated catalogs (FR-014).
+
+    Mirrors the handler-layer gate the persistence paths apply in update_draft/publish/
+    rollback so a test exercises exactly the same allowlist a publishable config must —
+    an unsupported id never reaches the live Vertex/Cartesia provider (security review
+    PR #61, LOW #1). Runs before any provider call; the fabricated field-level ``loc``
+    parses client-side like a pydantic 422.
+    """
+    violations = catalog_violations(cfg.model_dump())
+    if violations:
+        raise HTTPException(status_code=422, detail=violations)
+
+
 # The module-level seam the tests patch. Kept as a thin indirection so the Vertex
 # call (which needs ADC + a live project) is trivially mockable without a provider.
 # It reads settings via get_settings() internally so the call site stays minimal.
@@ -122,6 +136,8 @@ async def run_llm_test(
             detail="text test unavailable: GCP_PROJECT is not configured",
         )
     cfg = await _resolve_draft_config(db, profile_id, body.config)
+    # FR-014 parity: reject an off-catalog voice/model BEFORE the Vertex call.
+    _reject_off_catalog(cfg)
 
     # Substitute the synthetic sample vars into the system prompt exactly as the live
     # agent would (api-side parallel substitutor; no real contact PHI is loaded).
@@ -214,6 +230,8 @@ async def run_audio_test(
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> TestAudioResponse:
     cfg = await _resolve_draft_config(db, profile_id, body.config)
+    # FR-014 parity: reject an off-catalog voice/model BEFORE minting a token/dispatch.
+    _reject_off_catalog(cfg)
 
     # Reject an oversized config before dispatch: the draft config + sample vars are
     # embedded in the LiveKit dispatch metadata (size-limited); exceeding it would fail
