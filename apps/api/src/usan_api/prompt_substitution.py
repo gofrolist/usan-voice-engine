@@ -30,6 +30,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 BUILTIN_DEFAULTS: dict[str, str] = {
     "first_name": "there",
     "elder_name": "there",
+    # contact_name is a permanent alias of elder_name (US4 / FR-024): same source,
+    # same "there" default. Keep adjacent to elder_name and in lockstep with the
+    # agent mirror (services/agent prompt_vars.BUILTIN_DEFAULTS).
+    "contact_name": "there",
     "call_direction": "",
     "current_time": "",
     "current_date": "",
