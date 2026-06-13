@@ -26,11 +26,13 @@ from usan_api.routers import (
     admin_custom_variables,
     admin_defaults,
     admin_elders,
+    admin_model_catalog,
     admin_profiles,
     admin_tool_catalog,
     admin_tools,
     admin_users,
     admin_variable_catalog,
+    admin_voice_catalog,
     auth,
     batches,
     calls,
@@ -175,6 +177,8 @@ def create_app() -> FastAPI:
     app.include_router(admin_variable_catalog.router)
     app.include_router(admin_custom_variables.router)
     app.include_router(admin_tool_catalog.router)
+    app.include_router(admin_voice_catalog.router)
+    app.include_router(admin_model_catalog.router)
     app.include_router(admin_tools.router)
     app.include_router(admin_calls.router)
     app.include_router(auth.router)
