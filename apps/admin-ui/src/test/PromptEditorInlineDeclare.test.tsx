@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactElement } from "react";
+import type { FormEvent, ReactElement } from "react";
 
 const postMock = vi.fn();
 vi.mock("../lib/api", () => ({
@@ -111,6 +111,46 @@ describe("PromptEditor inline declare", () => {
         expect.objectContaining({ name: "promo" }),
       ),
     );
+  });
+
+  it("inline Create does not submit the surrounding page form", async () => {
+    // ProfileEditorPage wraps the editor in <form onSubmit={onSave}>. The inline
+    // declare dialog renders its own <form>, so its Create submit must stay
+    // contained and never bubble to the page form — otherwise (nested <form>s) the
+    // browser submitted the page form and reloaded the editor without creating the
+    // variable. The Dialog now portals out + stops submit propagation.
+    const user = userEvent.setup();
+    postMock.mockResolvedValue({
+      id: "1",
+      name: "promo",
+      description: "",
+      example: "",
+      phi: false,
+      created_at: "2026-06-13T00:00:00Z",
+      updated_at: "2026-06-13T00:00:00Z",
+    });
+    const outerSubmit = vi.fn((e: FormEvent) => e.preventDefault());
+    renderWithClient(
+      <form onSubmit={outerSubmit}>
+        <PromptEditor
+          id="prompts.greeting"
+          value="Hi {{promo}}"
+          onChange={() => {}}
+          variables={VARS}
+          knownNames={new Set(["first_name"])}
+        />
+      </form>,
+    );
+    await user.click(screen.getByRole("button", { name: /Declare\s*\{\{promo\}\}/ }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith(
+        "/v1/admin/custom-variables",
+        expect.objectContaining({ name: "promo" }),
+      ),
+    );
+    expect(outerSubmit).not.toHaveBeenCalled();
   });
 
   it("'Declare all remaining' POSTs every undeclared token", async () => {
