@@ -12,7 +12,6 @@ import pytest
 from loguru import logger
 from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
 
 from usan_api import background, retry_orchestrator
 from usan_api.db.base import CallDirection, CallStatus
@@ -28,7 +27,7 @@ MAX_AGE_S = 1800 + 120
 
 @pytest.fixture
 async def session_factory(async_database_url):
-    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    engine = create_async_engine(async_database_url)
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
 

@@ -7,7 +7,6 @@ import time
 import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
 
 from usan_api.db.models import WebhookDelivery, WebhookEndpoint
 from usan_api.webhook_signing import canonical_bytes, generate_secret, sign, signature_header
@@ -79,7 +78,7 @@ def test_canonical_bytes_invariant_under_key_reorder() -> None:
 
 @pytest.fixture
 async def session_factory(async_database_url):
-    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    engine = create_async_engine(async_database_url)
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
 

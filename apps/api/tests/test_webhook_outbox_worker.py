@@ -26,7 +26,7 @@ PAYLOAD: dict[str, Any] = {"event": "ping", "occurred_at": "2026-06-10T12:00:00+
 
 @pytest.fixture
 async def session_factory(async_database_url):
-    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    engine = create_async_engine(async_database_url)
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
 

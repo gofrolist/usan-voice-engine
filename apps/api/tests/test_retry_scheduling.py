@@ -5,7 +5,6 @@ import pytest
 from loguru import logger
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
 
 from usan_api import retry_policy, webhook_events
 from usan_api.db.base import CallDirection, CallStatus
@@ -21,7 +20,7 @@ FIXED_NOW = datetime(2026, 5, 31, 12, 0, tzinfo=UTC)  # inside [09:00, 21:00) UT
 
 @pytest.fixture
 async def session_factory(async_database_url):
-    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    engine = create_async_engine(async_database_url)
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
 
