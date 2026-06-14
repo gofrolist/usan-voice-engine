@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useForm, type UseFormReturn } from "react-hook-form";
+import { useForm, type Resolver, type UseFormReturn } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { ReactNode } from "react";
 import { ToolsSection } from "../features/editor/sections/ToolsSection";
@@ -68,7 +68,7 @@ function Harness({ enabled }: { enabled: string[] }) {
 // is exercised through the real agentConfigSchema, per Task D14 Step 1.
 function SmsHarness({ enabled }: { enabled: string[] }) {
   const form = useForm<AgentConfigForm>({
-    resolver: zodResolver(agentConfigSchema),
+    resolver: zodResolver(agentConfigSchema) as Resolver<AgentConfigForm>,
     defaultValues: {
       tools: { enabled, sms: null },
     } as unknown as AgentConfigForm,
@@ -223,7 +223,7 @@ function mockCatalogs(): void {
 // (computed from the watched body value) can be asserted directly.
 function SmsBodyHarness({ body }: { body: string }) {
   const form = useForm<AgentConfigForm>({
-    resolver: zodResolver(agentConfigSchema),
+    resolver: zodResolver(agentConfigSchema) as Resolver<AgentConfigForm>,
     defaultValues: {
       tools: {
         enabled: ["send_sms", "end_call"],

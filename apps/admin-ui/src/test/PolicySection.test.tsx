@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useForm } from "react-hook-form";
+import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { describe, expect, it } from "vitest";
 import { PolicySection } from "../features/editor/sections/PolicySection";
@@ -41,7 +41,9 @@ function validConfig(policy: AgentConfigForm["policy"]): AgentConfigForm {
 
 function Harness({ policy = null }: { policy?: AgentConfigForm["policy"] }) {
   const form = useForm<AgentConfigForm>({
-    resolver: zodResolver(agentConfigSchema),
+    // zod 4 + resolvers v5 split input/output types (see ProfileEditorPage); the
+    // harness works on the output shape, so assert the resolver. Types-only.
+    resolver: zodResolver(agentConfigSchema) as Resolver<AgentConfigForm>,
     mode: "onBlur",
     defaultValues: validConfig(policy),
   });

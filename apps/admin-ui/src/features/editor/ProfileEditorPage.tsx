@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { useForm } from "react-hook-form";
+import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { agentConfigSchema, type AgentConfigForm } from "../../config/agentConfigSchema";
 import { SECTION_LABELS, type SectionKey } from "../../config/fieldMeta";
@@ -82,7 +82,12 @@ export function ProfileEditorPage() {
   const [conflict, setConflict] = useState(false);
 
   const form = useForm<AgentConfigForm>({
-    resolver: zodResolver(agentConfigSchema),
+    // zod 4 + @hookform/resolvers v5 split a schema's input vs output types:
+    // quiet_hours uses z.preprocess (input inferred as unknown) and the policy
+    // retry fields use .default(null) (input optional). The form operates on the
+    // validated OUTPUT shape (AgentConfigForm) end to end, so assert the resolver
+    // to it. Types-only — the schema's runtime validation is unchanged.
+    resolver: zodResolver(agentConfigSchema) as Resolver<AgentConfigForm>,
     mode: "onBlur",
   });
 
