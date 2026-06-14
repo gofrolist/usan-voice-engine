@@ -1,7 +1,8 @@
 import asyncio
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from google.protobuf.duration_pb2 import Duration
 from livekit import api
@@ -45,6 +46,100 @@ def build_livekit_api(settings: Settings) -> api.LiveKitAPI:
         api_key=settings.livekit_api_key,
         api_secret=settings.livekit_api_secret,
     )
+
+
+# A browser test-call token is short-lived and join-only — it can never linger or be
+# replayed against another room (research R3). 15 min covers a generous test session
+# bounded further by the agent's max_call_duration_s watchdog.
+_BROWSER_TOKEN_TTL_S = 15 * 60
+
+
+def mint_browser_token(
+    settings: Settings, *, room: str, identity: str, name: str | None = None
+) -> str:
+    """Mint a short-TTL, join-only LiveKit browser token for a single test room.
+
+    The grant is scoped to exactly ``room`` with publish+subscribe (so the operator
+    can speak to and hear the agent) and NOTHING else (no room admin, no other
+    rooms). The secret ``LIVEKIT_API_SECRET`` stays server-side — the browser never
+    sees it (research R3: browser must not mint its own token). Used by the Test
+    Audio endpoint; never on the production call path.
+    """
+    grants = api.VideoGrants(
+        room=room,
+        room_join=True,
+        can_publish=True,
+        can_subscribe=True,
+    )
+    token = (
+        api.AccessToken(settings.livekit_api_key, settings.livekit_api_secret)
+        .with_identity(identity)
+        .with_grants(grants)
+        .with_ttl(timedelta(seconds=_BROWSER_TOKEN_TTL_S))
+    )
+    if name:
+        token = token.with_name(name)
+    return token.to_jwt()
+
+
+def _test_metadata(
+    *,
+    test_config: dict[str, Any],
+    sample_vars: dict[str, Any],
+    direction: str,
+) -> str:
+    """Dispatch metadata for a sandboxed Test Audio session (contract agent-test-session).
+
+    ``session_kind="test"`` flips the agent into its sandbox branch; ``test_config``
+    carries the full draft AgentConfig (validated agent-side via AgentConfig); the
+    sample vars ride as the SYNTHETIC ``dynamic_vars``/``resolved_vars`` — no real
+    contact lookup happens in test mode. ``call_id`` is absent (no Call row exists).
+    """
+    return json.dumps(
+        {
+            "session_kind": "test",
+            "test_config": test_config,
+            "call_id": None,
+            "direction": direction,
+            "dynamic_vars": sample_vars,
+            "resolved_vars": {},
+            "timezone": "",
+        }
+    )
+
+
+async def dispatch_test_agent(
+    *,
+    settings: Settings,
+    room: str,
+    test_config: dict[str, Any],
+    sample_vars: dict[str, Any],
+    direction: str = "outbound",
+) -> None:
+    """Create the throwaway room and dispatch the agent into it in TEST mode.
+
+    No SIP participant, no Call row, no PSTN — the browser joins ``room`` directly
+    over WebRTC (FR-028). The draft config + synthetic sample vars are embedded in
+    the dispatch metadata so the agent runs the unpublished draft without crossing
+    the api↔agent import boundary (Constitution I).
+    """
+    async with build_livekit_api(settings) as lkapi:
+        # Pre-create the room so the browser can connect before the worker arrives;
+        # idempotent if the dispatch already created it.
+        try:
+            await lkapi.room.create_room(api.CreateRoomRequest(name=room))
+        except Exception:  # noqa: BLE001 - room may already exist; dispatch still proceeds
+            logger.bind(room=room).debug("create_room for test session was a no-op")
+        await lkapi.agent_dispatch.create_dispatch(
+            api.CreateAgentDispatchRequest(
+                agent_name=settings.agent_name,
+                room=room,
+                metadata=_test_metadata(
+                    test_config=test_config, sample_vars=sample_vars, direction=direction
+                ),
+            )
+        )
+    logger.bind(room=room).info("Test agent dispatched (session_kind=test)")
 
 
 # The LiveKit SIP outbound trunk ID (ST_...) is environment-specific — it only

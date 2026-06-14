@@ -213,7 +213,7 @@ export function CallsPage() {
             <Thead>
               <Tr>
                 <Th>Created</Th>
-                <Th>Elder</Th>
+                <Th>Contact</Th>
                 <Th>Direction</Th>
                 <Th>Origin</Th>
                 <Th>Status</Th>

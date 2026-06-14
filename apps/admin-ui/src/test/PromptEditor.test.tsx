@@ -1,10 +1,18 @@
 // apps/admin-ui/src/test/PromptEditor.test.tsx
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState, type ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 import { PromptEditor } from "../features/editor/sections/PromptEditor";
 import type { VariableSpec } from "../config/variableCatalog";
+
+// PromptEditor uses useCreateCustomVariable (inline declaration), which needs a
+// QueryClient in scope — wrap every render.
+function renderWithClient(ui: ReactElement) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
 
 const VARS: VariableSpec[] = [
   {
@@ -45,7 +53,7 @@ function Harness() {
 
 describe("PromptEditor PHI warnings", () => {
   it("(a) shows PHI warning for a PHI var in a sensitive field", () => {
-    render(
+    renderWithClient(
       <PromptEditor
         id="prompts.voicemail_message"
         fieldKey="voicemail_message"
@@ -60,7 +68,7 @@ describe("PromptEditor PHI warnings", () => {
   });
 
   it("(b) does NOT show PHI warning for a non-PHI var in a sensitive field", () => {
-    render(
+    renderWithClient(
       <PromptEditor
         id="prompts.voicemail_message"
         fieldKey="voicemail_message"
@@ -75,7 +83,7 @@ describe("PromptEditor PHI warnings", () => {
   });
 
   it("(c) does NOT show PHI warning for a PHI var in a non-sensitive field", () => {
-    render(
+    renderWithClient(
       <PromptEditor
         id="prompts.system_prompt"
         fieldKey="system_prompt"
@@ -91,7 +99,7 @@ describe("PromptEditor PHI warnings", () => {
 
   it("(d) PHI warning is non-blocking — component renders without error", () => {
     // A warning must never throw or prevent rendering (saving remains possible).
-    const { container } = render(
+    const { container } = renderWithClient(
       <PromptEditor
         id="prompts.greeting"
         fieldKey="greeting"
@@ -111,13 +119,13 @@ describe("PromptEditor PHI warnings", () => {
 
 describe("PromptEditor variable palette", () => {
   it("renders the insert-variable button alongside the editor", () => {
-    render(<Harness />);
+    renderWithClient(<Harness />);
     expect(screen.getByRole("button", { name: /insert variable/i })).toBeInTheDocument();
   });
 
   it("inserts {{first_name}} into the value when picked from the palette", async () => {
     const user = userEvent.setup();
-    render(<Harness />);
+    renderWithClient(<Harness />);
 
     await user.click(screen.getByRole("button", { name: /insert variable/i }));
     await user.click(screen.getByRole("button", { name: /first_name/ }));
@@ -127,7 +135,6 @@ describe("PromptEditor variable palette", () => {
   });
 
   it("shows a non-blocking unknown-variable notice for unknown tokens", () => {
-    const user = userEvent.setup();
     function UnknownHarness() {
       return (
         <PromptEditor
@@ -139,8 +146,7 @@ describe("PromptEditor variable palette", () => {
         />
       );
     }
-    void user;
-    render(<UnknownHarness />);
+    renderWithClient(<UnknownHarness />);
     expect(screen.getByText(/unknown variable: made_up/i)).toBeInTheDocument();
   });
 });

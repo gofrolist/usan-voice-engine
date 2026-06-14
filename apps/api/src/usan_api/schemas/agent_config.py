@@ -15,8 +15,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from usan_api.schemas.model_catalog import LLM_MODEL_NAMES, STT_MODEL_NAMES
 from usan_api.schemas.tool_catalog import TOOL_NAMES
 from usan_api.schemas.variable_catalog import BUILTIN_NAMES, PHI_BUILTIN_NAMES
+from usan_api.schemas.voice_catalog import VOICE_IDS
 
 # Personalization slots allowed in the inbound template (check_in.py rendering).
 # Kept for any external code that may import it; no longer used by the validators.
@@ -251,6 +253,80 @@ def custom_phi_sms_violations(
                 }
             )
     return violations
+
+
+# --- voice/model catalog membership (US2 / FR-014, research R1+R2) -----------
+# HANDLER-LAYER validation mirroring custom_phi_sms_violations above. The frozen
+# AgentConfig sub-models (VoiceConfig/LLMConfig/STTConfig) keep their fields as plain
+# str (NEVER a Literal/enum) so a published agent_profile_versions snapshot referencing
+# a withdrawn voice/model id STILL deserializes on read (FORWARD-COMPATIBILITY
+# INVARIANT). Catalog membership is therefore enforced only at SAVE time, in the
+# admin_profiles update_draft/publish/rollback handlers, which raise a non-empty result
+# as HTTPException(422, detail=violations). The fabricated field-level loc is
+# load-bearing: the client's tryParseFieldErrors parses it exactly like a pydantic 422
+# and lands the error on the offending control. Messages carry the rejected id and
+# field path only — never per-call values (spec §7).
+
+
+def voice_violations(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Reject a voice id outside VOICE_CATALOG (FR-014). None/absent → no violation.
+
+    ``None`` (the AgentConfig default) means "use the agent plugin default" and is
+    always allowed; only a non-null id that is not in the curated catalog blocks save.
+    """
+    voice_id = (config.get("voice") or {}).get("cartesia_voice_id")
+    if voice_id is None or voice_id in VOICE_IDS:
+        return []
+    return [
+        {
+            "loc": ["body", "config", "voice", "cartesia_voice_id"],
+            "msg": (
+                f"voice '{voice_id}' is not in the curated voice catalog; "
+                "pick a voice from the catalog"
+            ),
+            "type": "value_error.unknown_voice",
+        }
+    ]
+
+
+def model_catalog_violations(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Reject an LLM/STT model id outside the curated catalog (FR-014).
+
+    Both fields are required str on the sub-models (a non-empty default), so each is
+    always present; an id outside its kind's membership set blocks save with a
+    field-level loc (``[...,"llm","model"]`` / ``[...,"stt","model"]``).
+    """
+    violations: list[dict[str, Any]] = []
+    llm_model = (config.get("llm") or {}).get("model")
+    if llm_model is not None and llm_model not in LLM_MODEL_NAMES:
+        violations.append(
+            {
+                "loc": ["body", "config", "llm", "model"],
+                "msg": (
+                    f"LLM model '{llm_model}' is not in the curated model catalog; "
+                    "pick a model from the catalog"
+                ),
+                "type": "value_error.unknown_model",
+            }
+        )
+    stt_model = (config.get("stt") or {}).get("model")
+    if stt_model is not None and stt_model not in STT_MODEL_NAMES:
+        violations.append(
+            {
+                "loc": ["body", "config", "stt", "model"],
+                "msg": (
+                    f"STT model '{stt_model}' is not in the curated model catalog; "
+                    "pick a model from the catalog"
+                ),
+                "type": "value_error.unknown_model",
+            }
+        )
+    return violations
+
+
+def catalog_violations(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """All voice + model catalog-membership violations for a config (save-time gate)."""
+    return voice_violations(config) + model_catalog_violations(config)
 
 
 class SmsToolConfig(BaseModel):

@@ -1,3 +1,10 @@
+import type {
+  TestAudioRequest,
+  TestAudioResponse,
+  TestLlmRequest,
+  TestLlmResponse,
+} from "../types/api";
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -37,3 +44,22 @@ export const api = {
   patch: <T>(u: string, b?: unknown) => request<T>("PATCH", u, b),
   del: <T>(u: string) => request<T>("DELETE", u),
 };
+
+// --- Pre-publish agent test endpoints (US5) ---------------------------------
+// Sandboxed: test/llm runs the draft against Vertex with stub tools (no DB writes);
+// test/audio mints a join-only browser token + dispatches a session_kind="test"
+// agent. Both take admin-supplied SYNTHETIC sample_vars only — no real PHI.
+
+export function testProfileLlm(
+  profileId: string,
+  body: TestLlmRequest,
+): Promise<TestLlmResponse> {
+  return api.post<TestLlmResponse>(`/v1/admin/profiles/${profileId}/test/llm`, body);
+}
+
+export function testProfileAudio(
+  profileId: string,
+  body: TestAudioRequest,
+): Promise<TestAudioResponse> {
+  return api.post<TestAudioResponse>(`/v1/admin/profiles/${profileId}/test/audio`, body);
+}

@@ -15,7 +15,12 @@ from loguru import logger
 
 from usan_agent.agent_config import AgentConfig
 from usan_agent.api_client import fetch_agent_config, start_inbound_call
-from usan_agent.check_in import CheckInData, build_check_in_agent, build_inbound_agent
+from usan_agent.check_in import (
+    CheckInData,
+    build_check_in_agent,
+    build_inbound_agent,
+    build_test_agent,
+)
 from usan_agent.ids import validate_call_id
 from usan_agent.logging_config import configure_logging
 from usan_agent.metrics_hooks import register_metrics_flush
@@ -49,6 +54,11 @@ class CallMetadata:
     dynamic_vars: dict[str, Any] = field(default_factory=dict)
     resolved_vars: dict[str, str] = field(default_factory=dict)
     timezone: str = ""
+    # Sandbox discriminator (US5 / contract agent-test-session.md). Absent on every
+    # existing dispatch → "call" (byte-compatible). "test" selects the pre-publish
+    # Test Audio branch; ``test_config`` then carries the full draft AgentConfig doc.
+    session_kind: str = "call"
+    test_config: dict[str, Any] | None = None
 
 
 def parse_metadata(raw: str | None) -> CallMetadata:
@@ -59,12 +69,16 @@ def parse_metadata(raw: str | None) -> CallMetadata:
     except json.JSONDecodeError:
         logger.warning("Could not parse job metadata as JSON; treating as inbound")
         return CallMetadata(call_id=None, direction="inbound")
+    # Default "call" keeps every existing outbound/inbound dispatch unchanged.
+    session_kind = data.get("session_kind") or "call"
     return CallMetadata(
         call_id=data.get("call_id"),
         direction=data.get("direction", "inbound"),
         dynamic_vars=data.get("dynamic_vars") or {},
         resolved_vars=data.get("resolved_vars") or {},
         timezone=data.get("timezone") or "",
+        session_kind="test" if session_kind == "test" else "call",
+        test_config=data.get("test_config"),
     )
 
 
@@ -197,6 +211,61 @@ async def _max_duration_guard(ctx: JobContext, max_s: float) -> None:
     ctx.shutdown(reason="max_call_duration")
 
 
+async def _run_test_session(ctx: JobContext, settings: Settings, meta: CallMetadata) -> None:
+    """Sandboxed pre-publish Test Audio session (US5 / FR-027, FR-028).
+
+    Builds the agent from the inline DRAFT ``test_config`` (no published-only
+    resolver, no inbound lookup) and registers ONLY the no-op test tool registry, so
+    the run writes NO Call/wellness/medication/audit row and makes NO /v1/tools/*
+    call. It skips recording/egress and SIP entirely and waits for the browser
+    participant generically (no sip.* reads). The existing max-duration watchdog
+    bounds the session length.
+    """
+    log = logger.bind(room=ctx.room.name, kind="test")
+    # Build the draft config; an invalid document means a bad dispatch — drop the job.
+    try:
+        cfg = AgentConfig.model_validate(meta.test_config or {})
+    except Exception:
+        log.error("Invalid test_config in dispatch metadata; refusing test job")
+        ctx.shutdown(reason="invalid_metadata")
+        return
+    # No CheckInData with a real call_id: a synthetic id keeps the typed userdata
+    # shape (the no-op tools never use it to hit the API), and end_call can hang up.
+    data = CheckInData(
+        call_id="test-session",
+        settings=settings,
+        job_ctx=ctx,
+        goodbye_message=cfg.prompts.goodbye_message,
+    )
+    session = build_session(settings, cfg, userdata=data)
+    agent = build_test_agent(
+        cfg,
+        resolved_vars=meta.resolved_vars,
+        custom_vars=meta.dynamic_vars,
+        timezone=meta.timezone,
+    )
+    await session.start(agent=agent, room=ctx.room)
+    log.info("Test session started; waiting for browser participant")
+    # Wait GENERICALLY for the browser WebRTC join — no sip.* attribute reads. Bound the
+    # wait by answer_timeout_s (mirrors the outbound no-answer backstop): a test where the
+    # browser never connects must not pin a worker slot until LiveKit reaps the room
+    # (security review PR #61, LOW #3).
+    try:
+        await asyncio.wait_for(ctx.wait_for_participant(), timeout=cfg.timing.answer_timeout_s)
+    except TimeoutError:
+        # asyncio.TimeoutError is an alias of builtin TimeoutError on 3.11+.
+        log.info("No browser participant within answer timeout; ending test job")
+        ctx.shutdown(reason="test_no_participant")
+        return
+    # Arm the max-duration guard as the only bound on the test (no answer-timeout path,
+    # no recording, no voicemail detection on a sandbox session).
+    _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
+    _BACKGROUND_TASKS.add(_guard_task)
+    _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
+    log.info("Test participant present; beginning conversation")
+    await session.generate_reply(instructions=cfg.prompts.checkin_flow_instructions)
+
+
 async def entrypoint(ctx: JobContext) -> None:
     """Per-room entrypoint. LiveKit calls this once per dispatched job."""
     settings = get_settings()
@@ -206,6 +275,12 @@ async def entrypoint(ctx: JobContext) -> None:
 
     await ctx.connect()
     log.info("Connected to room")
+
+    # Pre-publish Test Audio: a fully sandboxed branch that never resolves a published
+    # config, never looks up an inbound caller, and never writes a production record.
+    if meta.session_kind == "test":
+        await _run_test_session(ctx, settings, meta)
+        return
 
     # Resolve the published agent config once per call (best-effort; never raises).
     # meta.direction is a free-form str from dispatch metadata; narrow it to the

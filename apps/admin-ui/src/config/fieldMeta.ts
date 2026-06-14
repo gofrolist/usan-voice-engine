@@ -68,19 +68,28 @@ export const fieldMeta: Record<string, FieldMeta> = {
 
   // Voice
   "voice.cartesia_voice_id": {
-    label: "Cartesia voice ID",
-    help: "TTS voice id. Leave blank for the plugin default.",
+    label: "Voice",
+    help: "Pick a voice from the curated catalog (search by name, style, or language) and use Play sample to hear it. Clear to fall back to the plugin default. A published call keeps using a deprecated voice until you switch.",
   },
-  "voice.tts_model": { label: "TTS model", help: "TTS model name. Blank = default." },
+  "voice.tts_model": {
+    label: "TTS model",
+    help: "Override the TTS model for this voice. Blank = the voice's suggested model / plugin default.",
+  },
   "voice.speed": { label: "Speech speed", help: "0.25–4.0. Blank = default." },
   "voice.language": { label: "Voice language", help: "Language code. Blank = default." },
 
   // LLM
-  "llm.model": { label: "LLM model", help: "Model name." },
+  "llm.model": {
+    label: "LLM model",
+    help: "Choose a model from the curated catalog (all served via Vertex AI). A deprecated model stays selectable for published configs but is marked; pick a current model going forward.",
+  },
   "llm.temperature": { label: "Temperature", help: "0–2. Blank = plugin default." },
 
   // STT
-  "stt.model": { label: "STT model", help: "Speech-to-text model name." },
+  "stt.model": {
+    label: "STT model",
+    help: "Choose a speech-to-text model from the curated catalog. A deprecated model stays selectable for published configs but is marked.",
+  },
   "stt.language": { label: "STT language", help: "Language code. Blank = default." },
 
   // Timing

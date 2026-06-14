@@ -66,6 +66,31 @@ export function useUpdateCustomVariable() {
   });
 }
 
+// Delete-guard (FR-007): where a custom variable's {{token}} is still referenced.
+// Mirrors apps/api schemas/custom_variables.py CustomVariableReferences. Names +
+// locations only — never prompt text or per-call values.
+export interface VariableReference {
+  id: string;
+  name: string;
+  // "<source>:<field>" — source is "draft" or "v<N>"; field is a prompt field
+  // name or "sms[<key>]".
+  where: string[];
+}
+
+export interface CustomVariableReferences {
+  profiles: VariableReference[];
+}
+
+export function useCustomVariableReferences(id: string | null) {
+  return useQuery<CustomVariableReferences>({
+    queryKey: ["custom-variable-references", id],
+    queryFn: () =>
+      api.get<CustomVariableReferences>(`/v1/admin/custom-variables/${id}/references`),
+    // Only fetch when a variable is queued for deletion (the ConfirmDialog is open).
+    enabled: id !== null,
+  });
+}
+
 export function useDeleteCustomVariable() {
   const qc = useQueryClient();
   return useMutation<void, ApiError, string>({

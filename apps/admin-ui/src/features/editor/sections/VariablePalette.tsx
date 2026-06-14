@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Badge } from "../../../components/ui/badge";
 import { groupByTier, type VariableSpec } from "../../../config/variableCatalog";
 
 interface VariablePaletteProps {
@@ -17,7 +18,28 @@ const TIER_LABELS: { key: "builtin" | "custom"; label: string }[] = [
 // wires onInsert to a Monaco executeEdits).
 export function VariablePalette({ variables, onInsert }: VariablePaletteProps) {
   const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const groups = groupByTier(variables);
+
+  // Close on an outside click or Escape so the palette doesn't linger when the operator
+  // clicks back into the editor (the dropdown has no backdrop of its own).
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(e: MouseEvent): void {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function onKeyDown(e: KeyboardEvent): void {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
 
   function pick(name: string): void {
     onInsert(`{{${name}}}`);
@@ -25,7 +47,7 @@ export function VariablePalette({ variables, onInsert }: VariablePaletteProps) {
   }
 
   return (
-    <div className="relative inline-block">
+    <div ref={containerRef} className="relative inline-block">
       <button
         type="button"
         aria-label="Insert variable"
@@ -51,6 +73,11 @@ export function VariablePalette({ variables, onInsert }: VariablePaletteProps) {
                     className="block w-full rounded px-1 py-1 text-left hover:bg-indigo-50"
                   >
                     <code className="font-mono text-xs text-indigo-700">{`{{${v.name}}}`}</code>
+                    {v.phi ? (
+                      <span className="ml-2">
+                        <Badge tone="red">PHI</Badge>
+                      </span>
+                    ) : null}
                     <span className="ml-2 text-xs text-slate-500">{v.description}</span>
                   </button>
                 ))}

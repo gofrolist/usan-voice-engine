@@ -9,7 +9,7 @@ import { useAssignProfile, useElders } from "./hooks";
 
 const PAGE_SIZE = 200;
 
-// Admin-only: assign each elder a specific agent profile, or "— none —" to fall
+// Admin-only: assign each contact a specific agent profile, or "— none —" to fall
 // back to the per-direction default. Only active profiles are assignable.
 export function EldersPage() {
   const isAdmin = useIsAdmin();
@@ -25,14 +25,14 @@ export function EldersPage() {
   if (elders.isLoading || profiles.isLoading) {
     return (
       <div className="flex items-center gap-2 text-slate-600">
-        <Spinner /> Loading elders…
+        <Spinner /> Loading contacts…
       </div>
     );
   }
   if (elders.isError) {
     return (
       <p className="text-sm text-red-700">
-        Failed to load elders: {(elders.error as Error)?.message}
+        Failed to load contacts: {(elders.error as Error)?.message}
       </p>
     );
   }
@@ -47,7 +47,7 @@ export function EldersPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Elders</h1>
+      <h1 className="text-xl font-semibold">Contacts</h1>
       <Table>
         <Thead>
           <Tr>
@@ -60,7 +60,7 @@ export function EldersPage() {
           {elderList.length === 0 ? (
             <Tr>
               <Td className="text-slate-500" colSpan={3}>
-                No elders.
+                No contacts.
               </Td>
             </Tr>
           ) : null}

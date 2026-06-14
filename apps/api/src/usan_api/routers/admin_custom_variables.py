@@ -26,7 +26,9 @@ from usan_api.repositories import custom_variables as repo
 from usan_api.schemas.custom_variables import (
     CustomVariableCreate,
     CustomVariableOut,
+    CustomVariableReferences,
     CustomVariableUpdate,
+    VariableReference,
 )
 
 router = APIRouter(
@@ -46,6 +48,23 @@ def _to_out(row: CustomVariable) -> CustomVariableOut:
 async def list_custom_variables(db: AsyncSession = Depends(get_db)) -> list[CustomVariableOut]:
     """All definitions, alphabetical — readable by every session role."""
     return [_to_out(v) for v in await repo.list_custom_variables(db)]
+
+
+@router.get("/{variable_id}/references", response_model=CustomVariableReferences)
+async def custom_variable_references(
+    variable_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> CustomVariableReferences:
+    """Delete-guard (FR-007): profiles referencing this variable's {{name}} token.
+
+    Scans the live draft AND every published version across the prompt fields +
+    SMS bodies. Readable by every session role (a read). Names/locations only —
+    never prompt text or per-call values (spec §7).
+    """
+    row = await repo.get_custom_variable(db, variable_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND)
+    refs = await repo.references_to(db, row.name)
+    return CustomVariableReferences(profiles=[VariableReference(**r) for r in refs])
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=CustomVariableOut)

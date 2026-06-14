@@ -20,6 +20,15 @@ Then:
    gcloud secrets versions add usan-prod-env --data-file=/path/to/filled.env
    ```
    (The VM reads `latest` at boot; re-run this command + reboot/redeploy to rotate.)
+
+   > **Admin Studio (spec 001-retellai-parity-admin):** the voice-sample proxy and
+   > the agent text-test add no *new* secrets — they reuse the existing
+   > `CARTESIA_API_KEY`, `GCP_PROJECT`, and `VERTEX_LOCATION` (the API now reads them
+   > too). The text-test calls Vertex via ADC, so grant the VM/API service account
+   > `roles/aiplatform.user`. Optional tuning keys (`CARTESIA_API_URL`,
+   > `CARTESIA_VERSION`, `CARTESIA_SAMPLE_MODEL`) have safe defaults. As always, any
+   > key change must land in the VM `.env` **before** the deploy tag is cut — the tag
+   > deploy does not re-fetch secrets.
 3. **Telnyx:** point the trunk's inbound SIP signaling URI at `<vm_external_ip>:5060` (UDP).
 4. **First deploy:** set the GitHub Actions secrets `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, and `API_DOMAIN`. Images are pulled from Artifact Registry **keyless** — the VM authenticates via its attached service account (`artifactregistry.reader`) and CI pushes via Workload Identity Federation (Plan 4e E), so **no `GHCR_PAT` is needed**. Push a version tag (`git tag v0.1.0 && git push origin v0.1.0`) — the `deploy` job in `build.yml` waits for the image build, then ships the compose files and brings the stack up. Or deploy manually:
    ```bash

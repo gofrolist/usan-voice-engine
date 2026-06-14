@@ -24,6 +24,9 @@ from usan_agent.sanitize import sanitize_prompt_value
 BUILTIN_DEFAULTS: dict[str, str] = {
     "first_name": "there",
     "elder_name": "there",
+    # contact_name is a permanent alias of elder_name (US4 / FR-024): same source,
+    # same "there" default. Keep adjacent to elder_name so the two stay in lockstep.
+    "contact_name": "there",
     "call_direction": "",
     "current_time": "",
     "current_date": "",

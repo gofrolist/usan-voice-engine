@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Controller, type UseFormReturn } from "react-hook-form";
 import type { AgentConfigForm } from "../../../config/agentConfigSchema";
 import { ALLOWED_TEMPLATE_SLOTS } from "../../../config/agentConfigSchema";
@@ -32,8 +33,13 @@ export function PromptsSection({ form }: { form: UseFormReturn<AgentConfigForm> 
   // while loading or on error `data` is undefined, so variables=[] (no palette) and the
   // known set is empty (no false warnings).
   const { data: variables } = useVariableCatalog();
-  const knownNames = new Set((variables ?? []).map((v) => v.name));
-  const phiNames = new Set((variables ?? []).filter((v) => v.phi).map((v) => v.name));
+  // Stable Set identities (recomputed only when the catalog changes) so the child
+  // PromptEditors don't re-scan every prompt's tokens on each unrelated keystroke.
+  const knownNames = useMemo(() => new Set((variables ?? []).map((v) => v.name)), [variables]);
+  const phiNames = useMemo(
+    () => new Set((variables ?? []).filter((v) => v.phi).map((v) => v.name)),
+    [variables],
+  );
 
   return (
     <div className="space-y-5">

@@ -7,11 +7,13 @@ from sqlalchemy.pool import NullPool
 
 from usan_api.schemas.variable_catalog import BUILTIN_VARIABLES
 
-# The 10 builtins in canonical catalog/display order (design §3.1) — the merge
-# keeps them first, before any customs (spec §3.2).
+# The builtins in canonical catalog/display order (design §3.1) — the merge
+# keeps them first, before any customs (spec §3.2). contact_name (US4 / FR-024)
+# is the elder_name alias, listed adjacent to it.
 BUILTIN_ORDER = [
     "first_name",
     "elder_name",
+    "contact_name",
     "call_direction",
     "current_time",
     "current_date",
@@ -21,6 +23,7 @@ BUILTIN_ORDER = [
     "last_pain",
     "today_meds",
 ]
+_N_BUILTINS = len(BUILTIN_ORDER)
 
 
 def test_variable_catalog_requires_admin_session(client):
@@ -29,7 +32,7 @@ def test_variable_catalog_requires_admin_session(client):
     assert r.status_code == 401
 
 
-def test_variable_catalog_returns_ten_builtins_in_order(client, admin_session):
+def test_variable_catalog_returns_builtins_in_order(client, admin_session):
     r = client.get("/v1/admin/variable-catalog")
     assert r.status_code == 200
     body = r.json()
@@ -75,9 +78,8 @@ async def _insert_custom_raw(async_database_url: str, name: str) -> None:
 
 
 def test_catalog_merges_customs_after_builtins(client, admin_session):
-    # Customs declared via the CRUD API show up after the 10 builtins,
-    # alphabetical, with tier="custom" and default="" (definitions carry no
-    # values — spec §3.2).
+    # Customs declared via the CRUD API show up after the builtins, alphabetical,
+    # with tier="custom" and default="" (definitions carry no values — spec §3.2).
     for name, phi in (("zebra_var", False), ("apple_var", True)):
         r = client.post(
             "/v1/admin/custom-variables",
@@ -86,8 +88,8 @@ def test_catalog_merges_customs_after_builtins(client, admin_session):
         assert r.status_code == 201
 
     variables = client.get("/v1/admin/variable-catalog").json()["variables"]
-    assert [v["name"] for v in variables[:10]] == BUILTIN_ORDER
-    customs = variables[10:]
+    assert [v["name"] for v in variables[:_N_BUILTINS]] == BUILTIN_ORDER
+    customs = variables[_N_BUILTINS:]
     assert [v["name"] for v in customs] == ["apple_var", "zebra_var"]
     for v in customs:
         assert v["tier"] == "custom"

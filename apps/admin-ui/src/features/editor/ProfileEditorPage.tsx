@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -7,10 +7,11 @@ import { SECTION_LABELS, type SectionKey } from "../../config/fieldMeta";
 import { Spinner } from "../../components/ui/spinner";
 import { useIsAdmin } from "../../auth/useSession";
 import { pushToast } from "../../components/ui/toast";
-import type { ApiError } from "../../lib/api";
+import { ApiError } from "../../lib/api";
 import type { AgentConfig } from "../../types/api";
 import { useProfile, useSaveDraft } from "./hooks";
 import { PublishDialog } from "./PublishDialog";
+import { TestLLMPanel } from "./TestLLMPanel";
 import { EditorToolbar } from "./EditorToolbar";
 import { SectionRail } from "./SectionRail";
 import { PromptsSection } from "./sections/PromptsSection";
@@ -22,6 +23,13 @@ import { ToolsSection } from "./sections/ToolsSection";
 import { VoicemailSection } from "./sections/VoicemailSection";
 import { SpeechAdvancedSection } from "./sections/SpeechAdvancedSection";
 import { PolicySection } from "./sections/PolicySection";
+
+// Lazy-load the audio test panel: it pulls in livekit-client (~966 kB of WebRTC) which
+// must not ship in the main bundle or block first paint. Only admins who open the audio
+// test tab download it.
+const TestAudioPanel = lazy(() =>
+  import("./TestAudioPanel").then((m) => ({ default: m.TestAudioPanel })),
+);
 
 const SECTION_ORDER: SectionKey[] = [
   "prompts",
@@ -62,11 +70,16 @@ export function tryParseFieldErrors(detail: string): ValidationItem[] | null {
 export function ProfileEditorPage() {
   const { id = "" } = useParams();
   const isAdmin = useIsAdmin();
-  const { data: profile, isLoading, isError, error } = useProfile(id);
+  const { data: profile, isLoading, isError, error, refetch } = useProfile(id);
   const saveDraft = useSaveDraft(id);
 
   const [section, setSection] = useState<SectionKey>("prompts");
   const [publishOpen, setPublishOpen] = useState(false);
+  // Pre-publish test drawer (US5): null = closed; otherwise the active test tab.
+  const [testTab, setTestTab] = useState<"llm" | "audio" | null>(null);
+  // Optimistic-concurrency conflict banner (FR-032): set when a save is rejected
+  // with 409 because the draft changed since it was loaded.
+  const [conflict, setConflict] = useState(false);
 
   const form = useForm<AgentConfigForm>({
     resolver: zodResolver(agentConfigSchema),
@@ -76,8 +89,16 @@ export function ProfileEditorPage() {
   // Initialize the form once the profile draft_config is loaded. The server-side
   // AgentConfig types tools.enabled as string[]; the form schema narrows it to the
   // tool-name enum, so cast through the known-valid server payload.
+  //
+  // keepDirtyValues so edits typed DURING an in-flight save survive: useSaveDraft's
+  // onSuccess writes the server response into the cache, re-running this effect — a
+  // plain reset would silently wipe keystrokes made while the request was in flight.
+  // The conflict-reload DISCARD is handled explicitly in handleReloadDraft (a full
+  // reset onto the refetched draft), so it does not depend on this effect re-running:
+  // React Query's structuralSharing can return the same `profile` reference for a
+  // byte-identical (revision-only) draft, which would otherwise skip the effect.
   useEffect(() => {
-    if (profile) form.reset(profile.draft_config as AgentConfigForm);
+    if (profile) form.reset(profile.draft_config as AgentConfigForm, { keepDirtyValues: true });
   }, [profile, form]);
 
   if (isLoading) {
@@ -116,23 +137,60 @@ export function ProfileEditorPage() {
     return mapped;
   }
 
+  function handleMutationError(err: ApiError): void {
+    // Optimistic-concurrency conflict (FR-032) is checked BEFORE 422 field mapping:
+    // show a reload affordance so no edits are silently overwritten.
+    if (err.status === 409) {
+      setConflict(true);
+      pushToast(err.detail);
+      return;
+    }
+    if (err.status === 422 && mapServerErrors(err.detail)) {
+      pushToast("Some fields were rejected by the server — see the highlighted errors.");
+      return;
+    }
+    pushToast(err.detail);
+  }
+
+  async function handleReloadDraft(): Promise<void> {
+    // Confirm-before-discard: never trade a silent SERVER overwrite for a silent LOCAL
+    // loss. The operator chose to discard, so FULL-reset onto the refetched draft
+    // (dropping their dirty edits). We reset explicitly from the refetched data rather
+    // than rely on the [profile] load effect, because React Query's structuralSharing
+    // can return the same object for a byte-identical draft (a revision-only conflict),
+    // which would skip the effect and silently keep the stale edits.
+    if (
+      form.formState.isDirty &&
+      !window.confirm("Discard your unsaved changes and load the latest version of this draft?")
+    ) {
+      return;
+    }
+    const { data } = await refetch();
+    // Only clear the conflict banner when the reload actually landed new data — a failed
+    // refetch (e.g. a flaky connection) leaves the draft stale, so keep the warning up.
+    if (data) {
+      form.reset(data.draft_config as AgentConfigForm);
+      setConflict(false);
+    }
+  }
+
   const onSave = form.handleSubmit((values: AgentConfigForm) => {
     saveDraft.mutate(
-      { config: values as AgentConfig },
+      { config: values as AgentConfig, expectedRevision: profile.draft_revision },
       {
-        onError: (err: ApiError) => {
-          if (err.status === 422 && mapServerErrors(err.detail)) {
-            pushToast("Some fields were rejected by the server — see the highlighted errors.");
-          } else {
-            pushToast(err.detail);
-          }
+        onError: handleMutationError,
+        onSuccess: () => {
+          setConflict(false);
+          pushToast("Draft saved.", "info");
         },
-        onSuccess: () => pushToast("Draft saved.", "info"),
       },
     );
   });
 
   async function onPublishClick(): Promise<void> {
+    // Hoisted declaration: re-narrow profile (the early return above only narrows the
+    // synchronous render path, not this hoisted closure).
+    if (!profile) return;
     // Validate before opening the diff so the live-vs-draft comparison reflects a
     // config the server will accept.
     const valid = await form.trigger();
@@ -150,13 +208,14 @@ export function ProfileEditorPage() {
         // — the zod ""→null transform never ran and the server's HH:MM regex
         // would 422. parse() cannot throw here: form.trigger() above just passed.
         const config = agentConfigSchema.parse(form.getValues()) as AgentConfig;
-        await saveDraft.mutateAsync({ config });
+        await saveDraft.mutateAsync({ config, expectedRevision: profile.draft_revision });
       } catch (err) {
-        const e = err as ApiError;
-        if (e.status === 422 && mapServerErrors(e.detail)) {
-          pushToast("Some fields were rejected by the server — see the highlighted errors.");
+        // A 4xx/409 from the pre-publish save is an ApiError → field/conflict mapping.
+        // A network failure (TypeError) is NOT an ApiError — never pushToast(undefined).
+        if (err instanceof ApiError) {
+          handleMutationError(err);
         } else {
-          pushToast(e.detail);
+          pushToast("Couldn't save your draft before publishing. Please try again.");
         }
         return;
       }
@@ -201,6 +260,24 @@ export function ProfileEditorPage() {
         onSave={() => void onSave()}
         onPublish={() => void onPublishClick()}
       />
+      {conflict ? (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-8 py-2 text-sm text-amber-900"
+        >
+          <span>
+            This draft changed since you opened it. Reload to load the latest before saving — your
+            unsaved edits are kept until you choose.
+          </span>
+          <button
+            type="button"
+            className="shrink-0 rounded border border-amber-400 bg-white px-2 py-1 font-medium hover:bg-amber-100"
+            onClick={() => void handleReloadDraft()}
+          >
+            Reload
+          </button>
+        </div>
+      ) : null}
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto max-w-3xl">
@@ -231,6 +308,49 @@ export function ProfileEditorPage() {
           />
         </aside>
       </div>
+
+      {isAdmin ? (
+        <div className="border-t border-slate-200 bg-white px-8 py-3">
+          <div className="mx-auto max-w-3xl">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-slate-700">Test before publishing</span>
+              <button
+                type="button"
+                className={`rounded px-2 py-1 text-xs font-medium ${testTab === "llm" ? "bg-sky-600 text-white" : "border border-slate-300 text-slate-700 hover:bg-slate-50"}`}
+                onClick={() => setTestTab((t) => (t === "llm" ? null : "llm"))}
+              >
+                Test LLM (text)
+              </button>
+              <button
+                type="button"
+                className={`rounded px-2 py-1 text-xs font-medium ${testTab === "audio" ? "bg-sky-600 text-white" : "border border-slate-300 text-slate-700 hover:bg-slate-50"}`}
+                onClick={() => setTestTab((t) => (t === "audio" ? null : "audio"))}
+              >
+                Test Audio (browser call)
+              </button>
+            </div>
+            {testTab ? (
+              <div className="mt-3">
+                {testTab === "llm" ? (
+                  <TestLLMPanel
+                    profileId={id}
+                    getConfig={() => agentConfigSchema.parse(form.getValues()) as AgentConfig}
+                  />
+                ) : (
+                  <Suspense
+                    fallback={<div className="text-xs text-slate-500">Loading audio test…</div>}
+                  >
+                    <TestAudioPanel
+                      profileId={id}
+                      getConfig={() => agentConfigSchema.parse(form.getValues()) as AgentConfig}
+                    />
+                  </Suspense>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <PublishDialog
         open={publishOpen}
