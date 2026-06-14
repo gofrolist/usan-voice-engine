@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""List the live Cartesia voice library and emit paste-ready VoiceSpec entries.
+
+The voice catalog (``src/usan_api/schemas/voice_catalog.py``) is a hand-curated
+allow-list of *real* Cartesia voice ids. Never hand-type a UUID into it — a wrong
+id ships a broken voice into live calls. Run this against your Cartesia account to
+get REAL ids and to verify the ones already in the catalog still resolve.
+
+Usage (from ``apps/api``):
+
+    CARTESIA_API_KEY=sk_... uv run python scripts/list_cartesia_voices.py
+    # optional filters / model hint:
+    #   --lang en  --gender feminine  --search calm  --model sonic-2
+
+It prints, to stderr, a validation report for the ids currently in the catalog
+plus ``DEFAULT_CARTESIA_VOICE_ID`` (if set), and to stdout the filtered voices as
+``VoiceSpec(...)`` blocks ready to paste into ``VOICE_CATALOG``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from typing import Any
+
+import httpx
+
+API_URL = os.environ.get("CARTESIA_API_URL", "https://api.cartesia.ai").rstrip("/")
+VERSION = os.environ.get("CARTESIA_VERSION", "2024-11-13")
+
+# Ids currently referenced in the repo, so the script can flag drift.
+CATALOG_IDS: dict[str, str] = {
+    "a0e99841-438c-4a64-b679-ae501e7d6091": "Barbershop Man",
+    "729651dc-c6c3-4ee5-97fa-350da1f88600": "Sweet Lady",
+    "a167e0f3-df7e-4d52-a9c3-f949145efdab": "Friendly Reading Man",
+    "b7d50908-b17c-442d-ad8d-810c63997ed9": "Calm Lady",
+}
+
+_GENDERS = {"masculine", "feminine", "gender_neutral"}
+
+
+def fetch_voices(key: str) -> list[dict[str, Any]]:
+    """Fetch every voice, following Cartesia's cursor pagination if present."""
+    headers = {"Authorization": f"Bearer {key}", "Cartesia-Version": VERSION}
+    params: dict[str, str] = {"limit": "100"}
+    voices: list[dict[str, Any]] = []
+    with httpx.Client(timeout=30.0) as client:
+        while True:
+            resp = client.get(f"{API_URL}/voices", headers=headers, params=params)
+            resp.raise_for_status()
+            body = resp.json()
+            page = body["data"] if isinstance(body, dict) and "data" in body else body
+            if not isinstance(page, list):
+                raise ValueError(f"unexpected /voices response shape: {type(body)}")
+            voices.extend(page)
+            has_more = isinstance(body, dict) and body.get("has_more")
+            if has_more and page and page[-1].get("id"):
+                params["starting_after"] = page[-1]["id"]
+            else:
+                break
+    return voices
+
+
+def _first_line(text: str | None) -> str:
+    return (text or "").splitlines()[0].replace('"', "'").strip() if text else ""
+
+
+def as_voicespec(v: dict[str, Any], model: str) -> str:
+    gender = v.get("gender")
+    gender_line = f'        gender="{gender}",\n' if gender in _GENDERS else ""
+    return (
+        "    VoiceSpec(\n"
+        f'        cartesia_voice_id="{v.get("id", "")}",\n'
+        f'        name="{_first_line(v.get("name")) or "Unnamed"}",\n'
+        f'        language="{v.get("language") or "en"}",\n'
+        f"{gender_line}"
+        f'        description="{_first_line(v.get("description"))}",\n'
+        f'        tts_model_hint="{model}",\n'
+        "    ),"
+    )
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="List Cartesia voices for the catalog.")
+    ap.add_argument("--lang", help="filter by language code, e.g. en")
+    ap.add_argument("--gender", choices=sorted(_GENDERS), help="filter by gender")
+    ap.add_argument("--search", help="case-insensitive substring on name/description")
+    ap.add_argument("--model", default="sonic-2", help="tts_model_hint to emit (default: sonic-2)")
+    args = ap.parse_args()
+
+    key = os.environ.get("CARTESIA_API_KEY")
+    if not key:
+        print("CARTESIA_API_KEY is not set in the environment.", file=sys.stderr)
+        return 2
+
+    try:
+        voices = fetch_voices(key)
+    except (httpx.HTTPError, ValueError) as exc:
+        print(f"Cartesia request failed: {exc}", file=sys.stderr)
+        return 1
+
+    live_ids = {v.get("id") for v in voices}
+    print(f"# {len(voices)} voices in your Cartesia library", file=sys.stderr)
+    print("# Catalog id validation (does each still resolve?):", file=sys.stderr)
+    for vid, label in CATALOG_IDS.items():
+        print(
+            f"#   {'OK     ' if vid in live_ids else 'MISSING'}  {label}  ({vid})", file=sys.stderr
+        )
+    default_id = os.environ.get("DEFAULT_CARTESIA_VOICE_ID")
+    if default_id:
+        ok = "OK     " if default_id in live_ids else "MISSING"
+        print(f"#   {ok}  DEFAULT_CARTESIA_VOICE_ID  ({default_id})", file=sys.stderr)
+    print("", file=sys.stderr)
+
+    filtered = voices
+    if args.lang:
+        filtered = [v for v in filtered if (v.get("language") or "") == args.lang]
+    if args.gender:
+        filtered = [v for v in filtered if (v.get("gender") or "") == args.gender]
+    if args.search:
+        needle = args.search.lower()
+        filtered = [
+            v
+            for v in filtered
+            if needle in (v.get("name") or "").lower()
+            or needle in (v.get("description") or "").lower()
+        ]
+
+    print(f"# {len(filtered)} voices after filters — paste the ones you want into VOICE_CATALOG:")
+    for v in sorted(filtered, key=lambda x: ((x.get("language") or ""), (x.get("name") or ""))):
+        print(as_voicespec(v, args.model))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
