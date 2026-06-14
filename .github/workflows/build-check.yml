@@ -1,0 +1,58 @@
+name: Build check
+
+# Validate that the Docker images still build, on PRs — build.yml only builds on
+# v* tags now, so without this a broken Dockerfile wouldn't surface until release.
+# push: false + no registry/GCP auth: this never pushes and never needs WIF, so it
+# also can't be abused to publish from a fork PR. Reuses build.yml's gha cache
+# scopes (read-only) so unchanged layers — incl. the heavy agent-base model
+# pre-warm — restore from cache and the check stays cheap.
+#
+# Scope: api, admin-ui, agent-base (each builds from a public base). The thin agent
+# app (FROM the private agent-base) is not rebuilt here — it's validated by the tag
+# build at release.
+on:
+  pull_request:
+    paths:
+      - "apps/api/**"
+      - "apps/admin-ui/**"
+      - "services/agent/**"
+      - ".github/workflows/build-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-check:
+    name: Docker build (no push)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Build api (no push)
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=api
+
+      - name: Build admin-ui (no push)
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: apps/admin-ui
+          file: apps/admin-ui/Dockerfile
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=admin-ui
+
+      - name: Build agent base (model pre-warm, no push)
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: services/agent
+          file: services/agent/Dockerfile.base
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=agent-base

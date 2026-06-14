@@ -1,8 +1,12 @@
 name: Build & Deploy
 
+# Build + deploy run ONLY on v* tags. A push to main no longer triggers a build:
+# the deploy is tag-gated, the main-push build only produced an unused `latest`
+# image, and tagging a just-merged commit fired this workflow twice (a redundant
+# 4-image build in parallel with the tag run). PRs validate the Docker build via
+# build-check.yml (push: false) — earlier, where it's actually useful.
 on:
   push:
-    branches: [main]
     tags: ["v*"]
 
 env:
