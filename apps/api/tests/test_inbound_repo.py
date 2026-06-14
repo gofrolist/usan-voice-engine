@@ -2,7 +2,6 @@ import uuid
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
 
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.repositories import calls as calls_repo
@@ -12,7 +11,7 @@ from usan_api.repositories import wellness as wellness_repo
 
 @pytest.fixture
 async def session_factory(async_database_url):
-    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    engine = create_async_engine(async_database_url)
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
 

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import jwt
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
@@ -92,23 +93,30 @@ def async_database_url(database_url: str) -> str:
     return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
+# Every table a `client` test may touch, wiped as one statement. RESTART IDENTITY
+# CASCADE so dependent rows (e.g. webhook_deliveries -> webhook_endpoints) go too.
+_TRUNCATE_ALL = (
+    "TRUNCATE custom_variables, webhook_deliveries, webhook_endpoints, "
+    "call_batch_targets, call_batches, call_schedules, "
+    "agent_profile_versions, agent_profiles, admin_audit_log, "
+    "admin_users, follow_up_flags, callback_requests, sms_messages, "
+    "calls, dnc_list, elders "
+    "RESTART IDENTITY CASCADE"
+)
+
+
+async def _truncate(engine: AsyncEngine) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(text(_TRUNCATE_ALL))
+
+
 async def _truncate_and_dispose(engine: AsyncEngine) -> None:
     # Reset table state then dispose, run from the client teardown — so pure-unit
     # tests that never request `client` don't pay for a Postgres container.
     from usan_api.db.session import dispose_engine
 
     try:
-        async with engine.begin() as conn:
-            await conn.execute(
-                text(
-                    "TRUNCATE custom_variables, webhook_deliveries, webhook_endpoints, "
-                    "call_batch_targets, call_batches, call_schedules, "
-                    "agent_profile_versions, agent_profiles, admin_audit_log, "
-                    "admin_users, follow_up_flags, callback_requests, sms_messages, "
-                    "calls, dnc_list, elders "
-                    "RESTART IDENTITY CASCADE"
-                )
-            )
+        await _truncate(engine)
     finally:
         await engine.dispose()
         # Also dispose the process-global engine (used by BackgroundTasks like
@@ -116,6 +124,22 @@ async def _truncate_and_dispose(engine: AsyncEngine) -> None:
         # first opened it; without resetting it, the next `client` fixture runs on
         # a fresh loop and reuses a now-dead engine -> "Event loop is closed".
         await dispose_engine()
+
+
+# create_app() rebuilds the entire FastAPI router tree (~40-120ms; cProfile put it
+# at the top of client-test cost). The routed app is identical across every
+# `client`/`sso_client` test: rate limiting and docs are off at build time for all
+# of them, while SSO config and the DB engine are read PER REQUEST, never baked in.
+# So build it once per worker and only swap dependency_overrides[get_db] per test.
+# Prometheus collectors are registered exactly once regardless (instrumentation.py).
+_ROUTED_APP: FastAPI | None = None
+
+
+def _routed_app() -> FastAPI:
+    global _ROUTED_APP
+    if _ROUTED_APP is None:
+        _ROUTED_APP = create_app()
+    return _ROUTED_APP
 
 
 @pytest.fixture
@@ -134,6 +158,13 @@ def client(database_url: str, async_database_url: str, monkeypatch) -> TestClien
     get_settings.cache_clear()
 
     test_engine = create_async_engine(async_database_url, poolclass=NullPool)
+    # Clean BEFORE yielding, not only after. The per-worker Postgres is shared with
+    # modules that truncate on their own teardown (or never), so under xdist the test
+    # that ran just before this one on the same worker can leave rows behind — e.g. an
+    # enabled webhook_endpoint that silently inflates this request's outbox fan-out
+    # (the room_finished double-fire regression test, CI run 27508993998). Starting
+    # from a known-clean DB makes each client test order-independent.
+    asyncio.run(_truncate(test_engine))
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
 
     async def _override_get_db():
@@ -144,12 +175,13 @@ def client(database_url: str, async_database_url: str, monkeypatch) -> TestClien
                 await session.rollback()
                 raise
 
-    app = create_app()
+    app = _routed_app()
     app.dependency_overrides[get_db] = _override_get_db
     try:
         yield TestClient(app)
     finally:
         asyncio.run(_truncate_and_dispose(test_engine))
+        app.dependency_overrides.pop(get_db, None)
         get_settings.cache_clear()
 
 
@@ -178,6 +210,7 @@ def sso_client(database_url: str, async_database_url: str, monkeypatch) -> TestC
     get_settings.cache_clear()
 
     test_engine = create_async_engine(async_database_url, poolclass=NullPool)
+    asyncio.run(_truncate(test_engine))  # clean-before, order-independent (see `client`)
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
 
     async def _override_get_db():
@@ -188,13 +221,14 @@ def sso_client(database_url: str, async_database_url: str, monkeypatch) -> TestC
                 await session.rollback()
                 raise
 
-    app = create_app()
+    app = _routed_app()
     app.dependency_overrides[get_db] = _override_get_db
     try:
         # follow_redirects off so the login 302 to Google is observable.
         yield TestClient(app, follow_redirects=False)
     finally:
         asyncio.run(_truncate_and_dispose(test_engine))
+        app.dependency_overrides.pop(get_db, None)
         get_settings.cache_clear()
 
 

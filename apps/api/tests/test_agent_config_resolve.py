@@ -3,14 +3,13 @@ import uuid
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
 
 from usan_api.repositories import agent_profiles as repo
 
 
 @pytest.fixture
 async def session_factory(async_database_url):
-    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    engine = create_async_engine(async_database_url)
     # These repo tests commit profile rows (defaults persist across tests) and never
     # go through the `client` fixture that truncates. Reset profile state per test so
     # "nothing resolvable" assertions see a clean DB regardless of run order.

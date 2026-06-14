@@ -21,7 +21,7 @@ NOW = datetime(2026, 6, 10, 12, 0, tzinfo=UTC)
 
 @pytest.fixture
 async def session_factory(async_database_url):
-    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    engine = create_async_engine(async_database_url)
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
 
