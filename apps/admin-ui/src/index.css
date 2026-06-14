@@ -1,6 +1,8 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* Load the legacy JS config (custom Inter font stack + shadow-card utility).
+   Tailwind v4 no longer auto-discovers tailwind.config.js. */
+@config "../tailwind.config.js";
 
 @layer base {
   html {
