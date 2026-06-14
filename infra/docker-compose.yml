@@ -248,6 +248,15 @@ services:
       WEBHOOK_DELIVERY_POLL_INTERVAL_S: ${WEBHOOK_DELIVERY_POLL_INTERVAL_S:-10}
       WEBHOOK_DELIVERY_TIMEOUT_S: ${WEBHOOK_DELIVERY_TIMEOUT_S:-10}
       WEBHOOK_DELIVERY_CIRCUIT_BREAKER_THRESHOLD: ${WEBHOOK_DELIVERY_CIRCUIT_BREAKER_THRESHOLD:-10}
+      # Voice-sample preview proxy (Admin Studio): the voice picker's "Play sample"
+      # calls Cartesia TTS from the API, so the API needs its OWN copy of the key
+      # (the agent service also gets it for live TTS). CARTESIA_API_KEY is required
+      # for previews — absent/blank yields a clean 503; the rest are optional
+      # overrides matching settings.py defaults.
+      CARTESIA_API_KEY: ${CARTESIA_API_KEY:-}
+      CARTESIA_API_URL: ${CARTESIA_API_URL:-https://api.cartesia.ai}
+      CARTESIA_VERSION: ${CARTESIA_VERSION:-2024-11-13}
+      CARTESIA_SAMPLE_MODEL: ${CARTESIA_SAMPLE_MODEL:-sonic-2}
     # The API is stateless: no on-disk writes outside /tmp, so run the root
     # filesystem read-only and block privilege escalation. /tmp is a tmpfs for
     # any transient scratch (e.g. signed-URL staging).
