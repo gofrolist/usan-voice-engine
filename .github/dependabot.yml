@@ -30,8 +30,12 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
+      # Only group minor + patch updates. Majors open as individual PRs so each
+      # breaking upgrade (e.g. eslint flat-config, tailwind v4, react 19) can be
+      # migrated and reviewed in isolation instead of one unreviewable group bump.
       admin-ui-npm:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
