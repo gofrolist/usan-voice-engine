@@ -51,39 +51,61 @@ class VoiceSpec(BaseModel):
     deprecated: bool = False
 
 
-# Seed catalog — a few real Cartesia voices (sonic-2 family). Ordered for display.
-# This is the platform allow-list; engineers extend it, admins only select from it.
+# Curated allow-list of real, current Cartesia voices chosen for daily wellness
+# check-in calls: warm, calm, mature, clear. Each name/description/gender mirrors
+# what Cartesia returns for that id, so the picker matches play.cartesia.ai (the
+# previous entries were hand-written labels whose ids Cartesia had since repointed
+# to different voices — e.g. "Sweet Lady" actually resolved to a young male voice).
+# Refreshed 2026-06-14 from the live library; re-verify / extend with
+# scripts/list_cartesia_voices.py. Engineers extend it; admins only select from it.
+# Ordered for display, with the live-call default (DEFAULT_CARTESIA_VOICE_ID) first.
 VOICE_CATALOG: tuple[VoiceSpec, ...] = (
     VoiceSpec(
-        cartesia_voice_id="a0e99841-438c-4a64-b679-ae501e7d6091",
-        name="Barbershop Man",
-        language="en",
-        gender="masculine",
-        description="Warm, friendly American male — calm and reassuring.",
-        tts_model_hint="sonic-2",
-    ),
-    VoiceSpec(
-        cartesia_voice_id="729651dc-c6c3-4ee5-97fa-350da1f88600",
-        name="Sweet Lady",
+        cartesia_voice_id="694f9389-aac1-45b6-b726-9d9369183238",
+        name="Sarah - Mindful Woman",
         language="en",
         gender="feminine",
-        description="Gentle, patient American female — clear and kind.",
+        description="Soothing female — calm and reassuring.",
         tts_model_hint="sonic-2",
     ),
     VoiceSpec(
-        cartesia_voice_id="a167e0f3-df7e-4d52-a9c3-f949145efdab",
-        name="Friendly Reading Man",
-        language="en",
-        gender="masculine",
-        description="Slow, articulate narration voice — good for instructions.",
-        tts_model_hint="sonic-2",
-    ),
-    VoiceSpec(
-        cartesia_voice_id="b7d50908-b17c-442d-ad8d-810c63997ed9",
-        name="Calm Lady",
+        cartesia_voice_id="9329fbdb-e285-4fba-95ec-592e15f14476",
+        name="Rory - Maternal Vibe",
         language="en",
         gender="feminine",
-        description="Soothing, even-paced American female — easy to follow.",
+        description="Motherly, nurturing female — warm and reassuring.",
+        tts_model_hint="sonic-2",
+    ),
+    VoiceSpec(
+        cartesia_voice_id="3d9b50f9-10c5-4026-9ae1-c4a698f67fc5",
+        name="Marjorie - Encouraging Aunt",
+        language="en",
+        gender="feminine",
+        description="Encouraging, matured female with warm reassurance and a steady tone.",
+        tts_model_hint="sonic-2",
+    ),
+    VoiceSpec(
+        cartesia_voice_id="0ad65e7f-006c-47cf-bd31-52279d487913",
+        name="Rupert - Caring Dad",
+        language="en",
+        gender="masculine",
+        description="Warm, mature male for caring, reassuring conversations.",
+        tts_model_hint="sonic-2",
+    ),
+    VoiceSpec(
+        cartesia_voice_id="a924b0e6-9253-4711-8fc3-5cb8e0188c94",
+        name="Noah - Calming Presence",
+        language="en",
+        gender="masculine",
+        description="Slow-paced, gentle and soothing male — easy to follow.",
+        tts_model_hint="sonic-2",
+    ),
+    VoiceSpec(
+        cartesia_voice_id="9c8880b2-ccf9-4730-b805-cea23df247d7",
+        name="Conrad - Seasoned Support",
+        language="en",
+        gender="masculine",
+        description="Mature, confident male with a composed, clear tone.",
         tts_model_hint="sonic-2",
     ),
 )
