@@ -58,8 +58,8 @@ function flagRow(over: Partial<FollowupFlagSummary> = {}): FollowupFlagSummary {
   return {
     id: 1,
     call_id: "00000000-0000-0000-0000-000000000001",
-    elder_id: "11111111-1111-1111-1111-111111111111",
-    elder_name: "Edna Moore",
+    contact_id: "11111111-1111-1111-1111-111111111111",
+    contact_name: "Edna Moore",
     masked_phone: "***4567",
     severity: "routine",
     category: "medical",
@@ -76,8 +76,8 @@ function cbRow(over: Partial<CallbackRequestSummary> = {}): CallbackRequestSumma
   return {
     id: 1,
     call_id: "00000000-0000-0000-0000-000000000002",
-    elder_id: "11111111-1111-1111-1111-111111111111",
-    elder_name: "Edna Moore",
+    contact_id: "11111111-1111-1111-1111-111111111111",
+    contact_name: "Edna Moore",
     masked_phone: "***4567",
     requested_time_text: "tomorrow after lunch",
     requested_at: null,

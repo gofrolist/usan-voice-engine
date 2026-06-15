@@ -18,8 +18,8 @@ from usan_api.db.models import (
 from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import call_schedules as schedules_repo
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import conversation_summaries as summaries_repo
-from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import personal_facts as personal_facts_repo
 from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.schemas.batch import BatchTargetIn
@@ -35,10 +35,10 @@ async def session_factory(async_database_url):
 async def _seed_call(factory, *, status: CallStatus, dynamic_vars: dict) -> uuid.UUID:
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(db, name="A", phone_e164=phone, timezone="UTC")
         call = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=status,
             livekit_room=f"usan-outbound-{uuid.uuid4()}",
@@ -81,7 +81,7 @@ async def test_purge_deletes_old_transcripts(session_factory):
 @pytest.mark.asyncio
 async def test_purge_scrubs_dynamic_vars_on_terminal_calls(session_factory):
     call_id = await _seed_call(
-        session_factory, status=CallStatus.COMPLETED, dynamic_vars={"elder_name": "Ada"}
+        session_factory, status=CallStatus.COMPLETED, dynamic_vars={"contact_name": "Ada"}
     )
     async with session_factory() as db:
         _, scrubbed, _ = await retention.purge_expired(db, days=30, now=_FUTURE)
@@ -113,7 +113,7 @@ async def test_purge_nulls_recording_uri_on_terminal_calls(session_factory):
 @pytest.mark.asyncio
 async def test_purge_leaves_non_terminal_calls_untouched(session_factory):
     call_id = await _seed_call(
-        session_factory, status=CallStatus.IN_PROGRESS, dynamic_vars={"elder_name": "Ada"}
+        session_factory, status=CallStatus.IN_PROGRESS, dynamic_vars={"contact_name": "Ada"}
     )
     async with session_factory() as db:
         _, scrubbed, _ = await retention.purge_expired(db, days=30, now=_FUTURE)
@@ -121,14 +121,14 @@ async def test_purge_leaves_non_terminal_calls_untouched(session_factory):
     assert scrubbed == 0
     async with session_factory() as db:
         row = await db.get(Call, call_id)
-    assert row.dynamic_vars == {"elder_name": "Ada"}
+    assert row.dynamic_vars == {"contact_name": "Ada"}
 
 
 @pytest.mark.asyncio
 async def test_purge_keeps_recent_rows(session_factory):
     # With a present-day clock, just-created rows are inside the window and survive.
     call_id = await _seed_call(
-        session_factory, status=CallStatus.COMPLETED, dynamic_vars={"elder_name": "Ada"}
+        session_factory, status=CallStatus.COMPLETED, dynamic_vars={"contact_name": "Ada"}
     )
     await _add_transcript(session_factory, call_id)
     recent = datetime.now(UTC) + timedelta(seconds=5)
@@ -140,36 +140,36 @@ async def test_purge_keeps_recent_rows(session_factory):
 
 
 async def _seed_memory_phi(factory) -> uuid.UUID:
-    """An elder with a conversation summary + an extracted personal fact (both PHI)."""
+    """An contact with a conversation summary + an extracted personal fact (both PHI)."""
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(db, name="A", phone_e164=phone, timezone="UTC")
         call = await calls_repo.create_call(
-            db, elder_id=elder.id, direction=CallDirection.OUTBOUND, status=CallStatus.COMPLETED
+            db, contact_id=contact.id, direction=CallDirection.OUTBOUND, status=CallStatus.COMPLETED
         )
         await summaries_repo.create(
             db,
             call_id=call.id,
-            elder_id=elder.id,
+            contact_id=contact.id,
             summary="recap with PHI",
             open_plans=["see the doctor Tuesday"],
             model_version="m",
         )
         await personal_facts_repo.create(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             category="person",
             content="son named Bob",
             structured=None,
             source="extracted",
         )
         await db.commit()
-        return elder.id
+        return contact.id
 
 
 @pytest.mark.asyncio
 async def test_purge_memory_phi_deletes_old_records(session_factory):
-    # M5: elder-memory PHI (recaps, facts, survey scores, reports) past the window is DELETED.
+    # M5: contact-memory PHI (recaps, facts, survey scores, reports) past the window is DELETED.
     eid = await _seed_memory_phi(session_factory)
     async with session_factory() as db:
         counts = await retention.purge_memory_phi(db, days=30, now=_FUTURE)
@@ -180,10 +180,10 @@ async def test_purge_memory_phi_deletes_old_records(session_factory):
         n_sum = await db.execute(
             select(func.count())
             .select_from(ConversationSummary)
-            .where(ConversationSummary.elder_id == eid)
+            .where(ConversationSummary.contact_id == eid)
         )
         n_fact = await db.execute(
-            select(func.count()).select_from(PersonalFact).where(PersonalFact.elder_id == eid)
+            select(func.count()).select_from(PersonalFact).where(PersonalFact.contact_id == eid)
         )
     assert n_sum.scalar_one() == 0
     assert n_fact.scalar_one() == 0
@@ -201,21 +201,21 @@ async def test_purge_memory_phi_keeps_recent_records(session_factory):
     assert counts["personal_facts"] == 0
     async with session_factory() as db:
         n_fact = await db.execute(
-            select(func.count()).select_from(PersonalFact).where(PersonalFact.elder_id == eid)
+            select(func.count()).select_from(PersonalFact).where(PersonalFact.contact_id == eid)
         )
     assert n_fact.scalar_one() == 1
 
 
-async def _seed_elder(factory) -> uuid.UUID:
+async def _seed_contact(factory) -> uuid.UUID:
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(db, name="A", phone_e164=phone, timezone="UTC")
         await db.commit()
-        return elder.id
+        return contact.id
 
 
 async def _seed_batch_targets(factory, *, n_targets: int, dynamic_vars: dict) -> uuid.UUID:
-    elder_id = await _seed_elder(factory)
+    contact_id = await _seed_contact(factory)
     async with factory() as db:
         batch = await batches_repo.create_batch_with_targets(
             db,
@@ -228,7 +228,7 @@ async def _seed_batch_targets(factory, *, n_targets: int, dynamic_vars: dict) ->
             days_of_week=None,
             max_concurrency=None,
             profile_override=None,
-            targets=[BatchTargetIn(elder_id=elder_id, dynamic_vars=dynamic_vars)] * n_targets,
+            targets=[BatchTargetIn(contact_id=contact_id, dynamic_vars=dynamic_vars)] * n_targets,
         )
         await db.commit()
         return batch.id
@@ -294,11 +294,11 @@ async def test_purge_scrubs_settled_batch_target_vars(session_factory):
 async def test_purge_never_touches_schedule_vars(session_factory):
     # call_schedules.dynamic_vars are live re-used config, deliberately exempt
     # from retention (spec §8) — the operator PHI-removal path is PATCH/DELETE.
-    elder_id = await _seed_elder(session_factory)
+    contact_id = await _seed_contact(session_factory)
     async with session_factory() as db:
         schedule = await schedules_repo.create_schedule(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             window_start_local=time(9, 0),
             window_end_local=time(11, 0),
             days_of_week=127,

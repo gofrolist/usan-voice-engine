@@ -37,7 +37,7 @@ function variable(over: Partial<CustomVariable> = {}): CustomVariable {
   return {
     id: "00000000-0000-0000-0000-000000000001",
     name: "pet_name",
-    description: "The elder's pet's name.",
+    description: "The contact's pet's name.",
     example: "Rex",
     phi: false,
     created_at: "2026-06-10T09:00:00Z",
@@ -91,7 +91,7 @@ describe("CustomVariablesPage", () => {
 
     const table = await screen.findByRole("table");
     expect(within(table).getByText("pet_name")).toBeInTheDocument();
-    expect(within(table).getByText("The elder's pet's name.")).toBeInTheDocument();
+    expect(within(table).getByText("The contact's pet's name.")).toBeInTheDocument();
     expect(within(table).getByText("Rex")).toBeInTheDocument();
     expect(within(table).getByText("diagnosis")).toBeInTheDocument();
     expect(within(table).getByText("Latest diagnosis.")).toBeInTheDocument();
@@ -168,7 +168,7 @@ describe("CustomVariablesPage", () => {
       expect(patchMock).toHaveBeenCalledWith(
         "/v1/admin/custom-variables/00000000-0000-0000-0000-000000000001",
         {
-          description: "The elder's pet's name.",
+          description: "The contact's pet's name.",
           example: "Rex",
           phi: true,
         },

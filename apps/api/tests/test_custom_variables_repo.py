@@ -115,7 +115,7 @@ async def test_names_helpers_exclude_builtin_shadowed_rows(session_factory) -> N
             # Repo-level insert bypasses the pydantic builtin-collision gate,
             # exactly like a pre-existing row a future builtin later shadows.
             await custom_variables_repo.create_custom_variable(
-                db, name="elder_name", description="", example="", phi=True
+                db, name="contact_name", description="", example="", phi=True
             )
             await custom_variables_repo.create_custom_variable(
                 db, name="diagnosis", description="", example="", phi=True
@@ -129,7 +129,7 @@ async def test_names_helpers_exclude_builtin_shadowed_rows(session_factory) -> N
         logger.remove(handler_id)
     shadowed = [r for r in records if "shadowed by builtin" in r["message"]]
     assert shadowed, "expected the logged drop, mirroring the catalog merge"
-    assert all(r["extra"].get("name") == "elder_name" for r in shadowed)
+    assert all(r["extra"].get("name") == "contact_name" for r in shadowed)
 
 
 # ---------------------------------------------------------------------------

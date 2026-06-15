@@ -11,7 +11,7 @@ from sqlalchemy.pool import NullPool
 
 from usan_api.db.models import CallSchedule
 from usan_api.repositories import call_schedules as schedules_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=UTC)
 
@@ -27,24 +27,26 @@ async def session_factory(async_database_url):
 async def _truncate(session_factory):
     async with session_factory() as db:
         await db.execute(
-            text("TRUNCATE call_batch_targets, call_batches, call_schedules, calls, elders CASCADE")
+            text(
+                "TRUNCATE call_batch_targets, call_batches, call_schedules, calls, contacts CASCADE"
+            )
         )
         await db.commit()
 
 
-async def _seed_elder(factory) -> uuid.UUID:
+async def _seed_contact(factory) -> uuid.UUID:
     phone = f"+1555{str(uuid.uuid4().int)[:7].zfill(7)}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(
-            db, name="Schedule Elder", phone_e164=phone, timezone="America/New_York"
+        contact = await contacts_repo.create_contact(
+            db, name="Schedule Contact", phone_e164=phone, timezone="America/New_York"
         )
         await db.commit()
-        return elder.id
+        return contact.id
 
 
 async def _create_schedule(
     factory,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     *,
     next_run_at: datetime,
     enabled: bool = True,
@@ -52,7 +54,7 @@ async def _create_schedule(
     async with factory() as db:
         row = await schedules_repo.create_schedule(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             window_start_local=time(9, 0),
             window_end_local=time(17, 0),
             days_of_week=127,
@@ -65,12 +67,12 @@ async def _create_schedule(
         return row.id
 
 
-async def test_create_get_and_unique_elder(session_factory):
-    elder_id = await _seed_elder(session_factory)
+async def test_create_get_and_unique_contact(session_factory):
+    contact_id = await _seed_contact(session_factory)
     async with session_factory() as db:
         row = await schedules_repo.create_schedule(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             window_start_local=time(9, 0),
             window_end_local=time(17, 0),
             days_of_week=127,
@@ -92,21 +94,26 @@ async def test_create_get_and_unique_elder(session_factory):
         assert fetched is not None
         assert fetched.id == schedule_id
         assert fetched.slot == "morning"  # US5 default
-        by_elder = await schedules_repo.get_by_elder(db, elder_id)
-        assert [s.id for s in by_elder] == [schedule_id]  # one slot so far
-        morning = await schedules_repo.get_by_elder_slot(db, elder_id=elder_id, slot="morning")
+        by_contact = await schedules_repo.get_by_contact(db, contact_id)
+        assert [s.id for s in by_contact] == [schedule_id]  # one slot so far
+        morning = await schedules_repo.get_by_contact_slot(
+            db, contact_id=contact_id, slot="morning"
+        )
         assert morning is not None
         assert morning.id == schedule_id
-        assert await schedules_repo.get_by_elder_slot(db, elder_id=elder_id, slot="evening") is None
+        assert (
+            await schedules_repo.get_by_contact_slot(db, contact_id=contact_id, slot="evening")
+            is None
+        )
         assert await schedules_repo.get_schedule(db, uuid.uuid4()) is None
 
-    # UNIQUE (elder_id, slot): a second schedule for the same elder+slot (default
+    # UNIQUE (contact_id, slot): a second schedule for the same contact+slot (default
     # 'morning') is rejected — the router maps this to 409.
     async with session_factory() as db:
         with pytest.raises(IntegrityError):
             await schedules_repo.create_schedule(
                 db,
-                elder_id=elder_id,
+                contact_id=contact_id,
                 window_start_local=time(10, 0),
                 window_end_local=time(16, 0),
                 days_of_week=31,
@@ -116,11 +123,11 @@ async def test_create_get_and_unique_elder(session_factory):
                 next_run_at=NOW + timedelta(hours=2),
             )
 
-    # US5: a different slot for the SAME elder IS allowed (independent evening call).
+    # US5: a different slot for the SAME contact IS allowed (independent evening call).
     async with session_factory() as db:
         evening = await schedules_repo.create_schedule(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             slot="evening",
             window_start_local=time(18, 0),
             window_end_local=time(20, 0),
@@ -133,7 +140,7 @@ async def test_create_get_and_unique_elder(session_factory):
         await db.commit()
         evening_id = evening.id
     async with session_factory() as db:
-        both = await schedules_repo.get_by_elder(db, elder_id)
+        both = await schedules_repo.get_by_contact(db, contact_id)
         assert {s.slot for s in both} == {"morning", "evening"}
         assert {s.id for s in both} == {schedule_id, evening_id}
 
@@ -147,10 +154,10 @@ async def test_create_get_and_unique_elder(session_factory):
 
 
 async def test_claim_due_schedules_orders_and_skips(session_factory):
-    e1 = await _seed_elder(session_factory)
-    e2 = await _seed_elder(session_factory)
-    e3 = await _seed_elder(session_factory)
-    e4 = await _seed_elder(session_factory)
+    e1 = await _seed_contact(session_factory)
+    e2 = await _seed_contact(session_factory)
+    e3 = await _seed_contact(session_factory)
+    e4 = await _seed_contact(session_factory)
     due_old = await _create_schedule(session_factory, e1, next_run_at=NOW - timedelta(minutes=10))
     due_new = await _create_schedule(session_factory, e2, next_run_at=NOW - timedelta(minutes=1))
     await _create_schedule(session_factory, e3, next_run_at=NOW + timedelta(hours=1))  # future
@@ -172,8 +179,8 @@ async def test_claim_due_schedules_orders_and_skips(session_factory):
 
 
 async def test_claim_skip_locked_disjoint(session_factory, async_database_url):
-    e1 = await _seed_elder(session_factory)
-    e2 = await _seed_elder(session_factory)
+    e1 = await _seed_contact(session_factory)
+    e2 = await _seed_contact(session_factory)
     first = await _create_schedule(session_factory, e1, next_run_at=NOW - timedelta(minutes=10))
     second = await _create_schedule(session_factory, e2, next_run_at=NOW - timedelta(minutes=1))
 
@@ -193,8 +200,8 @@ async def test_claim_skip_locked_disjoint(session_factory, async_database_url):
 
 
 async def test_record_result_writes_bookkeeping(session_factory):
-    elder_id = await _seed_elder(session_factory)
-    schedule_id = await _create_schedule(session_factory, elder_id, next_run_at=NOW)
+    contact_id = await _seed_contact(session_factory)
+    schedule_id = await _create_schedule(session_factory, contact_id, next_run_at=NOW)
 
     next_run = NOW + timedelta(days=1)
     async with session_factory() as db:
@@ -240,12 +247,12 @@ async def test_record_result_writes_bookkeeping(session_factory):
         assert row.last_materialized_date == date(2026, 6, 10)  # unchanged
 
 
-async def test_list_filters_last_result_and_elder(session_factory):
+async def test_list_filters_last_result_and_contact(session_factory):
     assert schedules_repo.MAX_SCHEDULES_LIMIT == 500  # spec §4.1 bounded read
 
-    e1 = await _seed_elder(session_factory)
-    e2 = await _seed_elder(session_factory)
-    e3 = await _seed_elder(session_factory)
+    e1 = await _seed_contact(session_factory)
+    e2 = await _seed_contact(session_factory)
+    e3 = await _seed_contact(session_factory)
     s1 = await _create_schedule(session_factory, e1, next_run_at=NOW)
     s2 = await _create_schedule(session_factory, e2, next_run_at=NOW)
     s3 = await _create_schedule(session_factory, e3, next_run_at=NOW)
@@ -270,10 +277,10 @@ async def test_list_filters_last_result_and_elder(session_factory):
         rows = await schedules_repo.list_schedules(db, last_result="skipped_window")
         assert [r.id for r in rows] == expected_skipped  # only the misses, newest-first
 
-        mine = await schedules_repo.list_schedules(db, elder_id=e3)
+        mine = await schedules_repo.list_schedules(db, contact_id=e3)
         assert [r.id for r in mine] == [s3]
 
-        none = await schedules_repo.list_schedules(db, elder_id=e3, last_result="skipped_window")
+        none = await schedules_repo.list_schedules(db, contact_id=e3, last_result="skipped_window")
         assert none == []
 
         # limit clamps low (0 -> 1) and high (10_000 -> MAX_SCHEDULES_LIMIT);

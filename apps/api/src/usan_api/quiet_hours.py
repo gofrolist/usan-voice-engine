@@ -1,6 +1,6 @@
 """TCPA quiet-hours clamping for retry scheduling (§5.3, §10).
 
-A retry may only be placed within ``[09:00, 21:00)`` in the elder's local time.
+A retry may only be placed within ``[09:00, 21:00)`` in the contact's local time.
 ``next_allowed`` returns the earliest aware-UTC instant >= ``dt_utc`` inside that
 window. An invalid IANA timezone raises ValueError so callers can fail CLOSED
 (never risk an out-of-hours call) rather than guessing.

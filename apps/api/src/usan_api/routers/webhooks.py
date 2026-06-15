@@ -10,8 +10,8 @@ from usan_api.db.session import get_db
 from usan_api.observability.custom_metrics import WEBHOOKS_TOTAL
 from usan_api.phone import to_e164
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import dnc as dnc_repo
-from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import family_contacts as family_contacts_repo
 from usan_api.repositories import family_tasks as family_tasks_repo
 from usan_api.schemas.inbound_sms import InboundSms, parse_inbound_sms
@@ -149,19 +149,19 @@ async def _route_inbound_opt_out(db: AsyncSession, inbound: InboundSms) -> None:
 
     Adds the sender's number to the do-not-call list so no further outbound is placed
     (SC-010) — unconditionally, even for an unrecognized number (a STOP from anyone is
-    honored). When the sender resolves to a known elder, a one-time PHI-free
+    honored). When the sender resolves to a known contact, a one-time PHI-free
     acknowledgement is enqueued (idempotent on the Telnyx message id). The number is
-    canonicalized to E.164 so the DNC key matches the elder's stored number and the
+    canonicalized to E.164 so the DNC key matches the contact's stored number and the
     outbound gate suppresses the dial.
     """
     phone = to_e164(inbound.from_number) or inbound.from_number
     await dnc_repo.lock_phone(db, phone)
     await dnc_repo.add_entry(db, phone, "inbound SMS opt-out keyword (US7 / FR-038)")
-    elder = await elders_repo.get_elder_by_phone(db, phone)
-    if elder is not None:
+    contact = await contacts_repo.get_contact_by_phone(db, phone)
+    if contact is not None:
         await notifications.enqueue_opt_out_ack(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             to_number=phone,
             dedupe_key=f"opt_out_sms:{inbound.message_id}",
         )
@@ -171,7 +171,7 @@ async def _route_inbound_opt_out(db: AsyncSession, inbound: InboundSms) -> None:
 
 
 async def _route_inbound_family_task(db: AsyncSession, inbound: InboundSms) -> None:
-    """Create an open family task per linked elder for a known sender (FR-008/014/015).
+    """Create an open family task per linked contact for a known sender (FR-008/014/015).
 
     Unmatched senders create nothing (FR-014, safe default: ignored + logged). A task
     that conflicts with medical safety is flagged ``needs_safety_review`` so it is not
@@ -192,11 +192,11 @@ async def _route_inbound_family_task(db: AsyncSession, inbound: InboundSms) -> N
     for contact in contacts:
         await family_tasks_repo.create_inbound_task(
             db,
-            elder_id=contact.elder_id,
+            contact_id=contact.contact_id,
             family_contact_id=contact.id,
             message=inbound.text,
-            # One number may relate to >1 elder, so dedupe per (message, contact) while
-            # still creating a task for each linked elder.
+            # One number may relate to >1 contact, so dedupe per (message, contact) while
+            # still creating a task for each linked contact.
             inbound_message_id=f"{inbound.message_id}:{contact.id}",
             needs_safety_review=needs_review,
         )

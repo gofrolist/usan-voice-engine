@@ -11,7 +11,7 @@ def test_follow_up_flag_columns_and_table():
     assert {
         "id",
         "call_id",
-        "elder_id",
+        "contact_id",
         "severity",
         "category",
         "reason",
@@ -20,9 +20,9 @@ def test_follow_up_flag_columns_and_table():
     } <= set(cols.keys())
     # Read FK rules without mutating the shared Table metadata (no .pop()).
     assert next(iter(cols["call_id"].foreign_keys)).ondelete == "CASCADE"
-    # elder_id deliberately has NO cascade: a flag's clinical context must outlive
-    # an elder row removal (load-bearing design, mirrored in the model comment).
-    assert next(iter(cols["elder_id"].foreign_keys)).ondelete is None
+    # contact_id deliberately has NO cascade: a flag's clinical context must outlive
+    # an contact row removal (load-bearing design, mirrored in the model comment).
+    assert next(iter(cols["contact_id"].foreign_keys)).ondelete is None
     assert not cols["severity"].nullable
     assert not cols["status"].nullable
 
@@ -33,16 +33,16 @@ def test_callback_request_columns_and_table():
     assert {
         "id",
         "call_id",
-        "elder_id",
+        "contact_id",
         "requested_time_text",
         "requested_at",
         "notes",
         "status",
         "created_at",
     } <= set(cols.keys())
-    # Same asymmetric FK design as follow_up_flags: call_id cascades, elder_id does not.
+    # Same asymmetric FK design as follow_up_flags: call_id cascades, contact_id does not.
     assert next(iter(cols["call_id"].foreign_keys)).ondelete == "CASCADE"
-    assert next(iter(cols["elder_id"].foreign_keys)).ondelete is None
+    assert next(iter(cols["contact_id"].foreign_keys)).ondelete is None
     assert not cols["requested_time_text"].nullable
     assert cols["requested_at"].nullable
 
@@ -53,7 +53,7 @@ def test_sms_message_columns_uuid_pk_and_defaults():
     assert {
         "id",
         "call_id",
-        "elder_id",
+        "contact_id",
         "to_number",
         "template_key",
         "body",
@@ -67,6 +67,6 @@ def test_sms_message_columns_uuid_pk_and_defaults():
     assert isinstance(cols["id"].type, UUID)
     assert isinstance(cols["error"].type, JSONB)
     assert cols["telnyx_message_id"].unique is True
-    # UUID server default + updated_at onupdate (mirrors Call/Elder style).
+    # UUID server default + updated_at onupdate (mirrors Call/Contact style).
     assert "gen_random_uuid" in str(cols["id"].server_default.arg)
     assert cols["updated_at"].onupdate is not None

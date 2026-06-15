@@ -109,7 +109,7 @@ async def _delete_rules(async_database_url: str, table: str) -> dict[str, str]:
 def test_call_schedules_table_shape(async_database_url: str) -> None:
     cols = asyncio.run(_columns(async_database_url, "call_schedules"))
     assert cols["id"][0] == "uuid"
-    assert cols["elder_id"][0] == "uuid"
+    assert cols["contact_id"][0] == "uuid"
     assert cols["enabled"][0] == "boolean"
     assert cols["window_start_local"][0] == "time without time zone"
     assert cols["window_end_local"][0] == "time without time zone"
@@ -124,8 +124,10 @@ def test_call_schedules_table_shape(async_database_url: str) -> None:
 
     idx = asyncio.run(_indexes(async_database_url, "call_schedules"))
     assert "idx_call_schedules_due" in idx
-    # US5 (migration 0022) relaxed UNIQUE(elder_id) to a composite
-    # UNIQUE(elder_id, slot): one schedule per elder per morning|evening slot.
+    # US5 (migration 0022) relaxed UNIQUE(contact_id) to a composite
+    # UNIQUE(contact_id, slot): one schedule per contact per morning|evening slot.
+    # 0027 renames the table/columns/values but keeps internal index/constraint NAMES
+    # historical (elder), so the live name stays uq_call_schedules_elder_slot.
     assert "call_schedules_elder_id_key" not in idx
     assert "uq_call_schedules_elder_slot" in idx
     due_def = asyncio.run(_indexdef(async_database_url, "idx_call_schedules_due"))
@@ -171,8 +173,8 @@ def test_call_batch_targets_table_shape(async_database_url: str) -> None:
     cols = asyncio.run(_columns(async_database_url, "call_batch_targets"))
     assert cols["id"][0] == "bigint"
     assert cols["target_index"][0] == "integer"
-    assert cols["elder_id"][0] == "uuid"
-    assert cols["elder_id"][1] == "YES"  # nullable: SET NULL keeps the row
+    assert cols["contact_id"][0] == "uuid"
+    assert cols["contact_id"][1] == "YES"  # nullable: SET NULL keeps the row
     assert cols["skip_reason"][0] == "text"
     assert cols["final_status"][0] == "text"
     assert cols["call_id"][0] == "uuid"
@@ -195,15 +197,15 @@ def test_call_batch_targets_table_shape(async_database_url: str) -> None:
 
 
 def test_fk_delete_rules(async_database_url: str) -> None:
-    # CASCADE: a schedule is meaningless without its elder.
+    # CASCADE: a schedule is meaningless without its contact.
     rules = asyncio.run(_delete_rules(async_database_url, "call_schedules"))
-    assert rules["elders"] == "CASCADE"
+    assert rules["contacts"] == "CASCADE"
 
-    # Targets: CASCADE to the batch; SET NULL (not CASCADE) to elders so a deleted
-    # elder doesn't silently shrink the batch; SET NULL to calls/agent_profiles.
+    # Targets: CASCADE to the batch; SET NULL (not CASCADE) to contacts so a deleted
+    # contact doesn't silently shrink the batch; SET NULL to calls/agent_profiles.
     rules = asyncio.run(_delete_rules(async_database_url, "call_batch_targets"))
     assert rules["call_batches"] == "CASCADE"
-    assert rules["elders"] == "SET NULL"
+    assert rules["contacts"] == "SET NULL"
     assert rules["calls"] == "SET NULL"
     assert rules["agent_profiles"] == "SET NULL"
 

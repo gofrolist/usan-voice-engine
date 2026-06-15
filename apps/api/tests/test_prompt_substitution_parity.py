@@ -67,8 +67,8 @@ _SUBSTITUTE_CORPUS = [
     ("Hi {{nope}}!", {"first_name": "Margaret"}),
     ("Mood {{last_mood}}.", {}),
     (
-        "Hi {elder_name}.\n{last_check_in_line}",
-        {"elder_name": "Ada", "last_check_in_line": "Last seen Tuesday.\n"},
+        "Hi {contact_name}.\n{last_check_in_line}",
+        {"contact_name": "Ada", "last_check_in_line": "Last seen Tuesday.\n"},
     ),
     ("a {other} b", {"other": "X"}),
     ("use {0} and { and } and {unknown_slot}", {"first_name": "x"}),

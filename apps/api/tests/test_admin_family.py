@@ -15,14 +15,14 @@ from sqlalchemy.pool import NullPool
 from usan_api.settings import get_settings
 
 
-async def _seed_elder(async_database_url: str, name: str, phone: str) -> str:
+async def _seed_contact(async_database_url: str, name: str, phone: str) -> str:
     eid = str(uuid.uuid4())
     engine = create_async_engine(async_database_url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "INSERT INTO elders (id, name, phone_e164, timezone) "
+                    "INSERT INTO contacts (id, name, phone_e164, timezone) "
                     "VALUES (CAST(:id AS uuid), :n, :p, 'UTC')"
                 ),
                 {"id": eid, "n": name, "p": phone},
@@ -34,7 +34,7 @@ async def _seed_elder(async_database_url: str, name: str, phone: str) -> str:
 
 async def _seed_task(
     async_database_url: str,
-    elder_id: str,
+    contact_id: str,
     message: str,
     *,
     needs_safety_review: bool = False,
@@ -46,10 +46,11 @@ async def _seed_task(
             return (
                 await conn.execute(
                     text(
-                        "INSERT INTO family_tasks (elder_id, message, status, needs_safety_review) "
+                        "INSERT INTO family_tasks "
+                        "(contact_id, message, status, needs_safety_review) "
                         "VALUES (CAST(:e AS uuid), :m, :s, :r) RETURNING id"
                     ),
-                    {"e": elder_id, "m": message, "s": status, "r": needs_safety_review},
+                    {"e": contact_id, "m": message, "s": status, "r": needs_safety_review},
                 )
             ).scalar_one()
     finally:
@@ -82,16 +83,16 @@ def _viewer_cookies(async_database_url: str) -> dict[str, str]:
 
 
 def test_family_endpoints_require_session(client):
-    assert client.get(f"/v1/admin/family-contacts?elder_id={uuid.uuid4()}").status_code == 401
+    assert client.get(f"/v1/admin/family-contacts?contact_id={uuid.uuid4()}").status_code == 401
     assert client.get("/v1/admin/family-tasks").status_code == 401
 
 
 def test_contact_crud_roundtrip(client, admin_session, async_database_url):
-    eid = asyncio.run(_seed_elder(async_database_url, "Ada", "+15551230101"))
+    eid = asyncio.run(_seed_contact(async_database_url, "Ada", "+15551230101"))
     r = client.post(
         "/v1/admin/family-contacts",
         json={
-            "elder_id": eid,
+            "contact_id": eid,
             "name": "Maria",
             "phone_e164": "+15551234567",
             "relationship": "daughter",
@@ -105,7 +106,7 @@ def test_contact_crud_roundtrip(client, admin_session, async_database_url):
     assert contact["alert_prefs"] == {"crisis": True, "missed_call": False}
     cid = contact["id"]
 
-    listed = client.get(f"/v1/admin/family-contacts?elder_id={eid}").json()
+    listed = client.get(f"/v1/admin/family-contacts?contact_id={eid}").json()
     assert [c["id"] for c in listed] == [cid]
 
     patched = client.patch(
@@ -117,41 +118,41 @@ def test_contact_crud_roundtrip(client, admin_session, async_database_url):
     assert patched.json()["alert_prefs"] == {"crisis": True}
 
     assert client.delete(f"/v1/admin/family-contacts/{cid}").status_code == 204
-    assert client.get(f"/v1/admin/family-contacts?elder_id={eid}").json() == []
+    assert client.get(f"/v1/admin/family-contacts?contact_id={eid}").json() == []
 
 
-def test_create_contact_unknown_elder_404(client, admin_session):
+def test_create_contact_unknown_contact_404(client, admin_session):
     r = client.post(
         "/v1/admin/family-contacts",
-        json={"elder_id": str(uuid.uuid4()), "name": "X", "phone_e164": "+15551230000"},
+        json={"contact_id": str(uuid.uuid4()), "name": "X", "phone_e164": "+15551230000"},
     )
     assert r.status_code == 404
 
 
 def test_create_contact_rejects_bad_phone_422(client, admin_session, async_database_url):
-    eid = asyncio.run(_seed_elder(async_database_url, "Ada", "+15551230102"))
+    eid = asyncio.run(_seed_contact(async_database_url, "Ada", "+15551230102"))
     r = client.post(
         "/v1/admin/family-contacts",
-        json={"elder_id": eid, "name": "X", "phone_e164": "555-not-e164"},
+        json={"contact_id": eid, "name": "X", "phone_e164": "555-not-e164"},
     )
     assert r.status_code == 422
 
 
 def test_contact_mutation_forbidden_for_viewer(client, async_database_url):
-    eid = asyncio.run(_seed_elder(async_database_url, "Ada", "+15551230103"))
+    eid = asyncio.run(_seed_contact(async_database_url, "Ada", "+15551230103"))
     client.cookies.update(_viewer_cookies(async_database_url))
     r = client.post(
         "/v1/admin/family-contacts",
-        json={"elder_id": eid, "name": "Maria", "phone_e164": "+15551234567"},
+        json={"contact_id": eid, "name": "Maria", "phone_e164": "+15551234567"},
     )
     assert r.status_code == 403  # viewer may read, not mutate
 
 
 def test_family_tasks_list_needs_review_first(client, admin_session, async_database_url):
-    eid = asyncio.run(_seed_elder(async_database_url, "Ada", "+15551230104"))
+    eid = asyncio.run(_seed_contact(async_database_url, "Ada", "+15551230104"))
     asyncio.run(_seed_task(async_database_url, eid, "normal task"))
     asyncio.run(_seed_task(async_database_url, eid, "held task", needs_safety_review=True))
-    rows = client.get(f"/v1/admin/family-tasks?elder_id={eid}").json()
+    rows = client.get(f"/v1/admin/family-tasks?contact_id={eid}").json()
     assert len(rows) == 2
     # needs-review surfaces first regardless of insertion order.
     assert rows[0]["needs_safety_review"] is True
@@ -159,7 +160,7 @@ def test_family_tasks_list_needs_review_first(client, admin_session, async_datab
 
 
 def test_patch_task_close(client, admin_session, async_database_url):
-    eid = asyncio.run(_seed_elder(async_database_url, "Ada", "+15551230105"))
+    eid = asyncio.run(_seed_contact(async_database_url, "Ada", "+15551230105"))
     tid = asyncio.run(_seed_task(async_database_url, eid, "do a thing"))
     r = client.patch(f"/v1/admin/family-tasks/{tid}", json={"status": "closed"})
     assert r.status_code == 200, r.text
@@ -168,7 +169,7 @@ def test_patch_task_close(client, admin_session, async_database_url):
 
 
 def test_patch_task_approve_clears_review(client, admin_session, async_database_url):
-    eid = asyncio.run(_seed_elder(async_database_url, "Ada", "+15551230106"))
+    eid = asyncio.run(_seed_contact(async_database_url, "Ada", "+15551230106"))
     tid = asyncio.run(_seed_task(async_database_url, eid, "held", needs_safety_review=True))
     r = client.patch(f"/v1/admin/family-tasks/{tid}", json={"status": "open"})
     assert r.status_code == 200, r.text
@@ -182,16 +183,16 @@ def test_patch_task_unknown_404(client, admin_session):
 
 
 def test_contact_audit_has_no_phi(client, admin_session, async_database_url):
-    # HIPAA invariant: the family_contact.create audit detail carries ONLY the elder UUID —
+    # HIPAA invariant: the family_contact.create audit detail carries ONLY the contact UUID —
     # never the contact's name or phone number.
-    eid = asyncio.run(_seed_elder(async_database_url, "Ada", "+15551230107"))
+    eid = asyncio.run(_seed_contact(async_database_url, "Ada", "+15551230107"))
     cid = client.post(
         "/v1/admin/family-contacts",
-        json={"elder_id": eid, "name": "Maria", "phone_e164": "+15559998888"},
+        json={"contact_id": eid, "name": "Maria", "phone_e164": "+15559998888"},
     ).json()["id"]
     rows = client.get("/v1/admin/audit?action=family_contact.create").json()
     entry = next(e for e in rows if e["entity_id"] == cid)
-    assert entry["detail"] == {"elder_id": eid}
+    assert entry["detail"] == {"contact_id": eid}
     blob = (str(entry["detail"]).replace(eid, "") + str(entry["entity_type"])).lower()
     assert "maria" not in blob
     assert "9998888" not in blob
@@ -202,7 +203,7 @@ def test_contact_audit_has_no_phi(client, admin_session, async_database_url):
 
 async def _seed_family_report(
     async_database_url: str,
-    elder_id: str,
+    contact_id: str,
     *,
     period_month: date = date(2026, 5, 1),
     status: str = "sent",
@@ -214,12 +215,12 @@ async def _seed_family_report(
                 await conn.execute(
                     text(
                         "INSERT INTO family_reports "
-                        "(elder_id, period_month, status, calls_completed, metrics, narrative, "
+                        "(contact_id, period_month, status, calls_completed, metrics, narrative, "
                         "model_version) VALUES (CAST(:e AS uuid), :pm, :s, :cc, "
                         "CAST(:m AS jsonb), :n, :mv) RETURNING id"
                     ),
                     {
-                        "e": elder_id,
+                        "e": contact_id,
                         "pm": period_month,
                         "s": status,
                         "cc": 20,
@@ -238,13 +239,13 @@ def test_family_reports_require_session(client):
 
 
 def test_list_family_reports_returns_rich_trend_row(client, admin_session, async_database_url):
-    # Operator (BAA) plane: the full report row — metrics + narrative + model_version + elder
+    # Operator (BAA) plane: the full report row — metrics + narrative + model_version + contact
     # name — is visible here; the PHI-minimization applies only to the outbound SMS.
-    eid = asyncio.run(_seed_elder(async_database_url, "Ada", "+15551230201"))
+    eid = asyncio.run(_seed_contact(async_database_url, "Ada", "+15551230201"))
     rid = asyncio.run(_seed_family_report(async_database_url, eid))
-    rows = client.get(f"/v1/admin/family-reports?elder_id={eid}").json()
+    rows = client.get(f"/v1/admin/family-reports?contact_id={eid}").json()
     row = next(r for r in rows if r["id"] == rid)
-    assert row["elder_name"] == "Ada"
+    assert row["contact_name"] == "Ada"
     assert row["status"] == "sent"
     assert row["metrics"] == {"avg_mood": 4.1}
     assert row["model_version"] == "deterministic"
@@ -256,11 +257,11 @@ def test_resend_family_report_reenqueues_phi_free_sms_and_audits(
 ):
     from usan_api import notifications
 
-    eid = asyncio.run(_seed_elder(async_database_url, "Ada", "+15551230202"))
+    eid = asyncio.run(_seed_contact(async_database_url, "Ada", "+15551230202"))
     # A family contact opted in for reports (default alert_prefs => opted in for "report").
     client.post(
         "/v1/admin/family-contacts",
-        json={"elder_id": eid, "name": "Maria", "phone_e164": "+15559990001"},
+        json={"contact_id": eid, "name": "Maria", "phone_e164": "+15559990001"},
     )
     rid = asyncio.run(_seed_family_report(async_database_url, eid))
 
@@ -275,7 +276,7 @@ def test_resend_family_report_reenqueues_phi_free_sms_and_audits(
                 rows = (
                     await conn.execute(
                         text(
-                            "SELECT body FROM sms_messages WHERE elder_id = CAST(:e AS uuid) "
+                            "SELECT body FROM sms_messages WHERE contact_id = CAST(:e AS uuid) "
                             "AND kind = 'family_report'"
                         ),
                         {"e": eid},
@@ -315,14 +316,14 @@ def test_resend_unknown_report_404(client, admin_session):
 
 
 def test_resend_no_contact_report_409(client, admin_session, async_database_url):
-    # A report whose elder has no opted-in family contact has nobody to resend to.
-    eid = asyncio.run(_seed_elder(async_database_url, "Bo", "+15551230203"))
+    # A report whose contact has no opted-in family contact has nobody to resend to.
+    eid = asyncio.run(_seed_contact(async_database_url, "Bo", "+15551230203"))
     rid = asyncio.run(_seed_family_report(async_database_url, eid, status="no_contact"))
     assert client.post(f"/v1/admin/family-reports/{rid}/resend").status_code == 409
 
 
 def test_resend_forbidden_for_viewer(client, async_database_url):
-    eid = asyncio.run(_seed_elder(async_database_url, "Ada", "+15551230204"))
+    eid = asyncio.run(_seed_contact(async_database_url, "Ada", "+15551230204"))
     rid = asyncio.run(_seed_family_report(async_database_url, eid))
     client.cookies.update(_viewer_cookies(async_database_url))
     assert client.post(f"/v1/admin/family-reports/{rid}/resend").status_code == 403

@@ -11,7 +11,7 @@ import { useArchiveProfile, useProfiles } from "./hooks";
 import { NewProfileDialog } from "./NewProfileDialog";
 
 // Profiles overview: status + default badges, live version, draft indicator,
-// assigned-elder count. Row click opens the editor. Admin-only actions are gated.
+// assigned-contact count. Row click opens the editor. Admin-only actions are gated.
 export function ProfilesListPage() {
   const navigate = useNavigate();
   const isAdmin = useIsAdmin();
@@ -103,7 +103,7 @@ export function ProfilesListPage() {
                   <span className="text-slate-400">—</span>
                 )}
               </Td>
-              <Td>{p.assigned_elder_count}</Td>
+              <Td>{p.assigned_contact_count}</Td>
               <Td className="text-right" onClick={(e) => e.stopPropagation()}>
                 <div className="flex justify-end gap-2">
                   <Button

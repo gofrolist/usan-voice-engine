@@ -71,7 +71,7 @@ def _assert_statutory(resolved: ResolvedPolicy) -> None:
 async def test_statutory_defaults_when_nothing_resolves(session_factory):
     async with session_factory() as db:
         resolved = await resolve_call_policy(
-            db, profile_override=None, elder_profile_id=None, direction="outbound"
+            db, profile_override=None, contact_profile_id=None, direction="outbound"
         )
         assert resolved == ResolvedPolicy(
             start_local=time(9), end_local=time(21), delay_multiplier=1.0
@@ -92,7 +92,7 @@ async def test_policy_from_override_profile(session_factory):
         await db.commit()
     async with session_factory() as db:
         resolved = await resolve_call_policy(
-            db, profile_override=pid, elder_profile_id=None, direction="outbound"
+            db, profile_override=pid, contact_profile_id=None, direction="outbound"
         )
         assert resolved.start_local == time(10, 30)
         assert resolved.end_local == time(21)  # unset side stays statutory
@@ -101,13 +101,13 @@ async def test_policy_from_override_profile(session_factory):
         assert resolved.max_attempts_for(CallStatus.NO_ANSWER) is None
 
 
-async def test_policy_from_elder_profile_when_no_override(session_factory):
+async def test_policy_from_contact_profile_when_no_override(session_factory):
     async with session_factory() as db:
         pid = await _published(db, policy={"quiet_hours_start_local": "11:00"})
         await db.commit()
     async with session_factory() as db:
         resolved = await resolve_call_policy(
-            db, profile_override=None, elder_profile_id=pid, direction="outbound"
+            db, profile_override=None, contact_profile_id=pid, direction="outbound"
         )
         assert resolved.start_local == time(11)
         assert resolved.end_local == time(21)
@@ -117,16 +117,16 @@ async def test_policy_from_elder_profile_when_no_override(session_factory):
 async def test_whole_profile_precedence_override_without_policy_yields_statutory(session_factory):
     # The §3.3.2 pin: precedence is WHOLE-PROFILE, never per-field merge. A live
     # override whose config lacks `policy` loosens back to statutory even though
-    # the elder's profile narrows — within the TCPA bound by construction.
+    # the contact's profile narrows — within the TCPA bound by construction.
     async with session_factory() as db:
         override = await _published(db, policy=None)
-        elder = await _published(
+        contact = await _published(
             db, policy={"quiet_hours_start_local": "12:00", "retry_delay_multiplier": 3.0}
         )
         await db.commit()
     async with session_factory() as db:
         resolved = await resolve_call_policy(
-            db, profile_override=override, elder_profile_id=elder, direction="outbound"
+            db, profile_override=override, contact_profile_id=contact, direction="outbound"
         )
         _assert_statutory(resolved)
 
@@ -138,7 +138,7 @@ async def test_profile_with_policy_none_section_yields_statutory(session_factory
         await db.commit()
     async with session_factory() as db:
         resolved = await resolve_call_policy(
-            db, profile_override=None, elder_profile_id=None, direction="outbound"
+            db, profile_override=None, contact_profile_id=None, direction="outbound"
         )
         _assert_statutory(resolved)
 
@@ -155,6 +155,6 @@ async def test_invalid_snapshot_falls_through(session_factory):
         await db.commit()
     async with session_factory() as db:
         resolved = await resolve_call_policy(
-            db, profile_override=pid, elder_profile_id=None, direction="outbound"
+            db, profile_override=pid, contact_profile_id=None, direction="outbound"
         )
         _assert_statutory(resolved)

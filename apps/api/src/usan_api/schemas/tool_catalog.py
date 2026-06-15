@@ -47,19 +47,19 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="log_wellness",
         label="Log wellness",
-        description="Record the elder's mood, pain level, and a short note for this call.",
+        description="Record the contact's mood, pain level, and a short note for this call.",
         category="logging",
     ),
     ToolSpec(
         name="log_medication",
         label="Log medication",
-        description="Record whether the elder has taken a specific medication.",
+        description="Record whether the contact has taken a specific medication.",
         category="logging",
     ),
     ToolSpec(
         name="get_today_meds",
         label="Get today's medications",
-        description="Read back the medications the elder is scheduled to take today.",
+        description="Read back the medications the contact is scheduled to take today.",
         category="logging",
     ),
     ToolSpec(
@@ -80,14 +80,14 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="schedule_callback",
         label="Schedule callback",
-        description="Record a call-back request in the elder's words for a human to action.",
+        description="Record a call-back request in the contact's words for a human to action.",
         category="safety",
     ),
     ToolSpec(
         name="close_family_task",
         label="Close family task",
         description=(
-            "After conveying a family member's message to the elder, mark it delivered so "
+            "After conveying a family member's message to the contact, mark it delivered so "
             "it is not repeated on the next call."
         ),
         category="logging",
@@ -96,7 +96,7 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
         name="record_personal_fact",
         label="Record personal fact",
         description=(
-            "Remember a durable fact the elder shared (a person, routine, preference, "
+            "Remember a durable fact the contact shared (a person, routine, preference, "
             "important date, or health context) to use naturally on future calls."
         ),
         category="logging",
@@ -105,8 +105,8 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
         name="record_survey",
         label="Record wellbeing survey",
         description=(
-            "Record the elder's monthly wellbeing survey (loneliness, mood, satisfaction). "
-            "Idempotent: at most one survey per elder per calendar month."
+            "Record the contact's monthly wellbeing survey (loneliness, mood, satisfaction). "
+            "Idempotent: at most one survey per contact per calendar month."
         ),
         category="logging",
     ),
@@ -115,7 +115,7 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
         label="Get mood-boosting activity",
         description=(
             "Fetch a mood-boosting activity (breathing, memory, or light game) not used "
-            "recently, to offer when the elder's mood is low."
+            "recently, to offer when the contact's mood is low."
         ),
         category="logging",
     ),
@@ -130,7 +130,7 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
         name="send_info_sms",
         label="Send helpful numbers (SMS)",
         description=(
-            "Text the elder a fixed, PHI-free list of helpful emergency and helpline "
+            "Text the contact a fixed, PHI-free list of helpful emergency and helpline "
             "phone numbers on request. Needs no template."
         ),
         category="messaging",
@@ -139,7 +139,7 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
         name="register_opt_out",
         label="Register opt-out",
         description=(
-            "Honor a spoken request to stop calls: add the elder's number to the "
+            "Honor a spoken request to stop calls: add the contact's number to the "
             "do-not-call list, acknowledge it, and alert an operator."
         ),
         category="safety",
@@ -148,7 +148,7 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
         name="set_spanish_callback",
         label="Set Spanish callback",
         description=(
-            "When the elder speaks Spanish, record the language preference and schedule a "
+            "When the contact speaks Spanish, record the language preference and schedule a "
             "Spanish-language callback (Clara does not switch languages mid-call)."
         ),
         category="safety",

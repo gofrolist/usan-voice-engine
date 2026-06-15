@@ -55,7 +55,7 @@ def test_parse_minimal_prompts_only_document():
             "checkin_flow_instructions": "flow",
             "goodbye_message": "bye",
             "inbound_opening": "open",
-            "inbound_personalization_template": "hello {elder_name} {last_check_in_line}",
+            "inbound_personalization_template": "hello {contact_name} {last_check_in_line}",
         }
     }
     cfg = AgentConfig.model_validate(doc)
@@ -123,7 +123,7 @@ def test_unknown_policy_key_is_ignored():
             "checkin_flow_instructions": "flow",
             "goodbye_message": "bye",
             "inbound_opening": "open",
-            "inbound_personalization_template": "hello {elder_name} {last_check_in_line}",
+            "inbound_personalization_template": "hello {contact_name} {last_check_in_line}",
         },
         "policy": {"quiet_hours_start_local": "10:00"},
     }

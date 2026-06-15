@@ -13,7 +13,7 @@ Kept in lockstep with the agent copy by ``tests/test_prompt_substitution_parity.
 change one, change the other and keep that contract test green.
 
 ``substitute()`` is NOT ``str.format``: it only replaces ``{{name}}`` tokens (and the
-two legacy single-brace slots ``{elder_name}`` / ``{last_check_in_line}`` for
+two legacy single-brace slots ``{contact_name}`` / ``{last_check_in_line}`` for
 back-compat). Any other ``{`` or ``}`` passes through untouched, so a stray or
 hostile brace can never raise or act as a format-string injection vector.
 """
@@ -29,10 +29,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 # membership + defaults matter at substitution time.
 BUILTIN_DEFAULTS: dict[str, str] = {
     "first_name": "there",
-    "elder_name": "there",
-    # contact_name is a permanent alias of elder_name (US4 / FR-024): same source,
-    # same "there" default. Keep adjacent to elder_name and in lockstep with the
-    # agent mirror (services/agent prompt_vars.BUILTIN_DEFAULTS).
     "contact_name": "there",
     "call_direction": "",
     "current_time": "",
@@ -60,7 +56,7 @@ TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 
 # Legacy single-brace slots still present in already-published inbound templates.
 # Only these two are resolved; every other `{x}` passes through untouched.
-_LEGACY_SLOTS = ("elder_name", "last_check_in_line")
+_LEGACY_SLOTS = ("contact_name", "last_check_in_line")
 
 # Control chars + format-slot braces + invisible/directional chars stripped from any
 # admin-supplied string before it reaches an LLM prompt. Mirrors

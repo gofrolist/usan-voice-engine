@@ -37,10 +37,10 @@ class FollowupFlagSummary(BaseModel):
 
     id: int
     call_id: uuid.UUID
-    elder_id: uuid.UUID
-    # C3 elder identity (spec §4.4): a nurse seeing "urgent / medical / chest
+    contact_id: uuid.UUID
+    # C3 contact identity (spec §4.4): a nurse seeing "urgent / medical / chest
     # pain" must not need an audited transcript read just to learn WHO.
-    elder_name: str | None  # outer-join; None if the elder row was deleted
+    contact_name: str | None  # outer-join; None if the contact row was deleted
     masked_phone: str  # computed by the router via masking.mask_phone — never the raw phone
     severity: str
     category: str
@@ -57,9 +57,9 @@ class CallbackRequestSummary(BaseModel):
 
     id: int
     call_id: uuid.UUID
-    elder_id: uuid.UUID
-    # C3 elder identity (spec §4.4); see FollowupFlagSummary.
-    elder_name: str | None
+    contact_id: uuid.UUID
+    # C3 contact identity (spec §4.4); see FollowupFlagSummary.
+    contact_name: str | None
     masked_phone: str  # computed by the router via masking.mask_phone — never the raw phone
     requested_time_text: str
     requested_at: datetime | None
@@ -78,12 +78,12 @@ class SmsMessageSummary(BaseModel):
 
     id: uuid.UUID
     call_id: uuid.UUID
-    elder_id: uuid.UUID
+    contact_id: uuid.UUID
     to_number: str
     template_key: str
     status: str
     telnyx_message_id: str | None = None
     sent_at: datetime | None = None
     created_at: datetime
-    # NOTE: the rendered `body` is intentionally OMITTED — it may carry the elder's
+    # NOTE: the rendered `body` is intentionally OMITTED — it may carry the contact's
     # name / contextual content (design §9); summaries stay lean and lower-PHI.

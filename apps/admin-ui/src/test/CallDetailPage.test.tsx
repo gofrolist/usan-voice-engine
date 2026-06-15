@@ -23,13 +23,13 @@ import { CallDetailPage } from "../features/calls/CallDetailPage";
 
 const CALL_ID = "00000000-0000-0000-0000-000000000001";
 const PARENT_ID = "00000000-0000-0000-0000-000000000099";
-const ELDER_ID = "11111111-1111-1111-1111-111111111111";
+const CONTACT_ID = "11111111-1111-1111-1111-111111111111";
 
 function detail(over: Partial<AdminCallDetail> = {}): AdminCallDetail {
   return {
     id: CALL_ID,
-    elder_id: ELDER_ID,
-    elder_name: "Edna Moore",
+    contact_id: CONTACT_ID,
+    contact_name: "Edna Moore",
     masked_phone: "***4567",
     direction: "outbound",
     status: "completed",
@@ -109,13 +109,13 @@ describe("CallDetailPage", () => {
     expect(screen.queryByText(/Call not found/)).not.toBeInTheDocument();
   });
 
-  it("renders the header card: elder link, masked phone, call facts", async () => {
+  it("renders the header card: contact link, masked phone, call facts", async () => {
     respondWith(detail());
     renderPage();
 
-    // Elder name links to this elder's filtered calls list.
-    const elderLink = await screen.findByRole("link", { name: "Edna Moore" });
-    expect(elderLink).toHaveAttribute("href", `/calls?elder_id=${ELDER_ID}`);
+    // Contact name links to this contact's filtered calls list.
+    const contactLink = await screen.findByRole("link", { name: "Edna Moore" });
+    expect(contactLink).toHaveAttribute("href", `/calls?contact_id=${CONTACT_ID}`);
     expect(screen.getByText("***4567")).toBeInTheDocument();
 
     expect(screen.getByText("outbound")).toBeInTheDocument();

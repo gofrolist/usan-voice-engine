@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.repositories import callback_requests as cb_repo
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 
 
 @pytest.fixture
@@ -26,34 +26,36 @@ async def _truncate(session_factory):
     # GROUP-BY count assertions would otherwise be flaky — earlier tests in this
     # module (and siblings sharing the session container) accumulate open rows.
     async with session_factory() as db:
-        await db.execute(text("TRUNCATE follow_up_flags, callback_requests, calls, elders CASCADE"))
+        await db.execute(
+            text("TRUNCATE follow_up_flags, callback_requests, calls, contacts CASCADE")
+        )
         await db.commit()
 
 
-async def _seed_call_and_elder(factory) -> tuple[uuid.UUID, uuid.UUID]:
+async def _seed_call_and_contact(factory) -> tuple[uuid.UUID, uuid.UUID]:
     phone = f"+1555{str(uuid.uuid4().int)[:7].zfill(7)}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(
-            db, name="Callback Elder", phone_e164=phone, timezone="UTC"
+        contact = await contacts_repo.create_contact(
+            db, name="Callback Contact", phone_e164=phone, timezone="UTC"
         )
         call = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.IN_PROGRESS,
         )
         await db.commit()
-        return call.id, elder.id
+        return call.id, contact.id
 
 
 async def test_create_callback_request_persists_row(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
     when = datetime(2026, 6, 10, 15, 0, tzinfo=UTC)
     async with session_factory() as db:
         row = await cb_repo.create_callback_request(
             db,
             call_id=call_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             requested_time_text="tomorrow afternoon",
             requested_at=when,
             notes="prefers a call back",
@@ -61,7 +63,7 @@ async def test_create_callback_request_persists_row(session_factory):
         await db.commit()
         assert isinstance(row.id, int)
         assert row.call_id == call_id
-        assert row.elder_id == elder_id
+        assert row.contact_id == contact_id
         assert row.requested_time_text == "tomorrow afternoon"
         assert row.requested_at == when
         assert row.notes == "prefers a call back"
@@ -69,12 +71,12 @@ async def test_create_callback_request_persists_row(session_factory):
 
 
 async def test_create_callback_request_allows_null_requested_at(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         row = await cb_repo.create_callback_request(
             db,
             call_id=call_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             requested_time_text="sometime soon",
             requested_at=None,
             notes=None,
@@ -85,74 +87,74 @@ async def test_create_callback_request_allows_null_requested_at(session_factory)
 
 
 async def test_list_callback_requests_filters_by_status(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         row = await cb_repo.create_callback_request(
             db,
             call_id=call_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             requested_time_text="first",
             requested_at=None,
             notes=None,
         )
         await db.commit()
 
-        # Scope reads to this elder so shared session-container state can't bleed in.
+        # Scope reads to this contact so shared session-container state can't bleed in.
         open_rows = await cb_repo.list_callback_requests(
-            db, status="open", elder_id=elder_id, limit=50
+            db, status="open", contact_id=contact_id, limit=50
         )
         assert [r.id for (r, _, _) in open_rows] == [row.id]
 
         resolved_rows = await cb_repo.list_callback_requests(
-            db, status="resolved", elder_id=elder_id, limit=50
+            db, status="resolved", contact_id=contact_id, limit=50
         )
         assert resolved_rows == []
 
 
-async def test_list_callback_requests_filters_by_elder(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
-    _, other_elder_id = await _seed_call_and_elder(session_factory)
+async def test_list_callback_requests_filters_by_contact(session_factory):
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
+    _, other_contact_id = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         row = await cb_repo.create_callback_request(
             db,
             call_id=call_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             requested_time_text="mine",
             requested_at=None,
             notes=None,
         )
         await db.commit()
 
-        mine = await cb_repo.list_callback_requests(db, elder_id=elder_id)
+        mine = await cb_repo.list_callback_requests(db, contact_id=contact_id)
         assert [r.id for (r, _, _) in mine] == [row.id]
 
-        theirs = await cb_repo.list_callback_requests(db, elder_id=other_elder_id)
+        theirs = await cb_repo.list_callback_requests(db, contact_id=other_contact_id)
         assert theirs == []
 
 
 async def test_list_callback_requests_respects_limit(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         for _ in range(2):
             await cb_repo.create_callback_request(
                 db,
                 call_id=call_id,
-                elder_id=elder_id,
+                contact_id=contact_id,
                 requested_time_text="repeat",
                 requested_at=None,
                 notes=None,
             )
         await db.commit()
 
-        limited = await cb_repo.list_callback_requests(db, elder_id=elder_id, limit=1)
+        limited = await cb_repo.list_callback_requests(db, contact_id=contact_id, limit=1)
         assert len(limited) == 1
 
 
-async def _create_request(db, call_id, elder_id):
+async def _create_request(db, call_id, contact_id):
     return await cb_repo.create_callback_request(
         db,
         call_id=call_id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         requested_time_text="tomorrow",
         requested_at=None,
         notes=None,
@@ -160,9 +162,9 @@ async def _create_request(db, call_id, elder_id):
 
 
 async def test_get_request_returns_row_or_none(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
-        row = await _create_request(db, call_id, elder_id)
+        row = await _create_request(db, call_id, contact_id)
         await db.commit()
 
         found = await cb_repo.get_request(db, row.id)
@@ -174,11 +176,11 @@ async def test_get_request_returns_row_or_none(session_factory):
 
 
 async def test_update_status_guarded_state_machine(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
-        request = await _create_request(db, call_id, elder_id)
-        fresh = await _create_request(db, call_id, elder_id)
-        acked = await _create_request(db, call_id, elder_id)
+        request = await _create_request(db, call_id, contact_id)
+        fresh = await _create_request(db, call_id, contact_id)
+        acked = await _create_request(db, call_id, contact_id)
         await db.commit()
 
         # open -> acknowledged: returns the updated row with the workflow stamps set.
@@ -234,39 +236,41 @@ async def test_update_status_guarded_state_machine(session_factory):
         await db.commit()
 
 
-async def test_list_callback_requests_returns_elder_join_tuples(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+async def test_list_callback_requests_returns_contact_join_tuples(session_factory):
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
-        row = await _create_request(db, call_id, elder_id)
+        row = await _create_request(db, call_id, contact_id)
         await db.commit()
 
-        elder = await elders_repo.get_elder(db, elder_id)
-        assert elder is not None
+        contact = await contacts_repo.get_contact(db, contact_id)
+        assert contact is not None
 
-        [(req, elder_name, phone)] = await cb_repo.list_callback_requests(db, elder_id=elder_id)
+        [(req, contact_name, phone)] = await cb_repo.list_callback_requests(
+            db, contact_id=contact_id
+        )
         assert req.id == row.id
-        assert elder_name == "Callback Elder"
-        assert phone == elder.phone_e164
+        assert contact_name == "Callback Contact"
+        assert phone == contact.phone_e164
 
 
 async def test_list_callback_requests_offset_newest_first(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
-        rows = [await _create_request(db, call_id, elder_id) for _ in range(3)]
+        rows = [await _create_request(db, call_id, contact_id) for _ in range(3)]
         await db.commit()
         newest_first = [r.id for r in reversed(rows)]
 
         # Ordering unchanged by C3: still newest-first (no urgent-first here).
-        page0 = await cb_repo.list_callback_requests(db, elder_id=elder_id)
+        page0 = await cb_repo.list_callback_requests(db, contact_id=contact_id)
         assert [r.id for (r, _, _) in page0] == newest_first
-        page1 = await cb_repo.list_callback_requests(db, elder_id=elder_id, offset=1)
+        page1 = await cb_repo.list_callback_requests(db, contact_id=contact_id, offset=1)
         assert [r.id for (r, _, _) in page1] == newest_first[1:]
 
 
 async def test_count_by_status_groups(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
-        rows = [await _create_request(db, call_id, elder_id) for _ in range(4)]
+        rows = [await _create_request(db, call_id, contact_id) for _ in range(4)]
         await db.commit()
 
         # Absent statuses are omitted, not reported as 0 (pinned shape).

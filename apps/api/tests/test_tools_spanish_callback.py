@@ -1,10 +1,10 @@
 """T071 (US8): set_spanish_callback tool contract.
 
-When the elder speaks Spanish, the call-scoped ``set_spanish_callback`` records the
-language preference on the elder (``meta['language'] = 'es'``) and creates a callback
+When the contact speaks Spanish, the call-scoped ``set_spanish_callback`` records the
+language preference on the contact (``meta['language'] = 'es'``) and creates a callback
 request flagged for Spanish (FR-040), so the callback dialer reaches them back in
 Spanish. When ``SPANISH_PROFILE_ID`` is configured the callback carries that profile as
-its ``profile_override``. Token-scope and missing-elder guards mirror the other tools.
+its ``profile_override``. Token-scope and missing-contact guards mirror the other tools.
 """
 
 import asyncio
@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from usan_api import livekit_dispatch
-from usan_api.db.models import CallbackRequest, Elder
+from usan_api.db.models import CallbackRequest, Contact
 from usan_api.settings import get_settings
 
 _OP = {"Authorization": "Bearer " + "o" * 32}
@@ -58,9 +58,9 @@ def _phone() -> str:
     return f"+1555{str(uuid.uuid4().int)[:7]}"
 
 
-def _create_elder(client, phone: str) -> str:
+def _create_contact(client, phone: str) -> str:
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={"name": "Ada", "phone_e164": phone, "timezone": "UTC", "metadata": {}},
         headers=_OP,
     )
@@ -68,10 +68,14 @@ def _create_elder(client, phone: str) -> str:
     return r.json()["id"]
 
 
-def _enqueue(client, elder_id: str) -> dict:
+def _enqueue(client, contact_id: str) -> dict:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"sp-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"sp-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202, r.text
@@ -91,15 +95,15 @@ def _query(url, coro_factory):
     return asyncio.run(_do())
 
 
-def _elder(url, elder_id: str) -> Elder:
-    return _query(url, lambda db: db.get(Elder, uuid.UUID(elder_id)))
+def _contact(url, contact_id: str) -> Contact:
+    return _query(url, lambda db: db.get(Contact, uuid.UUID(contact_id)))
 
 
-def _callbacks(url, elder_id: str) -> list[CallbackRequest]:
+def _callbacks(url, contact_id: str) -> list[CallbackRequest]:
     async def _q(db):
         rows = (
             await db.execute(
-                select(CallbackRequest).where(CallbackRequest.elder_id == uuid.UUID(elder_id))
+                select(CallbackRequest).where(CallbackRequest.contact_id == uuid.UUID(contact_id))
             )
         ).scalars()
         return list(rows)
@@ -124,8 +128,8 @@ def test_set_spanish_callback_sets_language_and_creates_callback(
     client, mock_dispatch, async_database_url
 ):
     phone = _phone()
-    elder_id = _create_elder(client, phone)
-    call_id = _enqueue(client, elder_id)["id"]
+    contact_id = _create_contact(client, phone)
+    call_id = _enqueue(client, contact_id)["id"]
 
     r = client.post(
         "/v1/tools/set_spanish_callback", json={"call_id": call_id}, headers=_auth(call_id)
@@ -133,11 +137,11 @@ def test_set_spanish_callback_sets_language_and_creates_callback(
     assert r.status_code == 200, r.text
 
     # Language preference recorded so future calls/callbacks know to use Spanish.
-    elder = _elder(async_database_url, elder_id)
-    assert elder.meta.get("language") == "es"
+    contact = _contact(async_database_url, contact_id)
+    assert contact.meta.get("language") == "es"
 
     # A dial-able Spanish callback was created (requested_at set => the dialer picks it up).
-    callbacks = _callbacks(async_database_url, elder_id)
+    callbacks = _callbacks(async_database_url, contact_id)
     assert len(callbacks) == 1
     cb = callbacks[0]
     assert cb.status == "open"
@@ -154,22 +158,22 @@ def test_set_spanish_callback_uses_configured_profile(
     get_settings.cache_clear()
 
     phone = _phone()
-    elder_id = _create_elder(client, phone)
-    call_id = _enqueue(client, elder_id)["id"]
+    contact_id = _create_contact(client, phone)
+    call_id = _enqueue(client, contact_id)["id"]
 
     r = client.post(
         "/v1/tools/set_spanish_callback", json={"call_id": call_id}, headers=_auth(call_id)
     )
     assert r.status_code == 200, r.text
 
-    cb = _callbacks(async_database_url, elder_id)[0]
+    cb = _callbacks(async_database_url, contact_id)[0]
     assert str(cb.profile_override) == profile_id
 
 
 def test_set_spanish_callback_rejects_wrong_call_token(client, mock_dispatch, async_database_url):
     phone = _phone()
-    elder_id = _create_elder(client, phone)
-    call_id = _enqueue(client, elder_id)["id"]
+    contact_id = _create_contact(client, phone)
+    call_id = _enqueue(client, contact_id)["id"]
     r = client.post(
         "/v1/tools/set_spanish_callback",
         json={"call_id": call_id},
@@ -178,7 +182,7 @@ def test_set_spanish_callback_rejects_wrong_call_token(client, mock_dispatch, as
     assert r.status_code == 403
 
 
-def test_set_spanish_callback_409_when_call_has_no_elder(client, mock_dispatch):
+def test_set_spanish_callback_409_when_call_has_no_contact(client, mock_dispatch):
     inbound = client.post(
         "/v1/calls/inbound",
         json={"phone_e164": "+19990007777", "livekit_room": f"sp-{uuid.uuid4()}"},

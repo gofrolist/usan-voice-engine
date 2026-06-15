@@ -1,7 +1,7 @@
 """Shared schema-validation constants.
 
 Kept in one place so the E.164 contract is identical across every request
-schema that accepts a phone number (elders, DNC).
+schema that accepts a phone number (contacts, DNC).
 """
 
 # E.164: leading '+', a non-zero country-code digit, then 7-14 more digits

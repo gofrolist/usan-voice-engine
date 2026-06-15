@@ -23,14 +23,14 @@ async def create_sms_message(
     db: AsyncSession,
     *,
     call_id: uuid.UUID,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     to_number: str,
     template_key: str,
     body: str,
 ) -> SmsMessage:
     row = SmsMessage(
         call_id=call_id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         to_number=to_number,
         template_key=template_key,
         body=body,
@@ -44,7 +44,7 @@ async def create_sms_message(
 async def create_notification(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     to_number: str,
     kind: str,
     body: str,
@@ -59,14 +59,18 @@ async def create_notification(
     never collide here.
     """
     if dedupe_key is None:
-        row = SmsMessage(call_id=None, elder_id=elder_id, to_number=to_number, kind=kind, body=body)
+        row = SmsMessage(
+            call_id=None, contact_id=contact_id, to_number=to_number, kind=kind, body=body
+        )
         db.add(row)
         await db.flush()
         await db.refresh(row)
         return row
     stmt = (
         pg_insert(SmsMessage)
-        .values(elder_id=elder_id, to_number=to_number, kind=kind, body=body, dedupe_key=dedupe_key)
+        .values(
+            contact_id=contact_id, to_number=to_number, kind=kind, body=body, dedupe_key=dedupe_key
+        )
         .on_conflict_do_nothing(index_elements=[SmsMessage.dedupe_key])
         .returning(SmsMessage.id)
     )

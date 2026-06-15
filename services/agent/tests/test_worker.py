@@ -239,13 +239,13 @@ def test_caller_phone_none_when_absent():
     assert worker._caller_phone(p) is None
 
 
-async def test_inbound_known_elder_runs_check_in(monkeypatch):
+async def test_inbound_known_contact_runs_check_in(monkeypatch):
     _settings(monkeypatch)
 
     async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
         assert phone == "+15551234567"
         assert room == "usan-inbound-x"
-        return {"call_id": "inb-1", "elder_known": True, "dynamic_vars": {"elder_name": "Ada"}}
+        return {"call_id": "inb-1", "contact_known": True, "dynamic_vars": {"contact_name": "Ada"}}
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
 
@@ -295,14 +295,14 @@ async def test_inbound_known_elder_runs_check_in(monkeypatch):
 
     await worker.entrypoint(ctx)
 
-    assert built["custom_vars"] == {"elder_name": "Ada"}
+    assert built["custom_vars"] == {"contact_name": "Ada"}
     assert captured["userdata"].call_id == "inb-1"
     assert captured["userdata"].job_ctx is ctx
     captured["session"].start.assert_awaited_once()
     assert captured["session"].start.await_args.kwargs["agent"] is built["agent"]
     captured["session"].generate_reply.assert_awaited_once()
     assert registered["call_id"] == "inb-1"
-    fake_build_agent.assert_not_called()  # greet-only agent NOT used for a known elder
+    fake_build_agent.assert_not_called()  # greet-only agent NOT used for a known contact
 
 
 async def test_inbound_unknown_caller_falls_back_to_greet_only(monkeypatch):
@@ -353,14 +353,14 @@ async def test_inbound_unknown_caller_falls_back_to_greet_only(monkeypatch):
     captured["session"].start.assert_awaited_once()
 
 
-async def test_inbound_unknown_elder_known_false_falls_back_to_greet_only(monkeypatch):
+async def test_inbound_unknown_contact_known_false_falls_back_to_greet_only(monkeypatch):
     # The realistic unknown-caller path: the API responds with a call record but
-    # elder_known=False (the number matched no elder). Must use greet-only, not the
+    # contact_known=False (the number matched no contact). Must use greet-only, not the
     # check-in agent, and must NOT register a transcript flush.
     _settings(monkeypatch)
 
     async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
-        return {"call_id": "inb-9", "elder_known": False, "dynamic_vars": {}}
+        return {"call_id": "inb-9", "contact_known": False, "dynamic_vars": {}}
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
 
@@ -448,7 +448,7 @@ async def test_inbound_known_starts_call_recording(monkeypatch):
     _settings(monkeypatch)
 
     async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
-        return {"call_id": "inb-1", "elder_known": True, "dynamic_vars": {"elder_name": "Ada"}}
+        return {"call_id": "inb-1", "contact_known": True, "dynamic_vars": {"contact_name": "Ada"}}
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
     monkeypatch.setattr(worker, "build_inbound_agent", lambda cfg, **kw: MagicMock())
@@ -654,7 +654,7 @@ async def test_inbound_threads_resolved_vars_into_builder(monkeypatch):
     async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
         return {
             "call_id": "inb-1",
-            "elder_known": True,
+            "contact_known": True,
             "dynamic_vars": {"company": "USAN"},
             "resolved_vars": {"first_name": "Ada"},
             "timezone": "US/Eastern",

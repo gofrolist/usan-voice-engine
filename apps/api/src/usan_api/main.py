@@ -26,9 +26,9 @@ from usan_api.repositories import custom_variables as custom_variables_repo
 from usan_api.routers import (
     admin_audit,
     admin_calls,
+    admin_contacts,
     admin_custom_variables,
     admin_defaults,
-    admin_elders,
     admin_family,
     admin_model_catalog,
     admin_profile_tests,
@@ -41,8 +41,8 @@ from usan_api.routers import (
     auth,
     batches,
     calls,
+    contacts,
     dnc,
-    elders,
     runtime,
     schedules,
     tools,
@@ -189,7 +189,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_profile_tests.router)
     app.include_router(admin_users.router)
     app.include_router(admin_audit.router)
-    app.include_router(admin_elders.router)
+    app.include_router(admin_contacts.router)
     app.include_router(admin_family.router)
     app.include_router(admin_variable_catalog.router)
     app.include_router(admin_custom_variables.router)
@@ -199,7 +199,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_tools.router)
     app.include_router(admin_calls.router)
     app.include_router(auth.router)
-    app.include_router(elders.router)
+    app.include_router(contacts.router)
     app.include_router(dnc.router)
     app.include_router(schedules.router)
     app.include_router(batches.router)

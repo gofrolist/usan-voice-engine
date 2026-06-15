@@ -1,9 +1,9 @@
 """T087 (US7 / FR-041): send_info_sms tool contract.
 
-``send_info_sms`` lets the agent text the elder a PHI-minimized SMS of helpful phone
+``send_info_sms`` lets the agent text the contact a PHI-minimized SMS of helpful phone
 numbers — the public emergency/helpline numbers sourced from ``emergency_resources`` so
 they never drift. Unlike ``send_sms`` it needs no operator template; it builds a fixed,
-PHI-free body. It shares the per-call SMS budget and the standard token-scope/elder guards.
+PHI-free body. It shares the per-call SMS budget and the standard token-scope/contact guards.
 """
 
 import asyncio
@@ -52,9 +52,9 @@ def _auth(call_id: str) -> dict:
     return {"Authorization": f"Bearer {_service_token(call_id)}"}
 
 
-def _create_elder(client) -> str:
+def _create_contact(client) -> str:
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={
             "name": "Ada",
             "phone_e164": f"+1555{str(uuid.uuid4().int)[:7]}",
@@ -67,10 +67,14 @@ def _create_elder(client) -> str:
     return r.json()["id"]
 
 
-def _enqueue(client, elder_id: str) -> str:
+def _enqueue(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"info-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"info-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202, r.text
@@ -122,8 +126,8 @@ def test_informational_sms_body_is_phi_free():
 
 
 def test_send_info_sms_queues_message_from_catalog(client, mock_dispatch, async_database_url):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post("/v1/tools/send_info_sms", json={"call_id": call_id}, headers=_auth(call_id))
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "pending"
@@ -135,8 +139,8 @@ def test_send_info_sms_queues_message_from_catalog(client, mock_dispatch, async_
 
 
 def test_send_info_sms_respects_per_call_budget(client, mock_dispatch, async_database_url):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     for _ in range(3):  # MAX_SMS_PER_CALL
         assert (
             client.post(
@@ -149,8 +153,8 @@ def test_send_info_sms_respects_per_call_budget(client, mock_dispatch, async_dat
 
 
 def test_send_info_sms_rejects_wrong_call_token(client, mock_dispatch, async_database_url):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/send_info_sms",
         json={"call_id": call_id},
@@ -159,7 +163,7 @@ def test_send_info_sms_rejects_wrong_call_token(client, mock_dispatch, async_dat
     assert r.status_code == 403
 
 
-def test_send_info_sms_409_when_call_has_no_elder(client, mock_dispatch):
+def test_send_info_sms_409_when_call_has_no_contact(client, mock_dispatch):
     inbound = client.post(
         "/v1/calls/inbound",
         json={"phone_e164": "+19990007777", "livekit_room": f"info-{uuid.uuid4()}"},

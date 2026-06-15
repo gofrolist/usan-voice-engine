@@ -49,9 +49,9 @@ def _auth(call_id: str) -> dict:
     return {"Authorization": f"Bearer {_service_token(call_id)}"}
 
 
-def _create_elder(client) -> str:
+def _create_contact(client) -> str:
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={
             "name": "Ada",
             "phone_e164": f"+1555{str(uuid.uuid4().int)[:7]}",
@@ -65,7 +65,7 @@ def _create_elder(client) -> str:
 
 
 def _add_contact(
-    url: str, elder_id: str, *, phone: str = _FAMILY, prefs: dict | None = None
+    url: str, contact_id: str, *, phone: str = _FAMILY, prefs: dict | None = None
 ) -> None:
     async def _do():
         engine = create_async_engine(url, poolclass=NullPool)
@@ -74,10 +74,10 @@ def _add_contact(
             async with factory() as db:
                 await db.execute(
                     text(
-                        "INSERT INTO family_contacts (elder_id, name, phone_e164, alert_prefs) "
+                        "INSERT INTO family_contacts (contact_id, name, phone_e164, alert_prefs) "
                         "VALUES (:e, 'Dana', :p, CAST(:prefs AS JSONB))"
                     ),
-                    {"e": elder_id, "p": phone, "prefs": json.dumps(prefs or {})},
+                    {"e": contact_id, "p": phone, "prefs": json.dumps(prefs or {})},
                 )
                 await db.commit()
         finally:
@@ -86,10 +86,14 @@ def _add_contact(
     asyncio.run(_do())
 
 
-def _enqueue(client, elder_id: str) -> str:
+def _enqueue(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"esc-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"esc-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202
@@ -132,8 +136,8 @@ def _notifications_for_flag(url: str, flag_id: int) -> list[SmsMessage]:
 
 
 def test_crisis_creates_urgent_flag_with_crisis_columns(client, mock_dispatch, async_database_url):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "medical", "detection_source": "safety_net"},
@@ -150,9 +154,9 @@ def test_crisis_creates_urgent_flag_with_crisis_columns(client, mock_dispatch, a
 
 
 def test_crisis_enqueues_phi_minimized_family_alert(client, mock_dispatch, async_database_url):
-    elder_id = _create_elder(client)
-    _add_contact(async_database_url, elder_id, phone=_FAMILY)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    _add_contact(async_database_url, contact_id, phone=_FAMILY)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "suicidal", "detection_source": "llm"},
@@ -178,9 +182,9 @@ def test_crisis_enqueues_phi_minimized_family_alert(client, mock_dispatch, async
 def test_crisis_respects_contact_alert_prefs_opt_out(client, mock_dispatch, async_database_url):
     # An explicit crisis=false opt-out excludes the contact; with no opted-in contact the
     # flag itself is the operator-queue signal (FR-013).
-    elder_id = _create_elder(client)
-    _add_contact(async_database_url, elder_id, phone=_FAMILY, prefs={"crisis": False})
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    _add_contact(async_database_url, contact_id, phone=_FAMILY, prefs={"crisis": False})
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "medical", "detection_source": "llm"},
@@ -196,8 +200,8 @@ def test_crisis_respects_contact_alert_prefs_opt_out(client, mock_dispatch, asyn
 def test_crisis_without_family_contact_surfaces_to_operator(
     client, mock_dispatch, async_database_url
 ):
-    elder_id = _create_elder(client)  # no family contact registered
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)  # no family contact registered
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "abuse", "detection_source": "llm"},
@@ -214,8 +218,8 @@ def test_crisis_without_family_contact_surfaces_to_operator(
 
 
 def test_crisis_both_detection_sources_merge_to_both(client, mock_dispatch, async_database_url):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "overdose", "detection_source": "llm"},
@@ -233,9 +237,9 @@ def test_crisis_both_detection_sources_merge_to_both(client, mock_dispatch, asyn
 
 def test_crisis_family_alert_deduped_across_both_paths(client, mock_dispatch, async_database_url):
     # Both detection paths fire for the same call+category -> one flag, one family alert.
-    elder_id = _create_elder(client)
-    _add_contact(async_database_url, elder_id, phone=_FAMILY)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    _add_contact(async_database_url, contact_id, phone=_FAMILY)
+    call_id = _enqueue(client, contact_id)
     a = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "medical", "detection_source": "llm"},

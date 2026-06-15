@@ -1,4 +1,4 @@
-"""Pure unit tests for schemas/batch — caps, duplicate-elder 422, naive-UTC coercion,
+"""Pure unit tests for schemas/batch — caps, duplicate-contact 422, naive-UTC coercion,
 quiet-hours window contract, and the canonical sha256 payload digest (spec §4.2).
 
 The digest contract is load-bearing for replay: same idempotency_key + same digest
@@ -18,7 +18,7 @@ from pydantic import ValidationError
 def _valid_kwargs(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
         "name": "june-wellness",
-        "targets": [{"elder_id": str(uuid.uuid4())}],
+        "targets": [{"contact_id": str(uuid.uuid4())}],
     }
     return {**base, **overrides}
 
@@ -27,14 +27,14 @@ def test_target_caps_and_defaults():
     from usan_api.schemas import call as call_schemas
     from usan_api.schemas.batch import BatchTargetIn
 
-    target = BatchTargetIn(elder_id=uuid.uuid4())
+    target = BatchTargetIn(contact_id=uuid.uuid4())
     assert target.dynamic_vars == {}
     assert target.profile_override is None
 
     # the 8 KB serialized cap is enforced per target (same contract as enqueue_call)
     with pytest.raises(ValidationError, match="8192"):
         BatchTargetIn(
-            elder_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
             dynamic_vars={"note": "x" * (call_schemas.MAX_DYNAMIC_VARS_BYTES + 1)},
         )
 
@@ -47,7 +47,7 @@ def test_create_rejects_zero_and_501_targets():
     with pytest.raises(ValidationError, match="at least 1"):
         CreateBatchRequest(**_valid_kwargs(targets=[]))
 
-    too_many = [{"elder_id": str(uuid.uuid4())} for _ in range(MAX_BATCH_TARGETS + 1)]
+    too_many = [{"contact_id": str(uuid.uuid4())} for _ in range(MAX_BATCH_TARGETS + 1)]
     with pytest.raises(ValidationError, match="at most 500"):
         CreateBatchRequest(**_valid_kwargs(targets=too_many))
 
@@ -67,14 +67,14 @@ def test_create_rejects_long_name():
         CreateBatchRequest(**_valid_kwargs(name=""))
 
 
-def test_create_rejects_duplicate_elders_with_index():
+def test_create_rejects_duplicate_contacts_with_index():
     from usan_api.schemas.batch import CreateBatchRequest
 
     dup = str(uuid.uuid4())
     targets = [
-        {"elder_id": dup},
-        {"elder_id": str(uuid.uuid4())},
-        {"elder_id": dup},
+        {"contact_id": dup},
+        {"contact_id": str(uuid.uuid4())},
+        {"contact_id": dup},
     ]
     # the error names the offending (duplicate) target_index
     with pytest.raises(ValidationError, match="target_index 2"):
@@ -138,12 +138,12 @@ def test_create_window_must_intersect_quiet_hours():
 def test_payload_digest_stable_under_key_order():
     from usan_api.schemas.batch import CreateBatchRequest, payload_digest
 
-    elder = str(uuid.uuid4())
+    contact = str(uuid.uuid4())
     a = CreateBatchRequest(
-        **_valid_kwargs(targets=[{"elder_id": elder, "dynamic_vars": {"a": "1", "b": "2"}}])
+        **_valid_kwargs(targets=[{"contact_id": contact, "dynamic_vars": {"a": "1", "b": "2"}}])
     )
     b = CreateBatchRequest(
-        **_valid_kwargs(targets=[{"elder_id": elder, "dynamic_vars": {"b": "2", "a": "1"}}])
+        **_valid_kwargs(targets=[{"contact_id": contact, "dynamic_vars": {"b": "2", "a": "1"}}])
     )
     # pydantic preserves dict insertion order, so only sorted-key JSON makes these equal
     assert payload_digest(a) == payload_digest(b)
@@ -158,8 +158,8 @@ def test_payload_digest_sensitive_to_target_order_and_content():
 
     e1, e2 = str(uuid.uuid4()), str(uuid.uuid4())
     base_targets = [
-        {"elder_id": e1, "dynamic_vars": {"k": "v"}},
-        {"elder_id": e2},
+        {"contact_id": e1, "dynamic_vars": {"k": "v"}},
+        {"contact_id": e2},
     ]
     base = CreateBatchRequest(**_valid_kwargs(targets=base_targets))
     base_digest = payload_digest(base)
@@ -188,7 +188,7 @@ def test_payload_digest_sensitive_to_target_order_and_content():
         payload_digest(CreateBatchRequest(**_valid_kwargs(targets=base_targets, name="other")))
         != base_digest
     )
-    changed_var = [{"elder_id": e1, "dynamic_vars": {"k": "OTHER"}}, {"elder_id": e2}]
+    changed_var = [{"contact_id": e1, "dynamic_vars": {"k": "OTHER"}}, {"contact_id": e2}]
     assert payload_digest(CreateBatchRequest(**_valid_kwargs(targets=changed_var))) != base_digest
 
     # the idempotency_key itself is EXCLUDED: two requests differing only in key
@@ -239,7 +239,7 @@ def test_batch_responses_from_model_render():
 
     class _Target:
         target_index = 0
-        elder_id = uuid.uuid4()
+        contact_id = uuid.uuid4()
         status = "done"
         skip_reason = None
         call_id = uuid.uuid4()

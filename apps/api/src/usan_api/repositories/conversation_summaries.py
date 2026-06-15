@@ -21,11 +21,11 @@ async def get_for_call(db: AsyncSession, call_id: uuid.UUID) -> ConversationSumm
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
-async def get_latest(db: AsyncSession, *, elder_id: uuid.UUID) -> ConversationSummary | None:
-    """The elder's most recent summary (newest created_at, then id) — or None."""
+async def get_latest(db: AsyncSession, *, contact_id: uuid.UUID) -> ConversationSummary | None:
+    """The contact's most recent summary (newest created_at, then id) — or None."""
     stmt = (
         select(ConversationSummary)
-        .where(ConversationSummary.elder_id == elder_id)
+        .where(ConversationSummary.contact_id == contact_id)
         .order_by(ConversationSummary.created_at.desc(), ConversationSummary.id.desc())
         .limit(1)
     )
@@ -36,7 +36,7 @@ async def create(
     db: AsyncSession,
     *,
     call_id: uuid.UUID,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     summary: str,
     open_plans: list[Any],
     model_version: str,
@@ -50,7 +50,7 @@ async def create(
         pg_insert(ConversationSummary)
         .values(
             call_id=call_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             summary=summary,
             open_plans=open_plans,
             model_version=model_version,

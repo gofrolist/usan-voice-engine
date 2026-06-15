@@ -22,8 +22,8 @@ from usan_api.repositories import activity_history as activity_history_repo
 from usan_api.repositories import agent_profiles as profiles_repo
 from usan_api.repositories import callback_requests as callback_requests_repo
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import dnc as dnc_repo
-from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import family_tasks as family_tasks_repo
 from usan_api.repositories import follow_up_flags as follow_up_flags_repo
 from usan_api.repositories import medication_reminders as medication_reminders_repo
@@ -90,10 +90,10 @@ async def _authorize_call(call_id: uuid.UUID, claims: dict[str, Any], db: AsyncS
     return call
 
 
-def _require_elder(call: Call) -> uuid.UUID:
-    if call.elder_id is None:
-        raise HTTPException(status_code=409, detail="call has no associated elder")
-    return call.elder_id
+def _require_contact(call: Call) -> uuid.UUID:
+    if call.contact_id is None:
+        raise HTTPException(status_code=409, detail="call has no associated contact")
+    return call.contact_id
 
 
 @router.post("/log_wellness", response_model=LoggedResponse)
@@ -104,11 +104,11 @@ async def log_wellness(
     claims: dict[str, Any] = Depends(require_service_token),
 ) -> LoggedResponse:
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
+    contact_id = _require_contact(call)
     row = await wellness_repo.create_wellness_log(
         db,
         call_id=call.id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         mood=body.mood,
         pain_level=body.pain_level,
         notes=body.notes,
@@ -126,11 +126,11 @@ async def flag_for_followup(
     claims: dict[str, Any] = Depends(require_service_token),
 ) -> FollowupFlaggedResponse:
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
+    contact_id = _require_contact(call)
     row = await follow_up_flags_repo.create_follow_up_flag(
         db,
         call_id=call.id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         severity=body.severity,
         category=body.category,
         reason=body.reason,
@@ -152,11 +152,11 @@ async def log_medication(
     claims: dict[str, Any] = Depends(require_service_token),
 ) -> LoggedResponse:
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
+    contact_id = _require_contact(call)
     row = await medications_repo.create_medication_log(
         db,
         call_id=call.id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         medication_name=body.medication_name,
         taken=body.taken,
         reported_time=body.reported_time,
@@ -165,11 +165,11 @@ async def log_medication(
     capped = False
     if body.taken:
         await medication_reminders_repo.clear_pending(
-            db, elder_id=elder_id, medication_name=body.medication_name, call_id=call.id
+            db, contact_id=contact_id, medication_name=body.medication_name, call_id=call.id
         )
     else:
         _reminder, capped = await medication_reminders_repo.open_or_refresh(
-            db, elder_id=elder_id, medication_name=body.medication_name, call_id=call.id
+            db, contact_id=contact_id, medication_name=body.medication_name, call_id=call.id
         )
         if capped:
             # Cap reached: stop nagging and hand persistent non-adherence to an operator via
@@ -178,7 +178,7 @@ async def log_medication(
             await follow_up_flags_repo.create_follow_up_flag(
                 db,
                 call_id=call.id,
-                elder_id=elder_id,
+                contact_id=contact_id,
                 severity="routine",
                 category="medication",
                 reason=(
@@ -202,11 +202,11 @@ async def schedule_callback(
     claims: dict[str, Any] = Depends(require_service_token),
 ) -> CallbackScheduledResponse:
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
+    contact_id = _require_contact(call)
     row = await callback_requests_repo.create_callback_request(
         db,
         call_id=call.id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         requested_time_text=body.requested_time_text,
         requested_at=body.requested_at,
         notes=body.notes,
@@ -229,18 +229,20 @@ async def get_today_meds(
     claims: dict[str, Any] = Depends(require_service_token),
 ) -> TodayMedsResponse:
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
-    elder = await elders_repo.get_elder(db, elder_id)
-    if elder is None:
-        raise HTTPException(status_code=409, detail="elder record not found")
-    raw = elder.meta.get("medication_schedule", [])
+    contact_id = _require_contact(call)
+    contact = await contacts_repo.get_contact(db, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=409, detail="contact record not found")
+    raw = contact.meta.get("medication_schedule", [])
     items: list[MedicationScheduleItem] = []
     if isinstance(raw, list):
         for entry in raw:
             try:
                 items.append(MedicationScheduleItem.model_validate(entry))
             except ValidationError:
-                logger.bind(elder_id=str(elder_id)).warning("Skipping malformed medication entry")
+                logger.bind(contact_id=str(contact_id)).warning(
+                    "Skipping malformed medication entry"
+                )
     return TodayMedsResponse(medications=items)
 
 
@@ -275,7 +277,7 @@ async def end_call(
 # Hard per-call ceiling on queued texts, counted across ALL statuses (sent rows
 # spend the budget too). The /v1/tools/* paths are exempt from the global rate
 # limiter, so without this a confused or hijacked LLM could queue unbounded
-# carrier traffic to the elder's phone within a single call.
+# carrier traffic to the contact's phone within a single call.
 MAX_SMS_PER_CALL = 3
 
 
@@ -287,19 +289,19 @@ async def send_sms(
     claims: dict[str, Any] = Depends(require_service_token),
 ) -> SmsQueuedResponse:
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
-    elder = await elders_repo.get_elder(db, elder_id)
-    if elder is None:
-        raise HTTPException(status_code=409, detail="elder record not found")
-    if not elder.phone_e164:
-        raise HTTPException(status_code=409, detail="elder has no phone number")
+    contact_id = _require_contact(call)
+    contact = await contacts_repo.get_contact(db, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=409, detail="contact record not found")
+    if not contact.phone_e164:
+        raise HTTPException(status_code=409, detail="contact has no phone number")
     if await sms_repo.count_for_call(db, call.id) >= MAX_SMS_PER_CALL:
         raise HTTPException(status_code=409, detail="per-call SMS limit reached")
 
     resolved = await profiles_repo.resolve_agent_config(
         db,
         profile_override=call.profile_override,
-        elder_profile_id=elder.agent_profile_id,
+        contact_profile_id=contact.agent_profile_id,
         direction=call.direction.value,
     )
     cfg = resolved.config if resolved is not None else DEFAULT_AGENT_CONFIG
@@ -311,18 +313,18 @@ async def send_sms(
         # Either send_sms is not configured, or the key doesn't match a template.
         raise HTTPException(status_code=404, detail="sms template not found")
 
-    rendered = sms_render.render_sms_body(template.body, call=call, elder=elder)
+    rendered = sms_render.render_sms_body(template.body, call=call, contact=contact)
     row = await sms_repo.create_sms_message(
         db,
         call_id=call.id,
-        elder_id=elder_id,
-        to_number=elder.phone_e164,
+        contact_id=contact_id,
+        to_number=contact.phone_e164,
         template_key=template.key,
         body=rendered,
     )
     await db.commit()
     # Does NOT send synchronously: flush_pending_sms delivers post-call (design §6.3).
-    # Bind only call_id (matches flag_for_followup / schedule_callback); elder_id is PHI.
+    # Bind only call_id (matches flag_for_followup / schedule_callback); contact_id is PHI.
     logger.bind(call_id=str(call.id)).info("Queued send_sms")
     return SmsQueuedResponse(id=row.id, status=row.status)
 
@@ -403,12 +405,12 @@ async def raise_crisis(
     to 'both' and re-enqueues nothing new (the family alert dedupe key is stable).
     """
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
+    contact_id = _require_contact(call)
     resource = emergency_resources.get_resource(body.category)
     flag, created = await follow_up_flags_repo.upsert_crisis_flag(
         db,
         call_id=call.id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         crisis_category=body.category,
         detection_source=body.detection_source,
         resource_offered=resource.category,
@@ -418,7 +420,7 @@ async def raise_crisis(
     # Constitution II). When no family contact is registered, the urgent flag itself is the
     # operator-queue entry and is annotated to surface the absence (FR-013 / T088).
     dispatch = await notifications.dispatch_family_alert(
-        db, elder_id=elder_id, reason="crisis", dedupe_base=f"crisis:{flag.id}"
+        db, contact_id=contact_id, reason="crisis", dedupe_base=f"crisis:{flag.id}"
     )
     if dispatch.notified:
         await follow_up_flags_repo.mark_family_notified(db, flag.id)
@@ -448,22 +450,24 @@ async def close_family_task(
     """Mark conveyed family task(s) delivered (US2 / FR-009; ``open -> delivered``).
 
     The agent calls this after relaying the family's open messages. With a ``task_id`` it
-    delivers that one task (elder-scoped); without one it delivers every open,
-    non-safety-review task for the call's elder — the exact set injected as the
+    delivers that one task (contact-scoped); without one it delivers every open,
+    non-safety-review task for the call's contact — the exact set injected as the
     ``open_family_tasks`` builtin. Idempotent: a re-call after delivery is a no-op.
     """
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
+    contact_id = _require_contact(call)
     if body.task_id is not None:
         task = await family_tasks_repo.get_family_task(db, body.task_id)
-        # Elder-scope guard: a call may only touch its own elder's tasks (no cross-elder
+        # Contact-scope guard: a call may only touch its own contact's tasks (no cross-contact
         # mutation from a confused/compromised agent). Hide existence on mismatch -> 404.
-        if task is None or task.elder_id != elder_id:
+        if task is None or task.contact_id != contact_id:
             raise HTTPException(status_code=404, detail="family task not found")
         updated = await family_tasks_repo.mark_delivered(db, body.task_id, call_id=call.id)
         delivered = 1 if updated is not None else 0
     else:
-        rows = await family_tasks_repo.mark_all_delivered(db, elder_id=elder_id, call_id=call.id)
+        rows = await family_tasks_repo.mark_all_delivered(
+            db, contact_id=contact_id, call_id=call.id
+        )
         delivered = len(rows)
     await db.commit()
     logger.bind(call_id=str(call.id)).info("Closed {n} family task(s)", n=delivered)
@@ -477,21 +481,21 @@ async def record_personal_fact(
     db: AsyncSession = Depends(get_db),
     claims: dict[str, Any] = Depends(require_service_token),
 ) -> RecordPersonalFactResponse:
-    """Capture a durable fact the elder stated this call (US4 / FR-024).
+    """Capture a durable fact the contact stated this call (US4 / FR-024).
 
-    Always writes ``source='elder_stated'`` — the tool never forges an 'extracted' or
+    Always writes ``source='contact_stated'`` — the tool never forges an 'extracted' or
     'operator' fact. An empty ``structured`` takes the DB default ``{}``; ``phi`` takes
     its DB default (true) so a fact is protected unless an operator later proves otherwise.
     """
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
+    contact_id = _require_contact(call)
     row = await personal_facts_repo.create(
         db,
-        elder_id=elder_id,
+        contact_id=contact_id,
         category=body.category,
         content=body.content,
         structured=body.structured or None,
-        source="elder_stated",
+        source="contact_stated",
     )
     await db.commit()
     # Bind only call_id (matches the other tools); the fact content is PHI and is already
@@ -507,22 +511,22 @@ async def record_survey(
     db: AsyncSession = Depends(get_db),
     claims: dict[str, Any] = Depends(require_service_token),
 ) -> RecordSurveyResponse:
-    """Record this month's wellbeing survey (US6 / FR-032; once per elder per month).
+    """Record this month's wellbeing survey (US6 / FR-032; once per contact per month).
 
-    The unique ``(elder_id, period_month)`` makes a repeat the same month a no-op that
+    The unique ``(contact_id, period_month)`` makes a repeat the same month a no-op that
     returns the existing row (SC-008), so the agent re-asking is harmless. ``period_month``
-    is anchored to the elder's local month.
+    is anchored to the contact's local month.
     """
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
-    elder = await elders_repo.get_elder(db, elder_id)
-    if elder is None:
-        raise HTTPException(status_code=409, detail="elder record not found")
-    period = survey_results_repo.month_anchor(elder.timezone or "", datetime.now(UTC))
+    contact_id = _require_contact(call)
+    contact = await contacts_repo.get_contact(db, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=409, detail="contact record not found")
+    period = survey_results_repo.month_anchor(contact.timezone or "", datetime.now(UTC))
     row, _created = await survey_results_repo.upsert_for_month(
         db,
         call_id=call.id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         period_month=period,
         loneliness=body.loneliness,
         mood=body.mood,
@@ -545,16 +549,16 @@ async def get_activity(
     """Return a mood-boosting activity not used recently and record the use (US6 / FR-034).
 
     The catalog is code (``activities_catalog``); selection is the pure least-recently-used
-    policy over the elder's ``activity_history`` (never repeats within 30 days / the last 3,
+    policy over the contact's ``activity_history`` (never repeats within 30 days / the last 3,
     falling back to the least-recently-used when exhausted — SC-009). Recording the use
     AFTER selection ensures the just-offered activity is excluded next time.
     """
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
-    history = await activity_history_repo.list_recent(db, elder_id=elder_id)
+    contact_id = _require_contact(call)
+    history = await activity_history_repo.list_recent(db, contact_id=contact_id)
     activity = activities_catalog.select_activity(body.kind, history, now=datetime.now(UTC))
     await activity_history_repo.record_use(
-        db, elder_id=elder_id, activity_key=activity.key, call_id=call.id
+        db, contact_id=contact_id, activity_key=activity.key, call_id=call.id
     )
     await db.commit()
     # activity_key is a non-PHI catalog id (safe to log), like a tool name.
@@ -571,30 +575,32 @@ async def register_opt_out(
     db: AsyncSession = Depends(get_db),
     claims: dict[str, Any] = Depends(require_service_token),
 ) -> OptOutRecordedResponse:
-    """Honor a spoken opt-out (US7 / FR-037): DNC the number, ack the elder, alert ops.
+    """Honor a spoken opt-out (US7 / FR-037): DNC the number, ack the contact, alert ops.
 
-    Adds the elder's number to the do-not-call list so no further outbound is placed
-    (SC-010), enqueues a one-time PHI-free acknowledgement to the elder, and raises a
+    Adds the contact's number to the do-not-call list so no further outbound is placed
+    (SC-010), enqueues a one-time PHI-free acknowledgement to the contact, and raises a
     routine ``operator_alert`` flag so a human understands why calls stopped (FR-039).
     Idempotent within a call: the ack dedupes on the call and the operator flag is
     ensure-once.
     """
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
-    elder = await elders_repo.get_elder(db, elder_id)
-    if elder is None or not elder.phone_e164:
-        raise HTTPException(status_code=409, detail="elder record has no phone number")
+    contact_id = _require_contact(call)
+    contact = await contacts_repo.get_contact(db, contact_id)
+    if contact is None or not contact.phone_e164:
+        raise HTTPException(status_code=409, detail="contact record has no phone number")
     # Serialize against a concurrent outbound enqueue so a dial cannot slip in between the
     # opt-out and the DNC add (mirrors the call-enqueue gate's advisory lock on the phone).
-    await dnc_repo.lock_phone(db, elder.phone_e164)
-    await dnc_repo.add_entry(db, elder.phone_e164, "elder opt-out during call (US7 / FR-037)")
+    await dnc_repo.lock_phone(db, contact.phone_e164)
+    await dnc_repo.add_entry(db, contact.phone_e164, "contact opt-out during call (US7 / FR-037)")
     await notifications.enqueue_opt_out_ack(
-        db, elder_id=elder_id, to_number=elder.phone_e164, dedupe_key=f"opt_out:{call.id}"
+        db, contact_id=contact_id, to_number=contact.phone_e164, dedupe_key=f"opt_out:{call.id}"
     )
-    flag = await follow_up_flags_repo.ensure_opt_out_flag(db, call_id=call.id, elder_id=elder_id)
+    flag = await follow_up_flags_repo.ensure_opt_out_flag(
+        db, call_id=call.id, contact_id=contact_id
+    )
     await db.commit()
-    # Bind only call_id (matches the other tools); the elder's number is PHI.
-    logger.bind(call_id=str(call.id)).info("Recorded elder opt-out (DNC + ack + operator flag)")
+    # Bind only call_id (matches the other tools); the contact's number is PHI.
+    logger.bind(call_id=str(call.id)).info("Recorded contact opt-out (DNC + ack + operator flag)")
     return OptOutRecordedResponse(status="opted_out", flag_id=flag.id)
 
 
@@ -605,26 +611,26 @@ async def send_info_sms(
     db: AsyncSession = Depends(get_db),
     claims: dict[str, Any] = Depends(require_service_token),
 ) -> SmsQueuedResponse:
-    """Text the elder a PHI-free list of helpful emergency/helpline numbers (US7 / FR-041).
+    """Text the contact a PHI-free list of helpful emergency/helpline numbers (US7 / FR-041).
 
     The body is built server-side from ``emergency_resources`` (no operator template, no
     LLM free text), so it carries no clinical content and the numbers never drift. Shares
     the per-call SMS budget and is delivered post-call by the same outbox path as send_sms.
     """
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
-    elder = await elders_repo.get_elder(db, elder_id)
-    if elder is None:
-        raise HTTPException(status_code=409, detail="elder record not found")
-    if not elder.phone_e164:
-        raise HTTPException(status_code=409, detail="elder has no phone number")
+    contact_id = _require_contact(call)
+    contact = await contacts_repo.get_contact(db, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=409, detail="contact record not found")
+    if not contact.phone_e164:
+        raise HTTPException(status_code=409, detail="contact has no phone number")
     if await sms_repo.count_for_call(db, call.id) >= MAX_SMS_PER_CALL:
         raise HTTPException(status_code=409, detail="per-call SMS limit reached")
     row = await sms_repo.create_sms_message(
         db,
         call_id=call.id,
-        elder_id=elder_id,
-        to_number=elder.phone_e164,
+        contact_id=contact_id,
+        to_number=contact.phone_e164,
         template_key="info_resources",
         body=emergency_resources.informational_sms_body(),
     )
@@ -645,25 +651,25 @@ async def set_spanish_callback(
     """Record a Spanish-language preference and schedule a Spanish callback (US8 / FR-040).
 
     Per the spec assumption Clara does not switch languages mid-call; she promises a
-    Spanish callback instead. So this records ``meta['language']='es'`` on the elder and
+    Spanish callback instead. So this records ``meta['language']='es'`` on the contact and
     creates a callback request flagged for Spanish, carrying the configured
     ``SPANISH_PROFILE_ID`` as its profile_override (or, when unset, leaving it for an
     operator). ``requested_at`` is now, so the dialer schedules it at the next allowed time.
     """
     call = await _authorize_call(body.call_id, claims, db)
-    elder_id = _require_elder(call)
-    elder = await elders_repo.get_elder(db, elder_id)
-    if elder is None or not elder.phone_e164:
-        raise HTTPException(status_code=409, detail="elder record has no phone number")
+    contact_id = _require_contact(call)
+    contact = await contacts_repo.get_contact(db, contact_id)
+    if contact is None or not contact.phone_e164:
+        raise HTTPException(status_code=409, detail="contact record has no phone number")
     # Reassign (not in-place mutate) so SQLAlchemy flags the JSONB column dirty.
-    elder.meta = {**elder.meta, "language": "es"}
+    contact.meta = {**contact.meta, "language": "es"}
     profile_override = (
         uuid.UUID(settings.spanish_profile_id) if settings.spanish_profile_id else None
     )
     row = await callback_requests_repo.create_callback_request(
         db,
         call_id=call.id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         requested_time_text="Spanish-language callback (FR-040)",
         requested_at=datetime.now(UTC),
         notes=None,

@@ -2,7 +2,7 @@
 
 A requested callback ("call me back in an hour") is logged by ``schedule_callback`` with a
 best-effort parsed ``requested_at``. This poller turns a due request into an actual
-outbound call: it claims the ``open`` request, clamps the dial time to the elder's quiet
+outbound call: it claims the ``open`` request, clamps the dial time to the contact's quiet
 hours, honors the DNC list, and materializes ONE root Call with a deterministic
 ``callback:{id}`` idempotency key — so a re-run never double-dials. The Call is then
 dispatched by the existing scheduler/dispatch path; this module only materializes it.
@@ -13,9 +13,9 @@ dialed`` once that Call has left the queue (reconcile pass). Ship-inert: wired o
 optional pollers.
 
 Known limitation (spec "Evening + callback collision" edge case): this dialer does not
-de-duplicate against a same-elder evening/scheduled call near the clamped time, so a
+de-duplicate against a same-contact evening/scheduled call near the clamped time, so a
 callback whose dial time overlaps the evening window can still produce two near-
-simultaneous calls. Cross-schedule dedup is deferred (no US8 task); the per-elder
+simultaneous calls. Cross-schedule dedup is deferred (no US8 task); the per-contact
 concurrency it would need belongs in the shared dispatch/concurrency layer, not here.
 """
 
@@ -32,8 +32,8 @@ from usan_api.db.base import CallStatus
 from usan_api.db.session import get_session_factory
 from usan_api.repositories import callback_requests as callback_requests_repo
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import dnc as dnc_repo
-from usan_api.repositories import elders as elders_repo
 from usan_api.settings import Settings
 
 # Per-cycle ceiling on callbacks materialized; the rest wait for the next tick.
@@ -90,30 +90,30 @@ async def _materialize_one(
         cb = await callback_requests_repo.claim_open_for_dial(db, request_id)
         if cb is None:
             return False  # another worker took it, or it is no longer open
-        elder = await elders_repo.get_elder(db, cb.elder_id)
-        if elder is None:
-            logger.bind(callback_id=cb.id).warning("Callback elder missing; leaving open")
+        contact = await contacts_repo.get_contact(db, cb.contact_id)
+        if contact is None:
+            logger.bind(callback_id=cb.id).warning("Callback contact missing; leaving open")
             return False
         if cb.requested_at is None:  # defensive: the due query already excludes these
             return False
 
         candidate = max(cb.requested_at, moment)
         try:
-            scheduled_at = quiet_hours.next_allowed(candidate, elder.timezone)
+            scheduled_at = quiet_hours.next_allowed(candidate, contact.timezone)
         except ValueError:
             # Invalid IANA timezone — never dial outside quiet hours; a human resolves it.
             logger.bind(callback_id=cb.id).warning("Callback timezone invalid; leaving open")
             return False
 
-        await dnc_repo.lock_phone(db, elder.phone_e164)
-        blocked = await dnc_repo.is_blocked(db, elder.phone_e164)
+        await dnc_repo.lock_phone(db, contact.phone_e164)
+        blocked = await dnc_repo.is_blocked(db, contact.phone_e164)
         status = CallStatus.DNC_BLOCKED if blocked else CallStatus.QUEUED
         idempotency_key = f"callback:{cb.id}"
         try:
             async with db.begin_nested():  # SAVEPOINT: a duplicate key rolls back here only
                 call = await calls_repo.create_materialized_root(
                     db,
-                    elder_id=elder.id,
+                    contact_id=contact.id,
                     status=status,
                     idempotency_key=idempotency_key,
                     scheduled_at=None if blocked else scheduled_at,
@@ -124,7 +124,7 @@ async def _materialize_one(
             # The key already exists (a prior cycle materialized it but did not mark the
             # callback). Adopt our own row rather than dialing twice.
             existing = await calls_repo.get_by_idempotency_key(db, idempotency_key)
-            if existing is None or existing.elder_id != elder.id:
+            if existing is None or existing.contact_id != contact.id:
                 logger.bind(callback_id=cb.id).error("Callback key conflict; refusing to adopt")
                 return False
             call = existing

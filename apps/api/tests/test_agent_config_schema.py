@@ -108,7 +108,7 @@ def test_personalization_template_accepts_unknown_double_brace_token():
 
 def test_personalization_template_accepts_allowed_slots():
     ok = DEFAULT_AGENT_CONFIG.prompts.model_dump()
-    ok["inbound_personalization_template"] = "Hi {elder_name}. {last_check_in_line}"
+    ok["inbound_personalization_template"] = "Hi {contact_name}. {last_check_in_line}"
     assert PromptsConfig.model_validate(ok)
 
 
@@ -128,7 +128,7 @@ def test_tools_accepts_three_new_catalog_tools():
 
 def test_personalization_template_rejects_stray_brace():
     bad = DEFAULT_AGENT_CONFIG.prompts.model_dump()
-    bad["inbound_personalization_template"] = "{elder_name} and {"
+    bad["inbound_personalization_template"] = "{contact_name} and {"
     with pytest.raises(ValidationError):
         PromptsConfig.model_validate(bad)
 
@@ -169,9 +169,9 @@ def test_short_field_accepts_unknown_double_brace_token():
 
 
 def test_personalization_template_still_accepts_legacy_single_brace_slots():
-    # Back-compat: old configs use single-brace {elder_name}/{last_check_in_line}.
+    # Back-compat: old configs use single-brace {contact_name}/{last_check_in_line}.
     ok = DEFAULT_AGENT_CONFIG.prompts.model_dump()
-    ok["inbound_personalization_template"] = "Hi {elder_name}. {last_check_in_line}"
+    ok["inbound_personalization_template"] = "Hi {contact_name}. {last_check_in_line}"
     assert PromptsConfig.model_validate(ok)
 
 

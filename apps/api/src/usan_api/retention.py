@@ -2,9 +2,9 @@
 
 When PHI_RETENTION_DAYS is set, ``run_poller`` loops the purge once per day. It:
 - deletes transcript rows past the cutoff and strips ``dynamic_vars`` (which may embed
-  elder names / last-check-in summaries) + ``recording_uri`` from terminal calls and
+  contact names / last-check-in summaries) + ``recording_uri`` from terminal calls and
   settled batch targets past the cutoff (``purge_expired``); and
-- deletes the standalone elder-memory PHI records past the cutoff — per-call recaps,
+- deletes the standalone contact-memory PHI records past the cutoff — per-call recaps,
   monthly survey scores, monthly family reports, and extracted/stated facts
   (``purge_memory_phi``; Clara Care Parity tables, review M5).
 Default-off: with PHI_RETENTION_DAYS unset the poller never starts, so existing
@@ -112,7 +112,7 @@ async def purge_expired(
     return deleted.rowcount or 0, scrubbed.rowcount or 0, target_scrub.rowcount or 0
 
 
-# Elder-memory PHI added by Clara Care Parity (002). Unlike call dynamic_vars (scrubbed in
+# Contact-memory PHI added by Clara Care Parity (002). Unlike call dynamic_vars (scrubbed in
 # place), these are standalone PHI records keyed by their own created_at, so once older than
 # the window they are DELETED outright. A fact still actively mentioned is re-extracted with a
 # fresh timestamp on the next call, so live memory survives while abandoned PHI is purged.
@@ -127,7 +127,7 @@ _MEMORY_PHI_MODELS = (
 async def purge_memory_phi(
     session: AsyncSession, *, days: int, now: datetime | None = None
 ) -> dict[str, int]:
-    """Delete elder-memory PHI rows older than the retention window (review M5).
+    """Delete contact-memory PHI rows older than the retention window (review M5).
 
     Returns a ``{table: rows_deleted}`` map. The caller commits — these run in the SAME
     transaction as ``purge_expired`` so a crash can't leave a partial purge. ``now``

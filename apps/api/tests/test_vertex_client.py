@@ -4,7 +4,7 @@ Gemini Developer API.
 Post-call summarization (US4), the monthly family-report narrative (US8), and the Admin
 Studio text-test all route through ``vertex_test._generate_sync``. A regression that built
 the client as the Gemini Developer API (``vertexai=False`` / ``api_key=...``) would silently
-egress transcript/elder PHI to a non-BAA-covered service — a Constitution II violation. The
+egress transcript/contact PHI to a non-BAA-covered service — a Constitution II violation. The
 existing summarization tests mock ``run_vertex_turn`` and so could not catch that; this pins
 the client construction itself.
 """

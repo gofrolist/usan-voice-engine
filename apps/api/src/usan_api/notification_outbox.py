@@ -36,7 +36,7 @@ async def flush_pending_notifications() -> None:
         await _flush_pending_notifications()
     except Exception as exc:  # noqa: BLE001 - a poller cycle must never crash the loop
         # Log only the exception TYPE, never str(exc): a DB/httpx message can embed SQL
-        # params or URLs tied to elder/family phone numbers (PHI-adjacent).
+        # params or URLs tied to contact/family phone numbers (PHI-adjacent).
         logger.bind(err=type(exc).__name__).error("Notification outbox flush crashed")
 
 
@@ -114,7 +114,7 @@ async def run_poller(settings: Settings, stop: asyncio.Event) -> None:
             await flush_pending_notifications()
         except Exception as exc:  # noqa: BLE001 - poller must survive; log TYPE only (PHI-safe)
             # Never opt(exception=True)/str(exc): a DB/httpx message can embed SQL params or
-            # URLs tied to elder/family phone numbers (matches this file's flush discipline).
+            # URLs tied to contact/family phone numbers (matches this file's flush discipline).
             log.bind(err=type(exc).__name__).error("Notification outbox cycle failed")
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(

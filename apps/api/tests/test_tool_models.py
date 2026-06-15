@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import MedicationLog, Transcript, WellnessLog
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.schemas.tools import (
     FlagForFollowupRequest,
     FollowupFlaggedResponse,
@@ -26,23 +26,23 @@ async def session_factory(async_database_url):
 async def _seed_call(factory):
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(db, name="A", phone_e164=phone, timezone="UTC")
         call = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.IN_PROGRESS,
             livekit_room="usan-outbound-tm",
         )
         await db.commit()
-        return call.id, elder.id
+        return call.id, contact.id
 
 
 @pytest.mark.asyncio
 async def test_wellness_log_round_trip(session_factory):
-    call_id, elder_id = await _seed_call(session_factory)
+    call_id, contact_id = await _seed_call(session_factory)
     async with session_factory() as db:
-        row = WellnessLog(call_id=call_id, elder_id=elder_id, mood=4, pain_level=2, notes="ok")
+        row = WellnessLog(call_id=call_id, contact_id=contact_id, mood=4, pain_level=2, notes="ok")
         db.add(row)
         await db.commit()
         await db.refresh(row)
@@ -59,10 +59,10 @@ async def test_wellness_log_round_trip(session_factory):
 
 @pytest.mark.asyncio
 async def test_medication_log_round_trip(session_factory):
-    call_id, elder_id = await _seed_call(session_factory)
+    call_id, contact_id = await _seed_call(session_factory)
     async with session_factory() as db:
         row = MedicationLog(
-            call_id=call_id, elder_id=elder_id, medication_name="Aspirin", taken=True
+            call_id=call_id, contact_id=contact_id, medication_name="Aspirin", taken=True
         )
         db.add(row)
         await db.commit()

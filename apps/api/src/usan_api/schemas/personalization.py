@@ -1,6 +1,6 @@
 """Request/response schemas for the personalization (memory) tools (US4 / T047).
 
-``record_personal_fact`` captures a durable fact the elder stated during the call.
+``record_personal_fact`` captures a durable fact the contact stated during the call.
 ``category`` is a CLOSED set (mirrors the ``personal_facts`` CHECK constraint), so an
 off-enum value is rejected with 422 before it can reach the DB (Constitution III).
 """

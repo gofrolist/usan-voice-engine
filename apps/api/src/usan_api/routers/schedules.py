@@ -1,15 +1,15 @@
-"""Operator CRUD for per-elder call schedules (spec §4.1).
+"""Operator CRUD for per-contact call schedules (spec §4.1).
 
 PHI note (spec §8): schedule ``dynamic_vars`` are LIVE re-used config exempt
 from retention; the operator PHI-removal path is PATCH (clear the vars) or
-DELETE. Audit log lines bind ids and the client IP only — never the elder's
+DELETE. Audit log lines bind ids and the client IP only — never the contact's
 name or the vars themselves.
 
 Timezone handling is fail-closed: ``schedule_windows.next_run_at`` raises
-``ValueError`` on an unresolvable elder timezone (or a quiet-hours-empty
+``ValueError`` on an unresolvable contact timezone (or a quiet-hours-empty
 window) and every compute site here maps that to 422 — including PATCH, where
-the elder's timezone may have gone bad after the schedule was created (the
-elder API only length-validates it).
+the contact's timezone may have gone bad after the schedule was created (the
+contact API only length-validates it).
 """
 
 import uuid
@@ -26,7 +26,7 @@ from usan_api.db.models import CallSchedule
 from usan_api.db.session import get_db
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import call_schedules as schedules_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.schedule_windows import days_to_mask, next_run_at
 from usan_api.schemas.schedule import (
     CreateScheduleRequest,
@@ -96,21 +96,21 @@ async def create_schedule(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> ScheduleResponse:
-    elder = await elders_repo.get_elder(db, body.elder_id)
-    if elder is None:
-        raise HTTPException(status_code=404, detail="elder not found")
+    contact = await contacts_repo.get_contact(db, body.contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="contact not found")
     if (
-        await schedules_repo.get_by_elder_slot(db, elder_id=body.elder_id, slot=body.slot)
+        await schedules_repo.get_by_contact_slot(db, contact_id=body.contact_id, slot=body.slot)
         is not None
     ):
-        raise HTTPException(status_code=409, detail=f"elder already has a {body.slot} schedule")
+        raise HTTPException(status_code=409, detail=f"contact already has a {body.slot} schedule")
     if body.profile_override is not None:
         await _require_live_override(db, body.profile_override)
-    computed = _compute_next_run_at(body, elder.timezone)
+    computed = _compute_next_run_at(body, contact.timezone)
     try:
         schedule = await schedules_repo.create_schedule(
             db,
-            elder_id=body.elder_id,
+            contact_id=body.contact_id,
             slot=body.slot,
             window_start_local=body.window_start_local,
             window_end_local=body.window_end_local,
@@ -122,18 +122,18 @@ async def create_schedule(
         )
         await db.commit()
     except IntegrityError as exc:
-        # Race fallback for the UNIQUE(elder_id, slot) pre-check above.
+        # Race fallback for the UNIQUE(contact_id, slot) pre-check above.
         await db.rollback()
         raise HTTPException(
-            status_code=409, detail=f"elder already has a {body.slot} schedule"
+            status_code=409, detail=f"contact already has a {body.slot} schedule"
         ) from exc
-    _audit(request, schedule.id, "schedule_created", elder_id=str(body.elder_id))
+    _audit(request, schedule.id, "schedule_created", contact_id=str(body.contact_id))
     return ScheduleResponse.from_model(schedule)
 
 
 @router.get("", response_model=list[ScheduleResponse])
 async def list_schedules(
-    elder_id: uuid.UUID | None = None,
+    contact_id: uuid.UUID | None = None,
     slot: Slot | None = None,
     last_result: str | None = None,
     limit: int = 100,
@@ -144,7 +144,7 @@ async def list_schedules(
     # ?slot=evening narrows to one slot (US5). The repository clamps limit/offset to
     # the bounded-read house rules.
     rows = await schedules_repo.list_schedules(
-        db, elder_id=elder_id, slot=slot, last_result=last_result, limit=limit, offset=offset
+        db, contact_id=contact_id, slot=slot, last_result=last_result, limit=limit, offset=offset
     )
     return [ScheduleResponse.from_model(s) for s in rows]
 
@@ -164,9 +164,9 @@ async def update_schedule(
     db: AsyncSession = Depends(get_db),
 ) -> ScheduleResponse:
     schedule = await _get_or_404(db, schedule_id)
-    elder = await elders_repo.get_elder(db, schedule.elder_id)
-    if elder is None:  # CASCADE makes this unreachable in practice; fail closed anyway.
-        raise HTTPException(status_code=404, detail="elder not found")
+    contact = await contacts_repo.get_contact(db, schedule.contact_id)
+    if contact is None:  # CASCADE makes this unreachable in practice; fail closed anyway.
+        raise HTTPException(status_code=404, detail="contact not found")
 
     # Merge (window fields travel together — schema-enforced) then revalidate the
     # merged state: override liveness, and window/days/tz via the recompute below.
@@ -184,7 +184,7 @@ async def update_schedule(
             await _require_live_override(db, body.profile_override)
         schedule.profile_override = body.profile_override
 
-    schedule.next_run_at = _compute_next_run_at(schedule, elder.timezone)
+    schedule.next_run_at = _compute_next_run_at(schedule, contact.timezone)
     await db.commit()
     # updated_at is server-generated (onupdate=func.now()), so the flushed UPDATE
     # expired it; refresh before serializing or the sync read raises MissingGreenlet.

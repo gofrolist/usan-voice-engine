@@ -13,7 +13,7 @@ from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import CallBatch, CallBatchTarget
 from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.schemas.batch import BatchTargetIn
 
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=UTC)
@@ -30,26 +30,28 @@ async def session_factory(async_database_url):
 async def _truncate(session_factory):
     async with session_factory() as db:
         await db.execute(
-            text("TRUNCATE call_batch_targets, call_batches, call_schedules, calls, elders CASCADE")
+            text(
+                "TRUNCATE call_batch_targets, call_batches, call_schedules, calls, contacts CASCADE"
+            )
         )
         await db.commit()
 
 
-async def _seed_elder(factory) -> uuid.UUID:
+async def _seed_contact(factory) -> uuid.UUID:
     phone = f"+1555{str(uuid.uuid4().int)[:7].zfill(7)}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(
-            db, name="Batch Elder", phone_e164=phone, timezone="America/New_York"
+        contact = await contacts_repo.create_contact(
+            db, name="Batch Contact", phone_e164=phone, timezone="America/New_York"
         )
         await db.commit()
-        return elder.id
+        return contact.id
 
 
-async def _seed_call(factory, elder_id: uuid.UUID) -> uuid.UUID:
+async def _seed_call(factory, contact_id: uuid.UUID) -> uuid.UUID:
     async with factory() as db:
         call = await calls_repo.create_call(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.QUEUED,
             livekit_room=f"usan-outbound-{uuid.uuid4()}",
@@ -67,7 +69,7 @@ async def _create_batch(
     max_concurrency: int | None = None,
     n_targets: int = 3,
 ) -> tuple[uuid.UUID, list[uuid.UUID]]:
-    elder_ids = [await _seed_elder(factory) for _ in range(n_targets)]
+    contact_ids = [await _seed_contact(factory) for _ in range(n_targets)]
     async with factory() as db:
         batch = await batches_repo.create_batch_with_targets(
             db,
@@ -80,10 +82,10 @@ async def _create_batch(
             days_of_week=None,
             max_concurrency=max_concurrency,
             profile_override=None,
-            targets=[BatchTargetIn(elder_id=eid) for eid in elder_ids],
+            targets=[BatchTargetIn(contact_id=eid) for eid in contact_ids],
         )
         await db.commit()
-        return batch.id, elder_ids
+        return batch.id, contact_ids
 
 
 async def _set_batch(factory, batch_id: uuid.UUID, **values) -> None:
@@ -101,7 +103,7 @@ async def _set_target(factory, target_id: int, **values) -> None:
 
 
 async def test_create_batch_with_targets_one_flush(session_factory):
-    elder_ids = [await _seed_elder(session_factory) for _ in range(3)]
+    contact_ids = [await _seed_contact(session_factory) for _ in range(3)]
     async with session_factory() as db:
         batch = await batches_repo.create_batch_with_targets(
             db,
@@ -115,9 +117,9 @@ async def test_create_batch_with_targets_one_flush(session_factory):
             max_concurrency=2,
             profile_override=None,
             targets=[
-                BatchTargetIn(elder_id=elder_ids[0], dynamic_vars={"first_name": "Rose"}),
-                BatchTargetIn(elder_id=elder_ids[1]),
-                BatchTargetIn(elder_id=elder_ids[2]),
+                BatchTargetIn(contact_id=contact_ids[0], dynamic_vars={"first_name": "Rose"}),
+                BatchTargetIn(contact_id=contact_ids[1]),
+                BatchTargetIn(contact_id=contact_ids[2]),
             ],
         )
         await db.commit()
@@ -130,13 +132,13 @@ async def test_create_batch_with_targets_one_flush(session_factory):
         targets = await batches_repo.list_targets(db, batch_id)
         assert [t.target_index for t in targets] == [0, 1, 2]
         assert all(t.status == "pending" for t in targets)
-        assert [t.elder_id for t in targets] == elder_ids
+        assert [t.contact_id for t in targets] == contact_ids
         assert targets[0].dynamic_vars == {"first_name": "Rose"}
         assert all(t.call_id is None for t in targets)
 
     # uq_call_batch_targets_idx: a duplicate (batch_id, target_index) cannot exist.
     async with session_factory() as db:
-        db.add(CallBatchTarget(batch_id=batch_id, target_index=1, elder_id=elder_ids[0]))
+        db.add(CallBatchTarget(batch_id=batch_id, target_index=1, contact_id=contact_ids[0]))
         with pytest.raises(IntegrityError):
             await db.flush()
 
@@ -202,12 +204,12 @@ async def test_claim_next_pending_target_order_and_throttle(session_factory):
         assert await batches_repo.claim_next_pending_target(db) is None  # drained
 
     # --- throttle: a batch at max_concurrency is passed over, others still served ---
-    gated_id, gated_elders = await _create_batch(session_factory, max_concurrency=1, n_targets=2)
+    gated_id, gated_contacts = await _create_batch(session_factory, max_concurrency=1, n_targets=2)
     await _set_batch(session_factory, gated_id, status="running", started_at=NOW)
     free_id, _ = await _create_batch(session_factory, n_targets=1)
     await _set_batch(session_factory, free_id, status="running", started_at=NOW)
 
-    call_id = await _seed_call(session_factory, gated_elders[0])
+    call_id = await _seed_call(session_factory, gated_contacts[0])
     async with session_factory() as db:
         gated_targets = await batches_repo.list_targets(db, gated_id)
         assert await batches_repo.mark_target_materialized(
@@ -272,9 +274,9 @@ async def test_claim_next_pending_target_skip_locked_under_open_txn(
 
 
 async def test_target_transitions_are_status_guarded(session_factory):
-    batch_id, elder_ids = await _create_batch(session_factory, n_targets=3)
+    batch_id, contact_ids = await _create_batch(session_factory, n_targets=3)
     await _set_batch(session_factory, batch_id, status="running", started_at=NOW)
-    call_id = await _seed_call(session_factory, elder_ids[0])
+    call_id = await _seed_call(session_factory, contact_ids[0])
 
     async with session_factory() as db:
         targets = await batches_repo.list_targets(db, batch_id)
@@ -324,10 +326,10 @@ async def test_target_transitions_are_status_guarded(session_factory):
     async with session_factory() as db:
         targets = await batches_repo.list_targets(db, batch_id)
         assert await batches_repo.mark_target_skipped(
-            db, targets[2], reason="elder_deleted", now=NOW
+            db, targets[2], reason="contact_deleted", now=NOW
         )
         assert targets[2].status == "skipped"
-        assert targets[2].skip_reason == "elder_deleted"
+        assert targets[2].skip_reason == "contact_deleted"
         await db.commit()
 
     async with session_factory() as db:
@@ -336,9 +338,9 @@ async def test_target_transitions_are_status_guarded(session_factory):
 
 
 async def test_cancel_batch_marks_pending_cancelled_and_is_guarded(session_factory):
-    batch_id, elder_ids = await _create_batch(session_factory, n_targets=3)
+    batch_id, contact_ids = await _create_batch(session_factory, n_targets=3)
     await _set_batch(session_factory, batch_id, status="running", started_at=NOW)
-    call_id = await _seed_call(session_factory, elder_ids[0])
+    call_id = await _seed_call(session_factory, contact_ids[0])
 
     async with session_factory() as db:
         targets = await batches_repo.list_targets(db, batch_id)

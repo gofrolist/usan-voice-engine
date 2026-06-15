@@ -10,13 +10,13 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.base import CallStatus, ProfileStatus
-from usan_api.db.models import AgentProfile, AgentProfileVersion, Elder
+from usan_api.db.models import AgentProfile, AgentProfileVersion, Contact
 from usan_api.quiet_hours import QUIET_END_HOUR, QUIET_START_HOUR
 from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig, ResolvedAgentConfig
 
 
 class ProfileInUseError(Exception):
-    """Archiving or defaulting is blocked (profile is a live default or assigned to elders).
+    """Archiving or defaulting is blocked (profile is a live default or assigned to contacts).
 
     The message is returned verbatim in the API 409 response body, so keep it
     user-facing and free of internal detail.
@@ -268,9 +268,9 @@ async def set_default(
     return profile
 
 
-async def count_assigned_elders(db: AsyncSession, profile_id: uuid.UUID) -> int:
+async def count_assigned_contacts(db: AsyncSession, profile_id: uuid.UUID) -> int:
     result = await db.execute(
-        select(func.count()).select_from(Elder).where(Elder.agent_profile_id == profile_id)
+        select(func.count()).select_from(Contact).where(Contact.agent_profile_id == profile_id)
     )
     return int(result.scalar_one())
 
@@ -281,8 +281,8 @@ async def archive_profile(db: AsyncSession, profile_id: uuid.UUID) -> AgentProfi
         return None
     if profile.is_default_inbound or profile.is_default_outbound:
         raise ProfileInUseError("profile is a live default; clear the default first")
-    if await count_assigned_elders(db, profile_id) > 0:
-        raise ProfileInUseError("profile is assigned to one or more elders")
+    if await count_assigned_contacts(db, profile_id) > 0:
+        raise ProfileInUseError("profile is assigned to one or more contacts")
     profile.status = ProfileStatus.ARCHIVED
     await db.flush()
     await db.refresh(profile)
@@ -380,16 +380,16 @@ async def resolve_agent_config(
     db: AsyncSession,
     *,
     profile_override: uuid.UUID | None,
-    elder_profile_id: uuid.UUID | None,
+    contact_profile_id: uuid.UUID | None,
     direction: Literal["inbound", "outbound"],
 ) -> ResolvedAgentConfig | None:
-    """Resolve the published config by precedence: override -> elder -> direction default.
+    """Resolve the published config by precedence: override -> contact -> direction default.
 
     Each candidate must be ACTIVE and have a published, valid version; otherwise the
     walk falls through. Returns None when nothing resolves (the router then returns
     DEFAULT_AGENT_CONFIG).
     """
-    for candidate_id in (profile_override, elder_profile_id):
+    for candidate_id in (profile_override, contact_profile_id):
         if candidate_id is None:
             continue
         profile = await get_profile(db, candidate_id)
@@ -433,17 +433,17 @@ async def resolve_call_policy(
     db: AsyncSession,
     *,
     profile_override: uuid.UUID | None,
-    elder_profile_id: uuid.UUID | None,
+    contact_profile_id: uuid.UUID | None,
     direction: Literal["inbound", "outbound"],
 ) -> ResolvedPolicy:
-    """Resolve the effective policy by precedence: override -> elder -> direction default.
+    """Resolve the effective policy by precedence: override -> contact -> direction default.
 
     Thin wrapper over resolve_agent_config: the policy comes from the SAME
     profile that walk picks — whole-profile precedence, never per-field merge
     (spec §3.3.2). If the winning profile resolves but carries ``policy=None``,
     the result is STATUTORY_POLICY even when a lower-precedence profile
     narrows; attaching a policy-less ``profile_override`` therefore loosens
-    quiet hours back to statutory relative to the elder's profile — still
+    quiet hours back to statutory relative to the contact's profile — still
     within the TCPA bound by construction (PolicyConfig validates
     narrowing-only).
 
@@ -456,7 +456,7 @@ async def resolve_call_policy(
     resolved = await resolve_agent_config(
         db,
         profile_override=profile_override,
-        elder_profile_id=elder_profile_id,
+        contact_profile_id=contact_profile_id,
         direction=direction,
     )
     if resolved is None or resolved.config.policy is None:

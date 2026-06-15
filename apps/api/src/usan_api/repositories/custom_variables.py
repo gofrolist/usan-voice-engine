@@ -121,7 +121,7 @@ async def phi_names(db: AsyncSession) -> frozenset[str]:
     return _drop_builtin_shadowed(result.scalars().all())
 
 
-# US4 (FR-024): contact_name became a builtin alias of elder_name. A custom row
+# US4 (FR-024): contact_name became a builtin alias of contact_name. A custom row
 # named contact_name declared BEFORE that change is now silently shadowed by the
 # builtin (the catalog merge / _drop_builtin_shadowed drops it). This is a
 # deploy-time guard so the operator is told once, by name only (spec §7).
@@ -143,7 +143,7 @@ async def warn_if_contact_name_custom_exists(db: AsyncSession) -> bool:
     if result.scalar_one_or_none() is None:
         return False
     logger.bind(name=_CONTACT_NAME).warning(
-        "custom variable {name} is now shadowed by the builtin alias of elder_name; "
+        "custom variable {name} is now shadowed by the builtin alias of contact_name; "
         "its definition is ignored — rename or remove it",
         name=_CONTACT_NAME,
     )

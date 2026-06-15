@@ -1,9 +1,9 @@
-"""T042 (US4): POST /v1/tools/record_personal_fact captures a durable elder fact.
+"""T042 (US4): POST /v1/tools/record_personal_fact captures a durable contact fact.
 
-Contract (contracts/tools-api.md): the agent calls this when the elder states a
-durable fact. It inserts a ``personal_facts`` row with ``source='elder_stated'`` and
+Contract (contracts/tools-api.md): the agent calls this when the contact states a
+durable fact. It inserts a ``personal_facts`` row with ``source='contact_stated'`` and
 returns ``{"id": <int>}``. The request mirrors every other tool: a JWT scoped to the
-call resolves the elder; ``category`` is a closed set; ``structured`` is optional.
+call resolves the contact; ``category`` is a closed set; ``structured`` is optional.
 
 Written FIRST (Constitution IV) — fails until the schema + repo + endpoint land.
 """
@@ -52,12 +52,12 @@ def _auth(call_id: str) -> dict:
     return {"Authorization": f"Bearer {_service_token(call_id)}"}
 
 
-async def _make_elder(session_factory) -> str:
+async def _make_contact(session_factory) -> str:
     async with session_factory() as db:
         eid = (
             await db.execute(
                 text(
-                    "INSERT INTO elders (name, phone_e164, timezone) "
+                    "INSERT INTO contacts (name, phone_e164, timezone) "
                     "VALUES ('Ada', :p, 'UTC') RETURNING id"
                 ),
                 {"p": f"+1555{str(uuid.uuid4().int)[:7]}"},
@@ -67,23 +67,27 @@ async def _make_elder(session_factory) -> str:
         return str(eid)
 
 
-async def _facts(session_factory, elder_id: str):
+async def _facts(session_factory, contact_id: str):
     async with session_factory() as db:
         return (
             await db.execute(
                 text(
                     "SELECT category, content, structured, source, active, phi "
-                    "FROM personal_facts WHERE elder_id = :e ORDER BY id"
+                    "FROM personal_facts WHERE contact_id = :e ORDER BY id"
                 ),
-                {"e": elder_id},
+                {"e": contact_id},
             )
         ).all()
 
 
-def _enqueue_call(client, elder_id: str) -> str:
+def _enqueue_call(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"pf-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"pf-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202, r.text
@@ -98,26 +102,26 @@ def _record(client, call_id: str, **body):
     )
 
 
-async def test_records_elder_stated_fact(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+async def test_records_contact_stated_fact(client, mock_dispatch, session_factory):
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
 
     r = _record(client, call_id, category="person", content="daughter Maria visits on Sundays")
     assert r.status_code == 200, r.text
     assert isinstance(r.json()["id"], int)
 
-    rows = await _facts(session_factory, elder_id)
+    rows = await _facts(session_factory, contact_id)
     assert len(rows) == 1
     assert rows[0].category == "person"
     assert rows[0].content == "daughter Maria visits on Sundays"
-    assert rows[0].source == "elder_stated"  # the tool never writes 'extracted'/'operator'
+    assert rows[0].source == "contact_stated"  # the tool never writes 'extracted'/'operator'
     assert rows[0].active is True
     assert rows[0].structured == {}  # omitted -> default empty object
 
 
 async def test_records_structured_payload(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
 
     r = _record(
         client,
@@ -127,40 +131,40 @@ async def test_records_structured_payload(client, mock_dispatch, session_factory
         structured={"date": "2026-07-04", "label": "birthday"},
     )
     assert r.status_code == 200, r.text
-    rows = await _facts(session_factory, elder_id)
+    rows = await _facts(session_factory, contact_id)
     assert rows[0].structured == {"date": "2026-07-04", "label": "birthday"}
 
 
 async def test_rejects_unknown_category(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
     # category is a closed set — an off-enum value never reaches the DB.
     r = _record(client, call_id, category="bank_pin", content="1234")
     assert r.status_code == 422, r.text
-    assert await _facts(session_factory, elder_id) == []
+    assert await _facts(session_factory, contact_id) == []
 
 
 async def test_health_context_defaults_phi_true(client, mock_dispatch, session_factory):
     # health_context is clinical: it MUST persist phi=true (data-model) so the PHI
     # governance/retention layer can treat it as protected.
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
     r = _record(client, call_id, category="health_context", content="uses a walker indoors")
     assert r.status_code == 200, r.text
-    rows = await _facts(session_factory, elder_id)
+    rows = await _facts(session_factory, contact_id)
     assert rows[0].phi is True
 
 
 async def test_token_scoped_to_other_call_is_rejected(client, mock_dispatch, session_factory):
-    # Same elder-scoping guard as every other tool: a JWT minted for call A cannot
+    # Same contact-scoping guard as every other tool: a JWT minted for call A cannot
     # write a fact under a body claiming call B (403 from _authorize_call).
-    elder_id = await _make_elder(session_factory)
-    call_a = _enqueue_call(client, elder_id)
-    call_b = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_a = _enqueue_call(client, contact_id)
+    call_b = _enqueue_call(client, contact_id)
     r = client.post(
         "/v1/tools/record_personal_fact",
         json={"call_id": call_b, "category": "preference", "content": "likes tea"},
         headers=_auth(call_a),
     )
     assert r.status_code == 403, r.text
-    assert await _facts(session_factory, elder_id) == []
+    assert await _facts(session_factory, contact_id) == []

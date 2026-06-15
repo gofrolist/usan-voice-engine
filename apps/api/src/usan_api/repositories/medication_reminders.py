@@ -24,7 +24,7 @@ from usan_api.db.models import MedicationReminder
 # (1 open + MAX_REASK_ATTEMPTS increments).
 MAX_REASK_ATTEMPTS = 3
 
-# Bound the per-elder pending injection so a backlog never floods the prompt.
+# Bound the per-contact pending injection so a backlog never floods the prompt.
 _MAX_PENDING_INJECT = 20
 
 
@@ -38,13 +38,13 @@ async def get_reminder(db: AsyncSession, reminder_id: int) -> MedicationReminder
 
 
 async def get_pending(
-    db: AsyncSession, *, elder_id: uuid.UUID, medication_name: str
+    db: AsyncSession, *, contact_id: uuid.UUID, medication_name: str
 ) -> MedicationReminder | None:
-    """The single pending re-ask for this (elder, medication), if any."""
+    """The single pending re-ask for this (contact, medication), if any."""
     stmt = (
         select(MedicationReminder)
         .where(
-            MedicationReminder.elder_id == elder_id,
+            MedicationReminder.contact_id == contact_id,
             MedicationReminder.medication_name == medication_name,
             MedicationReminder.status == "pending",
         )
@@ -54,13 +54,13 @@ async def get_pending(
 
 
 async def list_pending(
-    db: AsyncSession, *, elder_id: uuid.UUID, limit: int = _MAX_PENDING_INJECT
+    db: AsyncSession, *, contact_id: uuid.UUID, limit: int = _MAX_PENDING_INJECT
 ) -> list[MedicationReminder]:
-    """Pending re-asks for an elder (oldest first) — the source of pending_med_reasks."""
+    """Pending re-asks for an contact (oldest first) — the source of pending_med_reasks."""
     stmt = (
         select(MedicationReminder)
         .where(
-            MedicationReminder.elder_id == elder_id,
+            MedicationReminder.contact_id == contact_id,
             MedicationReminder.status == "pending",
         )
         .order_by(MedicationReminder.created_at, MedicationReminder.id)
@@ -72,7 +72,7 @@ async def list_pending(
 async def open_or_refresh(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     medication_name: str,
     call_id: uuid.UUID,
     max_attempts: int = MAX_REASK_ATTEMPTS,
@@ -85,12 +85,12 @@ async def open_or_refresh(
     follow-up flag exactly once). Idempotent against the rare concurrent-open race via the
     partial-unique ON CONFLICT. Flush-only.
     """
-    existing = await get_pending(db, elder_id=elder_id, medication_name=medication_name)
+    existing = await get_pending(db, contact_id=contact_id, medication_name=medication_name)
     if existing is None:
         insert_stmt = (
             pg_insert(MedicationReminder)
             .values(
-                elder_id=elder_id,
+                contact_id=contact_id,
                 medication_name=medication_name,
                 status="pending",
                 attempt_count=0,
@@ -98,7 +98,7 @@ async def open_or_refresh(
             )
             .on_conflict_do_nothing(
                 index_elements=[
-                    MedicationReminder.elder_id,
+                    MedicationReminder.contact_id,
                     MedicationReminder.medication_name,
                 ],
                 index_where=MedicationReminder.status == "pending",
@@ -112,7 +112,7 @@ async def open_or_refresh(
             assert created is not None  # just inserted in this txn
             return created, False
         # Conflict (rare race): a concurrent not-taken report opened it — refresh that row.
-        existing = await get_pending(db, elder_id=elder_id, medication_name=medication_name)
+        existing = await get_pending(db, contact_id=contact_id, medication_name=medication_name)
     if existing is None:  # pragma: no cover - the conflict guarantees a pending row exists
         raise RuntimeError("medication reminder conflict without a pending row")
 
@@ -132,13 +132,13 @@ async def open_or_refresh(
 
 
 async def clear_pending(
-    db: AsyncSession, *, elder_id: uuid.UUID, medication_name: str, call_id: uuid.UUID
+    db: AsyncSession, *, contact_id: uuid.UUID, medication_name: str, call_id: uuid.UUID
 ) -> MedicationReminder | None:
     """Confirmation: pending → cleared, recording which call confirmed it. Zero rows → None."""
     stmt = (
         update(MedicationReminder)
         .where(
-            MedicationReminder.elder_id == elder_id,
+            MedicationReminder.contact_id == contact_id,
             MedicationReminder.medication_name == medication_name,
             MedicationReminder.status == "pending",
         )

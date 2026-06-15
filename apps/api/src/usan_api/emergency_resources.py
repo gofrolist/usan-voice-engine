@@ -83,7 +83,7 @@ def get_resource(category: CrisisCategory) -> EmergencyResource:
 
 # Categories whose numbers compose the on-request informational SMS (US7 / FR-041),
 # general-emergency first. Drawn from the SAME catalog the crisis flow uses so the
-# numbers never drift; ``send_info_sms`` texts this list to the elder on request.
+# numbers never drift; ``send_info_sms`` texts this list to the contact on request.
 _INFO_SMS_CATEGORIES: tuple[CrisisCategory, ...] = ("medical", "suicidal", "overdose", "abuse")
 
 

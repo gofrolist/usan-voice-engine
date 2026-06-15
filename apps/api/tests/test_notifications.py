@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from usan_api import notifications
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import sms_messages as sms_repo
 
 # Clinical / PHI markers that must NEVER appear in a family-facing SMS body.
@@ -34,15 +34,17 @@ def _engine(url: str):
     return create_async_engine(url, poolclass=NullPool)
 
 
-async def _seed_elder(url: str) -> uuid.UUID:
+async def _seed_contact(url: str) -> uuid.UUID:
     engine = _engine(url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     try:
         async with factory() as db:
-            elder = await elders_repo.create_elder(db, name="Ada", phone_e164=phone, timezone="UTC")
+            contact = await contacts_repo.create_contact(
+                db, name="Ada", phone_e164=phone, timezone="UTC"
+            )
             await db.commit()
-            return elder.id
+            return contact.id
     finally:
         await engine.dispose()
 
@@ -69,7 +71,7 @@ def test_opt_out_ack_body_is_phi_minimized(client):
 
 
 def test_enqueue_family_alert_creates_pending_notification_row(client, async_database_url):
-    elder_id = asyncio.run(_seed_elder(async_database_url))
+    contact_id = asyncio.run(_seed_contact(async_database_url))
 
     async def _do():
         engine = _engine(async_database_url)
@@ -78,7 +80,7 @@ def test_enqueue_family_alert_creates_pending_notification_row(client, async_dat
             async with factory() as db:
                 row = await notifications.enqueue_family_alert(
                     db,
-                    elder_id=elder_id,
+                    contact_id=contact_id,
                     to_number=_FAMILY_NUMBER,
                     reason="crisis",
                     dedupe_key=f"crisis:{uuid.uuid4()}",
@@ -98,7 +100,7 @@ def test_enqueue_family_alert_creates_pending_notification_row(client, async_dat
 
 
 def test_enqueue_family_alert_is_idempotent_on_dedupe_key(client, async_database_url):
-    elder_id = asyncio.run(_seed_elder(async_database_url))
+    contact_id = asyncio.run(_seed_contact(async_database_url))
     dedupe = f"crisis:{uuid.uuid4()}"
 
     async def _do():
@@ -108,7 +110,7 @@ def test_enqueue_family_alert_is_idempotent_on_dedupe_key(client, async_database
             async with factory() as db:
                 first = await notifications.enqueue_family_alert(
                     db,
-                    elder_id=elder_id,
+                    contact_id=contact_id,
                     to_number=_FAMILY_NUMBER,
                     reason="crisis",
                     dedupe_key=dedupe,
@@ -116,7 +118,7 @@ def test_enqueue_family_alert_is_idempotent_on_dedupe_key(client, async_database
                 await db.commit()
                 second = await notifications.enqueue_family_alert(
                     db,
-                    elder_id=elder_id,
+                    contact_id=contact_id,
                     to_number=_FAMILY_NUMBER,
                     reason="crisis",
                     dedupe_key=dedupe,
@@ -136,7 +138,7 @@ def test_enqueue_family_alert_is_idempotent_on_dedupe_key(client, async_database
 
 
 def test_enqueue_opt_out_ack_creates_row(client, async_database_url):
-    elder_id = asyncio.run(_seed_elder(async_database_url))
+    contact_id = asyncio.run(_seed_contact(async_database_url))
 
     async def _do():
         engine = _engine(async_database_url)
@@ -145,7 +147,7 @@ def test_enqueue_opt_out_ack_creates_row(client, async_database_url):
             async with factory() as db:
                 row = await notifications.enqueue_opt_out_ack(
                     db,
-                    elder_id=elder_id,
+                    contact_id=contact_id,
                     to_number=_FAMILY_NUMBER,
                     dedupe_key=f"optout:{uuid.uuid4()}",
                 )

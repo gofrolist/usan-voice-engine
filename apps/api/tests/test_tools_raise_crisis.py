@@ -38,9 +38,9 @@ def _auth(call_id: str) -> dict:
     return {"Authorization": f"Bearer {_service_token(call_id)}"}
 
 
-def _create_elder(client, *, metadata: dict | None = None) -> str:
+def _create_contact(client, *, metadata: dict | None = None) -> str:
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={
             "name": "Ada",
             "phone_e164": f"+1555{str(uuid.uuid4().int)[:7]}",
@@ -53,11 +53,11 @@ def _create_elder(client, *, metadata: dict | None = None) -> str:
     return r.json()["id"]
 
 
-def _enqueue(client, elder_id: str) -> str:
+def _enqueue(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
         json={
-            "elder_id": elder_id,
+            "contact_id": contact_id,
             "idempotency_key": f"crisis-{uuid.uuid4()}",
             "dynamic_vars": {},
         },
@@ -78,8 +78,8 @@ _EXPECTED = {
 
 @pytest.mark.parametrize("category", list(_EXPECTED))
 def test_raise_crisis_returns_resource_per_category(client, mock_dispatch, category):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": category, "detection_source": "llm"},
@@ -95,8 +95,8 @@ def test_raise_crisis_returns_resource_per_category(client, mock_dispatch, categ
 
 
 def test_raise_crisis_idempotent_per_call_and_category(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     first = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "suicidal", "detection_source": "llm"},
@@ -114,8 +114,8 @@ def test_raise_crisis_idempotent_per_call_and_category(client, mock_dispatch):
 
 
 def test_raise_crisis_distinct_categories_are_distinct_flags(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     a = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "suicidal", "detection_source": "llm"},
@@ -130,8 +130,8 @@ def test_raise_crisis_distinct_categories_are_distinct_flags(client, mock_dispat
 
 
 def test_raise_crisis_requires_token(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "medical", "detection_source": "llm"},
@@ -140,8 +140,8 @@ def test_raise_crisis_requires_token(client, mock_dispatch):
 
 
 def test_raise_crisis_call_id_mismatch_403(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "medical", "detection_source": "llm"},
@@ -161,8 +161,8 @@ def test_raise_crisis_unknown_call_404(client, mock_dispatch):
 
 
 def test_raise_crisis_bad_category_422(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "panic", "detection_source": "llm"},
@@ -172,8 +172,8 @@ def test_raise_crisis_bad_category_422(client, mock_dispatch):
 
 
 def test_raise_crisis_bad_detection_source_422(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "medical", "detection_source": "guess"},

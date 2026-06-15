@@ -13,12 +13,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# E.164: a leading '+' then 1–15 digits (first non-zero). Mirrors the elder phone shape.
+# E.164: a leading '+' then 1–15 digits (first non-zero). Mirrors the contact phone shape.
 _E164 = r"^\+[1-9]\d{1,14}$"
 
 
 class FamilyContactCreate(BaseModel):
-    elder_id: uuid.UUID
+    contact_id: uuid.UUID
     name: str = Field(min_length=1, max_length=200)
     phone_e164: str = Field(pattern=_E164)
     relationship: str | None = Field(default=None, max_length=100)
@@ -38,7 +38,7 @@ class FamilyContactOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    elder_id: uuid.UUID
+    contact_id: uuid.UUID
     name: str
     phone_e164: str
     relationship: str | None
@@ -51,7 +51,7 @@ class FamilyTaskOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    elder_id: uuid.UUID
+    contact_id: uuid.UUID
     family_contact_id: uuid.UUID | None
     message: str
     status: str
@@ -74,8 +74,8 @@ class FamilyReportOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    elder_id: uuid.UUID
-    elder_name: str | None = None  # outer-join; None if the elder row was deleted
+    contact_id: uuid.UUID
+    contact_name: str | None = None  # outer-join; None if the contact row was deleted
     period_month: date
     calls_completed: int
     metrics: dict[str, Any]

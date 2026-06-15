@@ -33,7 +33,7 @@ def build_matcher(trigger_phrases: list[str]) -> "re.Pattern[str]":
 
     Empty (or all-blank) phrases -> the built-in §7 _PATTERN. Phrases are re.escape'd
     and OR-joined so admin input is matched literally (never as a regex) — a false
-    positive would hang up on a live elder.
+    positive would hang up on a live contact.
     """
     cleaned = [p for p in trigger_phrases if p and p.strip()]
     if not cleaned:

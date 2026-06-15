@@ -46,7 +46,7 @@ function baseConfig(): AgentConfig {
       checkin_flow_instructions: "flow",
       goodbye_message: "bye",
       inbound_opening: "open",
-      inbound_personalization_template: "with {elder_name}",
+      inbound_personalization_template: "with {contact_name}",
     },
     voice: { cartesia_voice_id: null, tts_model: null, speed: null, language: null },
     llm: { model: "gemini-3.1-flash-lite", temperature: null },

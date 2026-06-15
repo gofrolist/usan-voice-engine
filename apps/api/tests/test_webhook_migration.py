@@ -356,7 +356,7 @@ def test_downgrade_seed_upgrade_roundtrip(database_url: str, async_database_url:
         assert asyncio.run(_columns(async_database_url, "webhook_deliveries")) == {}
 
         # Seed one minimal business row while downgraded: NOT NULL columns only,
-        # nullable FKs (elder_id) left NULL.
+        # nullable FKs (contact_id) left NULL.
         asyncio.run(
             _execute(
                 async_database_url,

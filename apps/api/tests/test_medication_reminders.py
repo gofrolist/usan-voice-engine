@@ -55,12 +55,12 @@ def _auth(call_id: str) -> dict:
     return {"Authorization": f"Bearer {_service_token(call_id)}"}
 
 
-async def _make_elder(session_factory) -> str:
+async def _make_contact(session_factory) -> str:
     async with session_factory() as db:
         eid = (
             await db.execute(
                 text(
-                    "INSERT INTO elders (name, phone_e164, timezone) "
+                    "INSERT INTO contacts (name, phone_e164, timezone) "
                     "VALUES ('Ada', :p, 'UTC') RETURNING id"
                 ),
                 {"p": f"+1555{str(uuid.uuid4().int)[:7]}"},
@@ -70,37 +70,41 @@ async def _make_elder(session_factory) -> str:
         return str(eid)
 
 
-async def _reminders(session_factory, elder_id: str):
+async def _reminders(session_factory, contact_id: str):
     async with session_factory() as db:
         return (
             await db.execute(
                 text(
                     "SELECT medication_name, status, attempt_count, opened_call_id, "
-                    "cleared_call_id FROM medication_reminders WHERE elder_id = :e "
+                    "cleared_call_id FROM medication_reminders WHERE contact_id = :e "
                     "ORDER BY id"
                 ),
-                {"e": elder_id},
+                {"e": contact_id},
             )
         ).all()
 
 
-async def _med_flags(session_factory, elder_id: str):
+async def _med_flags(session_factory, contact_id: str):
     async with session_factory() as db:
         return (
             await db.execute(
                 text(
                     "SELECT severity, category FROM follow_up_flags "
-                    "WHERE elder_id = :e AND category = 'medication' ORDER BY id"
+                    "WHERE contact_id = :e AND category = 'medication' ORDER BY id"
                 ),
-                {"e": elder_id},
+                {"e": contact_id},
             )
         ).all()
 
 
-def _enqueue_call(client, elder_id: str) -> str:
+def _enqueue_call(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"med-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"med-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202, r.text
@@ -116,14 +120,14 @@ def _log_med(client, call_id: str, name: str, *, taken: bool):
 
 
 async def test_not_taken_opens_pending_reminder(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
 
     r = _log_med(client, call_id, "Lisinopril", taken=False)
     assert r.status_code == 200, r.text
     assert isinstance(r.json()["id"], int)  # response shape unchanged (medication_log id)
 
-    rows = await _reminders(session_factory, elder_id)
+    rows = await _reminders(session_factory, contact_id)
     assert len(rows) == 1
     assert rows[0].medication_name == "Lisinopril"
     assert rows[0].status == "pending"
@@ -133,14 +137,14 @@ async def test_not_taken_opens_pending_reminder(client, mock_dispatch, session_f
 
 
 async def test_taken_clears_pending_reminder(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
 
     assert _log_med(client, call_id, "Lisinopril", taken=False).status_code == 200
     # Confirmation on a later turn / call clears the pending re-ask.
     assert _log_med(client, call_id, "Lisinopril", taken=True).status_code == 200
 
-    rows = await _reminders(session_factory, elder_id)
+    rows = await _reminders(session_factory, contact_id)
     assert len(rows) == 1
     assert rows[0].status == "cleared"
     assert str(rows[0].cleared_call_id) == call_id
@@ -151,55 +155,55 @@ async def test_taken_clears_pending_reminder(client, mock_dispatch, session_fact
 async def test_repeated_not_taken_refreshes_single_pending_row(
     client, mock_dispatch, session_factory
 ):
-    # The partial-unique (one pending per (elder, med)) means a repeated not-taken
+    # The partial-unique (one pending per (contact, med)) means a repeated not-taken
     # report does NOT create a duplicate — it refreshes the same row and increments.
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
 
     assert _log_med(client, call_id, "Lisinopril", taken=False).status_code == 200
     assert _log_med(client, call_id, "Lisinopril", taken=False).status_code == 200
 
-    rows = await _reminders(session_factory, elder_id)
+    rows = await _reminders(session_factory, contact_id)
     assert len(rows) == 1
     assert rows[0].status == "pending"
     assert rows[0].attempt_count == 1  # one re-ask increment over the initial open
 
 
 async def test_taken_with_no_pending_is_noop(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
 
     # Confirming a med that was never flagged not-taken simply logs; no reminder row.
     assert _log_med(client, call_id, "Metformin", taken=True).status_code == 200
-    assert await _reminders(session_factory, elder_id) == []
+    assert await _reminders(session_factory, contact_id) == []
 
 
 async def test_distinct_meds_get_independent_reminders(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
 
     assert _log_med(client, call_id, "Lisinopril", taken=False).status_code == 200
     assert _log_med(client, call_id, "Metformin", taken=False).status_code == 200
     # Clearing one leaves the other pending.
     assert _log_med(client, call_id, "Lisinopril", taken=True).status_code == 200
 
-    rows = {r.medication_name: r.status for r in await _reminders(session_factory, elder_id)}
+    rows = {r.medication_name: r.status for r in await _reminders(session_factory, contact_id)}
     assert rows == {"Lisinopril": "cleared", "Metformin": "pending"}
 
 
 async def test_clear_pending_works_across_calls(client, mock_dispatch, session_factory):
     # The real product flow: not-taken on one day's call, confirmed on a LATER call (a
-    # different call_id). clear_pending matches by (elder, med, pending) regardless of which
+    # different call_id). clear_pending matches by (contact, med, pending) regardless of which
     # call opened it, and stamps the CLEARING call. A regression scoping the clear to the
     # opener would leave the reminder pending and nag forever.
-    elder_id = await _make_elder(session_factory)
-    call_a = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_a = _enqueue_call(client, contact_id)
     assert _log_med(client, call_a, "Lisinopril", taken=False).status_code == 200
 
-    call_b = _enqueue_call(client, elder_id)
+    call_b = _enqueue_call(client, contact_id)
     assert _log_med(client, call_b, "Lisinopril", taken=True).status_code == 200
 
-    rows = await _reminders(session_factory, elder_id)
+    rows = await _reminders(session_factory, contact_id)
     assert len(rows) == 1
     assert rows[0].status == "cleared"
     assert str(rows[0].opened_call_id) == call_a
@@ -210,35 +214,35 @@ async def test_reopen_after_capped_starts_a_new_cycle(client, mock_dispatch, ses
     # Per-cycle cap (FR-019): after a med caps, a FRESH not-taken report is a new clinical
     # signal that opens a NEW pending cycle (attempt_count 0) — but does NOT raise a second
     # routine flag on the reopen itself (only when that new cycle later re-caps).
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
     for _ in range(MAX_REASK_ATTEMPTS + 1):  # 1 open + MAX increments -> capped
         assert _log_med(client, call_id, "Lisinopril", taken=False).status_code == 200
-    assert [r.status for r in await _reminders(session_factory, elder_id)] == ["capped"]
-    assert len(await _med_flags(session_factory, elder_id)) == 1
+    assert [r.status for r in await _reminders(session_factory, contact_id)] == ["capped"]
+    assert len(await _med_flags(session_factory, contact_id)) == 1
 
     # A new not-taken report after the cap reopens a fresh pending cycle...
     assert _log_med(client, call_id, "Lisinopril", taken=False).status_code == 200
-    rows = await _reminders(session_factory, elder_id)
+    rows = await _reminders(session_factory, contact_id)
     assert [r.status for r in rows] == ["capped", "pending"]
     assert rows[1].attempt_count == 0
     # ...without immediately double-flagging the operator queue.
-    assert len(await _med_flags(session_factory, elder_id)) == 1
+    assert len(await _med_flags(session_factory, contact_id)) == 1
 
 
 async def test_partial_unique_blocks_a_second_pending_row(session_factory):
     # The DB partial-unique index (WHERE status='pending') is the real guard behind the
-    # refresh-don't-duplicate behavior: two pending rows for one (elder, med) are impossible
+    # refresh-don't-duplicate behavior: two pending rows for one (contact, med) are impossible
     # even under a concurrent insert. (cleared/capped rows are unconstrained — history.)
-    elder_id = await _make_elder(session_factory)
+    contact_id = await _make_contact(session_factory)
     insert = (
-        "INSERT INTO medication_reminders (elder_id, medication_name, status) "
+        "INSERT INTO medication_reminders (contact_id, medication_name, status) "
         "VALUES (CAST(:e AS uuid), 'Lisinopril', 'pending')"
     )
 
     async def _insert_pending() -> None:
         async with session_factory() as db:
-            await db.execute(text(insert), {"e": elder_id})
+            await db.execute(text(insert), {"e": contact_id})
             await db.commit()
 
     await _insert_pending()

@@ -11,7 +11,7 @@ def test_call_schedule_columns_and_fk():
     cols = CallSchedule.__table__.columns
     assert {
         "id",
-        "elder_id",
+        "contact_id",
         "slot",
         "enabled",
         "window_start_local",
@@ -27,12 +27,12 @@ def test_call_schedule_columns_and_fk():
         "updated_at",
     } <= set(cols.keys())
     # Read FK rules without mutating the shared Table metadata (no .pop()).
-    # CASCADE: a schedule is meaningless without its elder. US5 relaxed the inline
-    # one-schedule-per-elder UNIQUE to a composite UNIQUE(elder_id, slot) owned by
-    # migration 0022 (not expressed on the model), so elder_id no longer carries a
+    # CASCADE: a schedule is meaningless without its contact. US5 relaxed the inline
+    # one-schedule-per-contact UNIQUE to a composite UNIQUE(contact_id, slot) owned by
+    # migration 0022 (not expressed on the model), so contact_id no longer carries a
     # column-level unique; slot defaults to 'morning'.
-    assert next(iter(cols["elder_id"].foreign_keys)).ondelete == "CASCADE"
-    assert not cols["elder_id"].unique
+    assert next(iter(cols["contact_id"].foreign_keys)).ondelete == "CASCADE"
+    assert not cols["contact_id"].unique
     assert "morning" in str(cols["slot"].server_default.arg)
     assert next(iter(cols["profile_override"].foreign_keys)).ondelete == "SET NULL"
     assert "127" in str(cols["days_of_week"].server_default.arg)
@@ -55,10 +55,10 @@ def test_call_batch_target_columns_and_fks():
     assert CallBatchTarget.__tablename__ == "call_batch_targets"
     cols = CallBatchTarget.__table__.columns
     assert next(iter(cols["batch_id"].foreign_keys)).ondelete == "CASCADE"
-    # SET NULL (not CASCADE): a deleted elder must not silently shrink the batch;
-    # the poller marks the orphan target skipped/elder_deleted instead.
-    assert next(iter(cols["elder_id"].foreign_keys)).ondelete == "SET NULL"
-    assert cols["elder_id"].nullable
+    # SET NULL (not CASCADE): a deleted contact must not silently shrink the batch;
+    # the poller marks the orphan target skipped/contact_deleted instead.
+    assert next(iter(cols["contact_id"].foreign_keys)).ondelete == "SET NULL"
+    assert cols["contact_id"].nullable
     assert next(iter(cols["call_id"].foreign_keys)).ondelete == "SET NULL"
     assert "'pending'" in str(cols["status"].server_default.arg)
     assert isinstance(cols["dynamic_vars"].type, JSONB)

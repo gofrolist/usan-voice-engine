@@ -1,10 +1,10 @@
 """US5 — per-slot (morning|evening) schedule materialization (spec §4.1 / Phase 7).
 
-An elder may have one schedule per slot; each slot is its own ``call_schedules``
+An contact may have one schedule per slot; each slot is its own ``call_schedules``
 row with its own window/days/enabled flag and its own ``sched:{id}:{day}``
 idempotency key, so the existing phase-3 materializer iterates them
 independently. Pins the US5 independent test: two enabled slots -> two calls;
-evening disabled -> only morning; elder on DNC -> neither dials (both blocked +
+evening disabled -> only morning; contact on DNC -> neither dials (both blocked +
 auto-disabled).
 """
 
@@ -19,8 +19,8 @@ from usan_api import schedule_orchestrator
 from usan_api.db.base import CallStatus
 from usan_api.db.models import Call, CallSchedule
 from usan_api.repositories import call_schedules as schedules_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import dnc as dnc_repo
-from usan_api.repositories import elders as elders_repo
 from usan_api.settings import Settings
 
 # Wednesday 2026-06-10 15:00Z = 11:00 EDT — inside a 09:00-17:00 NY window for both slots.
@@ -41,7 +41,7 @@ async def _truncate(session_factory):
         await db.execute(
             text(
                 "TRUNCATE call_batch_targets, call_batches, call_schedules, calls, "
-                "dnc_list, elders CASCADE"
+                "dnc_list, contacts CASCADE"
             )
         )
         await db.commit()
@@ -60,21 +60,21 @@ def _settings(**overrides) -> Settings:
     return Settings(**base)
 
 
-async def _seed_elder(factory):
+async def _seed_contact(factory):
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(
+        contact = await contacts_repo.create_contact(
             db, name="S", phone_e164=phone, timezone="America/New_York"
         )
         await db.commit()
-    return elder
+    return contact
 
 
-async def _seed_slot(factory, elder_id, *, slot, next_run_at, enabled=True):
+async def _seed_slot(factory, contact_id, *, slot, next_run_at, enabled=True):
     async with factory() as db:
         row = await schedules_repo.create_schedule(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             slot=slot,
             window_start_local=time(9, 0),
             window_end_local=time(17, 0),
@@ -95,12 +95,12 @@ async def _calls(factory):
 
 
 async def test_both_slots_materialize_two_calls(session_factory):
-    elder = await _seed_elder(session_factory)
+    contact = await _seed_contact(session_factory)
     morning = await _seed_slot(
-        session_factory, elder.id, slot="morning", next_run_at=NOW - timedelta(hours=2)
+        session_factory, contact.id, slot="morning", next_run_at=NOW - timedelta(hours=2)
     )
     evening = await _seed_slot(
-        session_factory, elder.id, slot="evening", next_run_at=NOW - timedelta(hours=1)
+        session_factory, contact.id, slot="evening", next_run_at=NOW - timedelta(hours=1)
     )
 
     counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=NOW)
@@ -118,13 +118,13 @@ async def test_both_slots_materialize_two_calls(session_factory):
 
 
 async def test_evening_disabled_only_morning_materializes(session_factory):
-    elder = await _seed_elder(session_factory)
+    contact = await _seed_contact(session_factory)
     morning = await _seed_slot(
-        session_factory, elder.id, slot="morning", next_run_at=NOW - timedelta(hours=2)
+        session_factory, contact.id, slot="morning", next_run_at=NOW - timedelta(hours=2)
     )
     await _seed_slot(
         session_factory,
-        elder.id,
+        contact.id,
         slot="evening",
         enabled=False,
         next_run_at=NOW - timedelta(hours=1),
@@ -140,15 +140,15 @@ async def test_evening_disabled_only_morning_materializes(session_factory):
 
 
 async def test_dnc_blocks_both_slots(session_factory):
-    elder = await _seed_elder(session_factory)
+    contact = await _seed_contact(session_factory)
     await _seed_slot(
-        session_factory, elder.id, slot="morning", next_run_at=NOW - timedelta(hours=2)
+        session_factory, contact.id, slot="morning", next_run_at=NOW - timedelta(hours=2)
     )
     await _seed_slot(
-        session_factory, elder.id, slot="evening", next_run_at=NOW - timedelta(hours=1)
+        session_factory, contact.id, slot="evening", next_run_at=NOW - timedelta(hours=1)
     )
     async with session_factory() as db:
-        await dnc_repo.add_entry(db, elder.phone_e164, "asked to stop")
+        await dnc_repo.add_entry(db, contact.phone_e164, "asked to stop")
         await db.commit()
 
     counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=NOW)
@@ -165,22 +165,22 @@ async def test_dnc_blocks_both_slots(session_factory):
 
 
 async def test_daily_cap_bounds_total_roots_across_slots(session_factory):
-    # US5 cap coupling (documented in settings.py): the per-elder daily cap bounds
+    # US5 cap coupling (documented in settings.py): the per-contact daily cap bounds
     # TOTAL autonomous roots/day across BOTH slots. With cap=1 the earlier slot
     # (morning) dials and the evening is skipped_daily_cap — observably, and the
     # evening schedule stays enabled to retry next day (no silent drop, no
     # auto-disable). This pins the harassment-guard contract rather than forbidding
     # a cap of 1 (a valid single-slot ceiling).
-    elder = await _seed_elder(session_factory)
+    contact = await _seed_contact(session_factory)
     morning = await _seed_slot(
-        session_factory, elder.id, slot="morning", next_run_at=NOW - timedelta(hours=2)
+        session_factory, contact.id, slot="morning", next_run_at=NOW - timedelta(hours=2)
     )
     await _seed_slot(
-        session_factory, elder.id, slot="evening", next_run_at=NOW - timedelta(hours=1)
+        session_factory, contact.id, slot="evening", next_run_at=NOW - timedelta(hours=1)
     )
 
     counts = await schedule_orchestrator.poll_once(
-        session_factory, _settings(MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY="1"), now=NOW
+        session_factory, _settings(MAX_AUTONOMOUS_CALLS_PER_CONTACT_PER_DAY="1"), now=NOW
     )
 
     assert counts["schedules"] == 2  # both rows claimed and processed
@@ -188,7 +188,9 @@ async def test_daily_cap_bounds_total_roots_across_slots(session_factory):
     assert len(calls) == 1  # only the earlier slot materialized a dial
     assert calls[0].idempotency_key == f"sched:{morning}:{TODAY.isoformat()}"
     async with session_factory() as db:
-        evening_row = await schedules_repo.get_by_elder_slot(db, elder_id=elder.id, slot="evening")
+        evening_row = await schedules_repo.get_by_contact_slot(
+            db, contact_id=contact.id, slot="evening"
+        )
         assert evening_row is not None
         assert evening_row.last_result == "skipped_daily_cap"
         assert evening_row.enabled is True  # stays enabled; retries next day

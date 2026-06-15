@@ -59,8 +59,8 @@ describe("NavSidebar Operate group", () => {
     renderSidebar();
     await screen.findByText("me@example.com");
     expect(screen.queryByRole("link", { name: "Contacts" })).not.toBeInTheDocument();
-    // The legacy "Elders" label is fully gone from the nav (US4 / SC-007).
-    expect(screen.queryByRole("link", { name: "Elders" })).not.toBeInTheDocument();
+    // The legacy "Contacts" label is fully gone from the nav (US4 / SC-007).
+    expect(screen.queryByRole("link", { name: "Contacts" })).not.toBeInTheDocument();
     // Operate links are not adminOnly — still present for the viewer.
     expect(screen.getByRole("link", { name: "Calls" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Queues" })).toBeInTheDocument();

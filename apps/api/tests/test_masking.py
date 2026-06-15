@@ -1,6 +1,6 @@
 """Unit tests for ``usan_api.masking`` — the admin-plane phone masking helper.
 
-``mask_phone`` is the extraction of ``routers/admin_elders.py::_mask`` and must stay
+``mask_phone`` is the extraction of ``routers/admin_contacts.py::_mask`` and must stay
 bit-identical to it: ``'***' + last 4`` when a phone is present, ``'unknown'`` when
 absent. It is the ONLY phone rendering permitted in admin-plane response bodies
 (spec §6.3).

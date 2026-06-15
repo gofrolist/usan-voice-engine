@@ -14,7 +14,7 @@ export function isCallInProgress(status: string): boolean {
 }
 
 export interface CallsFilters {
-  elderId?: string;
+  contactId?: string;
   status?: string;
   direction?: string;
   origin?: string;
@@ -26,7 +26,7 @@ export interface CallsFilters {
 // The global refetchOnWindowFocus: false default (queryClient.ts) stands here.
 export function useCalls(filters: CallsFilters, limit: number, offset: number) {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  if (filters.elderId) params.set("elder_id", filters.elderId);
+  if (filters.contactId) params.set("contact_id", filters.contactId);
   if (filters.status) params.set("status", filters.status);
   if (filters.direction) params.set("direction", filters.direction);
   if (filters.origin) params.set("origin", filters.origin);

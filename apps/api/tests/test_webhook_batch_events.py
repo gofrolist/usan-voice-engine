@@ -23,7 +23,7 @@ from usan_api import schedule_orchestrator, webhook_events
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, CallBatch, CallBatchTarget, WebhookDelivery, WebhookEndpoint
 from usan_api.repositories import call_batches as batches_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.schemas.batch import BatchTargetIn
 
 NOW = datetime(2026, 6, 10, 15, 0, tzinfo=UTC)
@@ -47,7 +47,7 @@ async def _truncate(session_factory):
             await db.execute(
                 text(
                     "TRUNCATE webhook_deliveries, webhook_endpoints, "
-                    "call_batch_targets, call_batches, calls, elders CASCADE"
+                    "call_batch_targets, call_batches, calls, contacts CASCADE"
                 )
             )
             await db.commit()
@@ -79,13 +79,15 @@ async def _seed_settled_batch(
 ) -> uuid.UUID:
     """One batch forced to ``status`` with every target settled ``done`` —
     drained, so phase 6 stamps it on the next run."""
-    elder_ids = []
+    contact_ids = []
     for _ in final_statuses:
         phone = f"+1555{str(uuid.uuid4().int)[:7]}"
         async with factory() as db:
-            elder = await elders_repo.create_elder(db, name="S", phone_e164=phone, timezone="UTC")
+            contact = await contacts_repo.create_contact(
+                db, name="S", phone_e164=phone, timezone="UTC"
+            )
             await db.commit()
-            elder_ids.append(elder.id)
+            contact_ids.append(contact.id)
     async with factory() as db:
         batch = await batches_repo.create_batch_with_targets(
             db,
@@ -98,7 +100,7 @@ async def _seed_settled_batch(
             days_of_week=None,
             max_concurrency=None,
             profile_override=None,
-            targets=[BatchTargetIn(elder_id=eid) for eid in elder_ids],
+            targets=[BatchTargetIn(contact_id=eid) for eid in contact_ids],
         )
         batch.status = status
         batch.started_at = NOW
@@ -256,15 +258,15 @@ def test_cancel_endpoint_emits_no_batch_event(client, operator_headers, async_da
     # re-cancel cannot double-emit.
     phone = f"+1555{str(uuid.uuid4().int)[:7].zfill(7)}"
     r = client.post(
-        "/v1/elders",
-        json={"name": "Rose Elder", "phone_e164": phone, "timezone": "America/New_York"},
+        "/v1/contacts",
+        json={"name": "Rose Contact", "phone_e164": phone, "timezone": "America/New_York"},
         headers=operator_headers,
     )
     assert r.status_code == 201
-    elder_id = r.json()["id"]
+    contact_id = r.json()["id"]
     r = client.post(
         "/v1/batches",
-        json={"name": "June campaign", "targets": [{"elder_id": elder_id}]},
+        json={"name": "June campaign", "targets": [{"contact_id": contact_id}]},
         headers=operator_headers,
     )
     assert r.status_code == 201
@@ -284,7 +286,7 @@ def test_cancel_endpoint_emits_no_batch_event(client, operator_headers, async_da
             .values(status="running", started_at=NOW)
         )
         call = Call(
-            elder_id=uuid.UUID(elder_id),
+            contact_id=uuid.UUID(contact_id),
             direction=CallDirection.OUTBOUND,
             status=CallStatus.IN_PROGRESS,
             livekit_room=f"usan-outbound-{uuid.uuid4()}",

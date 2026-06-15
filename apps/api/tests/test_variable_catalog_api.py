@@ -8,11 +8,9 @@ from sqlalchemy.pool import NullPool
 from usan_api.schemas.variable_catalog import BUILTIN_VARIABLES
 
 # The builtins in canonical catalog/display order (design §3.1) — the merge
-# keeps them first, before any customs (spec §3.2). contact_name (US4 / FR-024)
-# is the elder_name alias, listed adjacent to it.
+# keeps them first, before any customs (spec §3.2).
 BUILTIN_ORDER = [
     "first_name",
-    "elder_name",
     "contact_name",
     "call_direction",
     "current_time",
@@ -131,7 +129,7 @@ def test_builtin_shadowed_custom_dropped_and_logged(client, admin_session, async
     # Create-time validation rejects collisions with *today's* builtins, but a
     # future builtin can collide with a pre-existing custom row. The merge drops
     # the custom and warns with the name only (spec §3.2).
-    asyncio.run(_insert_custom_raw(async_database_url, "elder_name"))
+    asyncio.run(_insert_custom_raw(async_database_url, "contact_name"))
 
     records: list[dict] = []
     handler_id = logger.add(lambda m: records.append(m.record), level="WARNING")
@@ -140,11 +138,11 @@ def test_builtin_shadowed_custom_dropped_and_logged(client, admin_session, async
     finally:
         logger.remove(handler_id)
 
-    matches = [v for v in variables if v["name"] == "elder_name"]
+    matches = [v for v in variables if v["name"] == "contact_name"]
     assert len(matches) == 1
     assert matches[0]["tier"] == "builtin"
 
     shadow = [r for r in records if "shadowed by builtin" in r["message"]]
     assert len(shadow) == 1
     # Bound with the variable *name* only — never values (spec §7).
-    assert shadow[0]["extra"]["name"] == "elder_name"
+    assert shadow[0]["extra"]["name"] == "contact_name"

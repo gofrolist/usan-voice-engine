@@ -35,24 +35,14 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
     VariableSpec(
         name="first_name",
         tier="builtin",
-        description="The elder's first name (first word of their full name).",
+        description="The contact's first name (first word of their full name).",
         default="there",
         example="Margaret",
     ),
     VariableSpec(
-        name="elder_name",
-        tier="builtin",
-        description="The elder's full name.",
-        default="there",
-        example="Margaret Doe",
-    ),
-    # contact_name is a permanent alias of elder_name (US4 / FR-024): same
-    # elder.name source, same "there" default, PHI-free. Kept adjacent so the
-    # two builtins stay in lockstep with the agent mirror (prompt_vars.py).
-    VariableSpec(
         name="contact_name",
         tier="builtin",
-        description="The contact's full name (alias of elder_name).",
+        description="The contact's full name.",
         default="there",
         example="Margaret Doe",
     ),
@@ -66,21 +56,21 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
     VariableSpec(
         name="current_time",
         tier="builtin",
-        description="Current local time in the elder's timezone.",
+        description="Current local time in the contact's timezone.",
         default="",
         example="9:15 AM",
     ),
     VariableSpec(
         name="current_date",
         tier="builtin",
-        description="Today's local date in the elder's timezone.",
+        description="Today's local date in the contact's timezone.",
         default="",
         example="Monday, June 8",
     ),
     VariableSpec(
         name="last_check_in",
         tier="builtin",
-        description="Summary of the elder's most recent wellness check-in.",
+        description="Summary of the contact's most recent wellness check-in.",
         default="",
         example="on 2026-06-05, mood 4/5, pain 2/10",
         phi=True,
@@ -96,7 +86,7 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
     VariableSpec(
         name="last_mood",
         tier="builtin",
-        description="The elder's most recent mood rating (1-5).",
+        description="The contact's most recent mood rating (1-5).",
         default="",
         example="4",
         phi=True,
@@ -104,7 +94,7 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
     VariableSpec(
         name="last_pain",
         tier="builtin",
-        description="The elder's most recent pain level (0-10).",
+        description="The contact's most recent pain level (0-10).",
         default="",
         example="2",
         phi=True,
@@ -112,13 +102,13 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
     VariableSpec(
         name="today_meds",
         tier="builtin",
-        description="Comma-separated names of the elder's medications scheduled today.",
+        description="Comma-separated names of the contact's medications scheduled today.",
         default="",
         example="Lisinopril, Metformin",
         phi=True,
     ),
     # US2 / FR-009: open family tasks to convey on this call (then close). PHI=True —
-    # the task text is elder-specific and may reference health, so it is warned if used
+    # the task text is contact-specific and may reference health, so it is warned if used
     # in a field spoken before identity confirmation or to voicemail.
     VariableSpec(
         name="open_family_tasks",
@@ -128,7 +118,7 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
         example="remind mom to drink water; ask about her doctor visit",
         phi=True,
     ),
-    # US3 / FR-005: medications the elder reported NOT taken, to gently re-ask this call.
+    # US3 / FR-005: medications the contact reported NOT taken, to gently re-ask this call.
     # PHI=True — names a medication, health information.
     VariableSpec(
         name="pending_med_reasks",
@@ -139,13 +129,13 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
         phi=True,
     ),
     # US4 / FR-024: durable memory carried across calls. All PHI=True — they embed
-    # elder-specific (often health) context resolved from personal_facts /
+    # contact-specific (often health) context resolved from personal_facts /
     # conversation_summaries, so they are warned if used in a field spoken before
     # identity confirmation or to voicemail.
     VariableSpec(
         name="personal_facts",
         tier="builtin",
-        description="Durable facts remembered about the elder (people, routines, preferences).",
+        description="Durable facts remembered about the contact (people, routines, preferences).",
         default="",
         example="son Tom lives nearby; walks every morning",
         phi=True,
@@ -153,7 +143,7 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
     VariableSpec(
         name="last_call_summary",
         tier="builtin",
-        description="A short recap of the elder's most recent call.",
+        description="A short recap of the contact's most recent call.",
         default="",
         example="Chatted about the garden; in good spirits.",
         phi=True,
@@ -161,7 +151,7 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
     VariableSpec(
         name="open_plans",
         tier="builtin",
-        description="Follow-ups the elder mentioned last time, to ask about this call.",
+        description="Follow-ups the contact mentioned last time, to ask about this call.",
         default="",
         example="water the roses; call the pharmacy",
         phi=True,
@@ -174,13 +164,13 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
         example="her birthday",
         phi=True,
     ),
-    # US6 / FR-032: "true" when the elder is due for this month's wellbeing survey, else
+    # US6 / FR-032: "true" when the contact is due for this month's wellbeing survey, else
     # empty. A scheduling flag (no clinical content), so phi=False — safe to reference even
     # in fields spoken before identity confirmation.
     VariableSpec(
         name="survey_due",
         tier="builtin",
-        description="'true' when the elder is due for this month's wellbeing survey.",
+        description="'true' when the contact is due for this month's wellbeing survey.",
         default="",
         example="true",
     ),

@@ -41,12 +41,12 @@ async def session_factory(async_database_url):
     await engine.dispose()
 
 
-async def _make_elder(session_factory) -> str:
+async def _make_contact(session_factory) -> str:
     async with session_factory() as db:
         eid = (
             await db.execute(
                 text(
-                    "INSERT INTO elders (name, phone_e164, timezone) "
+                    "INSERT INTO contacts (name, phone_e164, timezone) "
                     "VALUES ('Ada', :p, 'UTC') RETURNING id"
                 ),
                 {"p": f"+1555{str(uuid.uuid4().int)[:7]}"},
@@ -56,10 +56,14 @@ async def _make_elder(session_factory) -> str:
         return str(eid)
 
 
-def _enqueue_call(client, elder_id: str) -> str:
+def _enqueue_call(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"sum-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"sum-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202, r.text
@@ -79,28 +83,28 @@ async def _add_transcript(session_factory, call_id: str, lines: list[tuple[str, 
         await db.commit()
 
 
-async def _summaries(session_factory, elder_id: str):
+async def _summaries(session_factory, contact_id: str):
     async with session_factory() as db:
         return (
             await db.execute(
                 text(
                     "SELECT call_id, summary, open_plans, model_version "
-                    "FROM conversation_summaries WHERE elder_id = :e ORDER BY id"
+                    "FROM conversation_summaries WHERE contact_id = :e ORDER BY id"
                 ),
-                {"e": elder_id},
+                {"e": contact_id},
             )
         ).all()
 
 
-async def _facts(session_factory, elder_id: str):
+async def _facts(session_factory, contact_id: str):
     async with session_factory() as db:
         return (
             await db.execute(
                 text(
                     "SELECT category, content, source FROM personal_facts "
-                    "WHERE elder_id = :e ORDER BY id"
+                    "WHERE contact_id = :e ORDER BY id"
                 ),
-                {"e": elder_id},
+                {"e": contact_id},
             )
         ).all()
 
@@ -112,8 +116,8 @@ def _vertex_returning(payload: dict) -> AsyncMock:
 async def test_summarize_writes_summary_and_extracts_facts(
     client, mock_dispatch, session_factory, monkeypatch
 ):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
     await _add_transcript(
         session_factory,
         call_id,
@@ -139,23 +143,23 @@ async def test_summarize_writes_summary_and_extracts_facts(
         result = await summarization.summarize_call_with(db, uuid.UUID(call_id), get_settings())
     assert result is not None
 
-    summaries = await _summaries(session_factory, elder_id)
+    summaries = await _summaries(session_factory, contact_id)
     assert len(summaries) == 1
     assert summaries[0].summary == "Ada is well; mentioned her daughter Maria."
     assert summaries[0].open_plans == ["call the doctor tomorrow"]
     assert summaries[0].model_version  # the summarization model id is recorded for audit
 
-    facts = await _facts(session_factory, elder_id)
+    facts = await _facts(session_factory, contact_id)
     assert {(f.category, f.content) for f in facts} == {
         ("person", "daughter Maria visits on Sundays"),
         ("routine", "naps after lunch"),
     }
-    assert all(f.source == "extracted" for f in facts)  # never 'elder_stated' on this path
+    assert all(f.source == "extracted" for f in facts)  # never 'contact_stated' on this path
 
 
 async def test_summarize_is_idempotent(client, mock_dispatch, session_factory, monkeypatch):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
     await _add_transcript(session_factory, call_id, [("user", "Hello there.")])
 
     spy = _vertex_returning({"summary": "Brief chat.", "open_plans": [], "facts": []})
@@ -168,13 +172,13 @@ async def test_summarize_is_idempotent(client, mock_dispatch, session_factory, m
 
     assert first is not None
     assert second is None  # already summarized -> early return, no duplicate row
-    assert len(await _summaries(session_factory, elder_id)) == 1
+    assert len(await _summaries(session_factory, contact_id)) == 1
     assert spy.await_count == 1  # the 2nd call must NOT re-invoke (re-bill) Vertex
 
 
 async def test_summarize_no_transcript_is_noop(client, mock_dispatch, session_factory, monkeypatch):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)  # no transcript added
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)  # no transcript added
 
     spy = _vertex_returning({"summary": "x", "open_plans": [], "facts": []})
     monkeypatch.setattr(summarization, "run_vertex_turn", spy)
@@ -183,7 +187,7 @@ async def test_summarize_no_transcript_is_noop(client, mock_dispatch, session_fa
         result = await summarization.summarize_call_with(db, uuid.UUID(call_id), get_settings())
 
     assert result is None
-    assert await _summaries(session_factory, elder_id) == []
+    assert await _summaries(session_factory, contact_id) == []
     assert spy.await_count == 0  # nothing to summarize -> Vertex is never called
 
 
@@ -192,8 +196,8 @@ async def test_summarize_tolerates_malformed_model_json(
 ):
     # A model that ignores the JSON instruction must not crash the pipeline: store the
     # raw text as the summary, extract no facts, and never raise (Observability VI).
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
     await _add_transcript(session_factory, call_id, [("user", "Lovely weather.")])
 
     monkeypatch.setattr(
@@ -204,28 +208,28 @@ async def test_summarize_tolerates_malformed_model_json(
         result = await summarization.summarize_call_with(db, uuid.UUID(call_id), get_settings())
 
     assert result is not None
-    summaries = await _summaries(session_factory, elder_id)
+    summaries = await _summaries(session_factory, contact_id)
     assert len(summaries) == 1
     assert summaries[0].summary == "not json"
-    assert await _facts(session_factory, elder_id) == []
+    assert await _facts(session_factory, contact_id) == []
 
 
 async def test_summarize_skips_facts_already_active(
     client, mock_dispatch, session_factory, monkeypatch
 ):
     # The extracted-fact dedup must compare against the FULL active set (not the 50-row
-    # injection cap), so a fact the elder already has is NOT re-inserted every call.
-    elder_id = await _make_elder(session_factory)
+    # injection cap), so a fact the contact already has is NOT re-inserted every call.
+    contact_id = await _make_contact(session_factory)
     async with session_factory() as db:
         await db.execute(
             text(
-                "INSERT INTO personal_facts (elder_id, category, content, source) VALUES "
-                "(CAST(:e AS uuid), 'person', 'daughter Maria visits on Sundays', 'elder_stated')"
+                "INSERT INTO personal_facts (contact_id, category, content, source) VALUES "
+                "(CAST(:e AS uuid), 'person', 'daughter Maria visits on Sundays', 'contact_stated')"
             ),
-            {"e": elder_id},
+            {"e": contact_id},
         )
         await db.commit()
-    call_id = _enqueue_call(client, elder_id)
+    call_id = _enqueue_call(client, contact_id)
     await _add_transcript(session_factory, call_id, [("user", "Maria came by.")])
 
     monkeypatch.setattr(
@@ -245,12 +249,12 @@ async def test_summarize_skips_facts_already_active(
     async with session_factory() as db:
         await summarization.summarize_call_with(db, uuid.UUID(call_id), get_settings())
 
-    facts = await _facts(session_factory, elder_id)
+    facts = await _facts(session_factory, contact_id)
     assert [(f.category, f.content) for f in facts] == [
         ("person", "daughter Maria visits on Sundays"),  # the pre-existing row, untouched
         ("routine", "naps after lunch"),  # only the genuinely new fact is added
     ]
-    assert [f.source for f in facts] == ["elder_stated", "extracted"]
+    assert [f.source for f in facts] == ["contact_stated", "extracted"]
 
 
 async def test_summarize_drops_offenum_category_and_caps_facts(
@@ -259,8 +263,8 @@ async def test_summarize_drops_offenum_category_and_caps_facts(
     # _coerce_facts is the only gate on the extraction path (no Pydantic): a hallucinated
     # category is dropped (it would violate the DB CHECK), content is truncated to 500, and
     # the batch is capped at 20.
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
     await _add_transcript(session_factory, call_id, [("user", "lots to say")])
 
     facts = [{"category": "bank_pin", "content": "1234"}]  # off-enum -> dropped
@@ -275,7 +279,7 @@ async def test_summarize_drops_offenum_category_and_caps_facts(
     async with session_factory() as db:
         await summarization.summarize_call_with(db, uuid.UUID(call_id), get_settings())
 
-    rows = await _facts(session_factory, elder_id)
+    rows = await _facts(session_factory, contact_id)
     assert all(r.category != "bank_pin" for r in rows)  # off-enum never reaches the DB
     assert len(rows) == 20  # _MAX_EXTRACTED_FACTS
     pref = next(r for r in rows if r.category == "preference")
@@ -285,8 +289,8 @@ async def test_summarize_drops_offenum_category_and_caps_facts(
 async def test_summarize_parses_fenced_json(client, mock_dispatch, session_factory, monkeypatch):
     # Models often wrap JSON in a ```json fence despite the instruction; _strip_code_fence
     # must recover it (else every fenced reply silently degrades to a raw-text recap).
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
     await _add_transcript(session_factory, call_id, [("user", "hi")])
 
     fenced = (
@@ -299,10 +303,10 @@ async def test_summarize_parses_fenced_json(client, mock_dispatch, session_facto
     async with session_factory() as db:
         await summarization.summarize_call_with(db, uuid.UUID(call_id), get_settings())
 
-    summaries = await _summaries(session_factory, elder_id)
+    summaries = await _summaries(session_factory, contact_id)
     assert summaries[0].summary == "Fenced recap."  # fence stripped + parsed, not stored raw
     assert summaries[0].open_plans == ["see doctor"]
-    assert [(f.category, f.content) for f in await _facts(session_factory, elder_id)] == [
+    assert [(f.category, f.content) for f in await _facts(session_factory, contact_id)] == [
         ("person", "son Bob")
     ]
 

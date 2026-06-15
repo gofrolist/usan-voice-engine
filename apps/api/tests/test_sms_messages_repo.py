@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import sms_messages as sms_repo
 
 
@@ -18,27 +18,27 @@ async def session_factory(async_database_url):
     await engine.dispose()
 
 
-async def _seed_call_and_elder(factory) -> tuple[uuid.UUID, uuid.UUID]:
+async def _seed_call_and_contact(factory) -> tuple[uuid.UUID, uuid.UUID]:
     phone = f"+1555{str(uuid.uuid4().int)[:7].zfill(7)}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(db, name="A", phone_e164=phone, timezone="UTC")
         call = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.IN_PROGRESS,
         )
         await db.commit()
-        return call.id, elder.id
+        return call.id, contact.id
 
 
 async def test_sms_repo_create_and_status_guarded_transitions(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         row = await sms_repo.create_sms_message(
             db,
             call_id=call_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             to_number="+15557654321",
             template_key="t",
             body="hi",
@@ -64,12 +64,12 @@ async def test_sms_repo_create_and_status_guarded_transitions(session_factory):
 
 
 async def test_sms_repo_mark_failed(session_factory):
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         row = await sms_repo.create_sms_message(
             db,
             call_id=call_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             to_number="+1",
             template_key="t",
             body="hi",

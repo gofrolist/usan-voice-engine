@@ -191,7 +191,7 @@ services:
       AGENT_NAME: ${AGENT_NAME}
       LOG_LEVEL: ${LOG_LEVEL}
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
-      # Operator/management API plane auth (GET/POST /v1/elders, /v1/dnc, /v1/calls).
+      # Operator/management API plane auth (GET/POST /v1/contacts, /v1/dnc, /v1/calls).
       OPERATOR_API_KEY: ${OPERATOR_API_KEY}
       # Telnyx Messaging (Phase 3 send_sms). Feature flag default FALSE: no SMS is
       # ever sent until a deploy sets TELNYX_MESSAGING_ENABLED=true AND the secret /
@@ -235,7 +235,7 @@ services:
       CONCURRENCY_GATE_ENABLED: ${CONCURRENCY_GATE_ENABLED:-true}
       MAX_CONCURRENT_CALLS: ${MAX_CONCURRENT_CALLS:-8}
       RESERVED_CONCURRENCY: ${RESERVED_CONCURRENCY:-2}
-      MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY: ${MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY:-2}
+      MAX_AUTONOMOUS_CALLS_PER_CONTACT_PER_DAY: ${MAX_AUTONOMOUS_CALLS_PER_CONTACT_PER_DAY:-2}
       AUTONOMOUS_DIALING_PAUSED: ${AUTONOMOUS_DIALING_PAUSED:-false}
       # Recording (Plan 4b): blank disables it; the api signs read URLs for this bucket.
       GCS_BUCKET: ${GCS_BUCKET:-}

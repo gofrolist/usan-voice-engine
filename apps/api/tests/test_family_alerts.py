@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import FollowUpFlag, SmsMessage
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 
 FIXED_NOW = datetime(2026, 5, 31, 12, 0, tzinfo=UTC)
 _FAMILY = "+15557654321"
@@ -41,7 +41,7 @@ async def _truncate(session_factory):
         await db.execute(
             text(
                 "TRUNCATE family_tasks, family_contacts, follow_up_flags, sms_messages, "
-                "calls, elders RESTART IDENTITY CASCADE"
+                "calls, contacts RESTART IDENTITY CASCADE"
             )
         )
         await db.commit()
@@ -50,12 +50,12 @@ async def _truncate(session_factory):
 async def _seed_exhausted(session_factory, *, contact: bool = True, prefs: dict | None = None):
     """A NO_ANSWER call at attempt=3 (default policy stops at 2) → schedule_retry None."""
     async with session_factory() as db:
-        elder = await elders_repo.create_elder(
+        contact_row = await contacts_repo.create_contact(
             db, name="A", phone_e164=f"+1555{str(uuid.uuid4().int)[:7]}", timezone="UTC"
         )
         call = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact_row.id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.NO_ANSWER,
             dynamic_vars={},
@@ -66,10 +66,10 @@ async def _seed_exhausted(session_factory, *, contact: bool = True, prefs: dict 
         if contact:
             await db.execute(
                 text(
-                    "INSERT INTO family_contacts (elder_id, name, phone_e164, alert_prefs) "
+                    "INSERT INTO family_contacts (contact_id, name, phone_e164, alert_prefs) "
                     "VALUES (:e, 'Dana', :p, CAST(:pr AS JSONB))"
                 ),
-                {"e": elder.id, "p": _FAMILY, "pr": json.dumps(prefs or {})},
+                {"e": contact_row.id, "p": _FAMILY, "pr": json.dumps(prefs or {})},
             )
         await db.commit()
         return call.id

@@ -23,7 +23,7 @@ from usan_api.masking import mask_phone
 from usan_api.observability.custom_metrics import ADMIN_QUEUE_TRANSITIONS_TOTAL
 from usan_api.repositories import admin_audit
 from usan_api.repositories import callback_requests as callback_requests_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import follow_up_flags as follow_up_flags_repo
 from usan_api.repositories import sms_messages as sms_repo
 from usan_api.schemas.admin_tools import (
@@ -42,15 +42,15 @@ router = APIRouter(
 
 
 def _flag_summary(
-    row: FollowUpFlag, elder_name: str | None, phone: str | None
+    row: FollowUpFlag, contact_name: str | None, phone: str | None
 ) -> FollowupFlagSummary:
     # Field-by-field: masked_phone is COMPUTED (never read off an ORM row), so a
     # model_validate(row).model_copy(...) two-step cannot work (spec §4.4).
     return FollowupFlagSummary(
         id=row.id,
         call_id=row.call_id,
-        elder_id=row.elder_id,
-        elder_name=elder_name,
+        contact_id=row.contact_id,
+        contact_name=contact_name,
         masked_phone=mask_phone(phone),
         severity=row.severity,
         category=row.category,
@@ -63,13 +63,13 @@ def _flag_summary(
 
 
 def _callback_summary(
-    row: CallbackRequest, elder_name: str | None, phone: str | None
+    row: CallbackRequest, contact_name: str | None, phone: str | None
 ) -> CallbackRequestSummary:
     return CallbackRequestSummary(
         id=row.id,
         call_id=row.call_id,
-        elder_id=row.elder_id,
-        elder_name=elder_name,
+        contact_id=row.contact_id,
+        contact_name=contact_name,
         masked_phone=mask_phone(phone),
         requested_time_text=row.requested_time_text,
         requested_at=row.requested_at,
@@ -83,22 +83,22 @@ def _callback_summary(
 
 
 async def _flag_response(db: AsyncSession, row: FollowUpFlag) -> FollowupFlagSummary:
-    # PATCH response path: one elder lookup feeds the same summary helper the
-    # list read uses, so transition responses carry elder identity too.
-    elder = await elders_repo.get_elder(db, row.elder_id)
+    # PATCH response path: one contact lookup feeds the same summary helper the
+    # list read uses, so transition responses carry contact identity too.
+    contact = await contacts_repo.get_contact(db, row.contact_id)
     return _flag_summary(
         row,
-        elder.name if elder is not None else None,
-        elder.phone_e164 if elder is not None else None,
+        contact.name if contact is not None else None,
+        contact.phone_e164 if contact is not None else None,
     )
 
 
 async def _callback_response(db: AsyncSession, row: CallbackRequest) -> CallbackRequestSummary:
-    elder = await elders_repo.get_elder(db, row.elder_id)
+    contact = await contacts_repo.get_contact(db, row.contact_id)
     return _callback_summary(
         row,
-        elder.name if elder is not None else None,
-        elder.phone_e164 if elder is not None else None,
+        contact.name if contact is not None else None,
+        contact.phone_e164 if contact is not None else None,
     )
 
 
@@ -107,7 +107,7 @@ async def list_follow_up_flags(
     # Typed status (spec §4.4 deliberate change): junk now 422s instead of a
     # silent 200-empty, and attacker-typed strings never reach admin_audit.detail.
     status: Literal["open", "acknowledged", "resolved"] | None = Query(default=None),
-    elder_id: uuid.UUID | None = Query(default=None),
+    contact_id: uuid.UUID | None = Query(default=None),
     severity: Literal["routine", "urgent"] | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -115,26 +115,26 @@ async def list_follow_up_flags(
     actor: str = Depends(get_actor_email),
 ) -> list[FollowupFlagSummary]:
     rows = await follow_up_flags_repo.list_flags(
-        db, status=status, elder_id=elder_id, severity=severity, limit=limit, offset=offset
+        db, status=status, contact_id=contact_id, severity=severity, limit=limit, offset=offset
     )
-    # PHI read (reason + elder identity) -> audit. Detail carries only the filter
-    # shape + count, NEVER the reason text or an elder's name/phone (PHI-free;
+    # PHI read (reason + contact identity) -> audit. Detail carries only the filter
+    # shape + count, NEVER the reason text or an contact's name/phone (PHI-free;
     # spec §9). Guard the audit write+commit so a transient DB error rolls the
-    # session back instead of leaving it dirty (matches admin_elders / admin_profiles).
+    # session back instead of leaving it dirty (matches admin_contacts / admin_profiles).
     try:
         await admin_audit.record(
             db,
             actor_email=actor,
             action="follow_up_flags.list",
             entity_type="follow_up_flag",
-            entity_id=str(elder_id) if elder_id is not None else None,
+            entity_id=str(contact_id) if contact_id is not None else None,
             detail={"status": status, "severity": severity, "offset": offset, "count": len(rows)},
         )
         await db.commit()
     except SQLAlchemyError:
         await db.rollback()
         raise
-    return [_flag_summary(flag, elder_name, phone) for flag, elder_name, phone in rows]
+    return [_flag_summary(flag, contact_name, phone) for flag, contact_name, phone in rows]
 
 
 @router.get("/callback-requests", response_model=list[CallbackRequestSummary])
@@ -145,19 +145,19 @@ async def list_callback_requests(
     status: Literal["open", "acknowledged", "resolved", "scheduled", "dialed"] | None = Query(
         default=None
     ),
-    elder_id: uuid.UUID | None = Query(default=None),
+    contact_id: uuid.UUID | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     actor: str = Depends(get_actor_email),
 ) -> list[CallbackRequestSummary]:
-    # Paged + status/elder-filtered in SQL (never select the whole table). Callback notes
+    # Paged + status/contact-filtered in SQL (never select the whole table). Callback notes
     # are PHI but stay in our DB; this endpoint is session-gated via the router dependency.
     rows = await callback_requests_repo.list_callback_requests(
-        db, status=status, elder_id=elder_id, limit=limit, offset=offset
+        db, status=status, contact_id=contact_id, limit=limit, offset=offset
     )
-    # PHI read (notes + elder identity) -> audit. Detail carries only the filter
-    # shape + count, NEVER the notes text or an elder's name/phone (PHI-free;
+    # PHI read (notes + contact identity) -> audit. Detail carries only the filter
+    # shape + count, NEVER the notes text or an contact's name/phone (PHI-free;
     # spec §9). Guard the audit write+commit so a transient DB error rolls the
     # session back instead of leaving it dirty (matches list_follow_up_flags above).
     try:
@@ -166,14 +166,14 @@ async def list_callback_requests(
             actor_email=actor,
             action="callback_requests.list",
             entity_type="callback_request",
-            entity_id=str(elder_id) if elder_id is not None else None,
+            entity_id=str(contact_id) if contact_id is not None else None,
             detail={"status": status, "offset": offset, "count": len(rows)},
         )
         await db.commit()
     except SQLAlchemyError:
         await db.rollback()
         raise
-    return [_callback_summary(req, elder_name, phone) for req, elder_name, phone in rows]
+    return [_callback_summary(req, contact_name, phone) for req, contact_name, phone in rows]
 
 
 @router.get("/sms-messages", response_model=list[SmsMessageSummary])
@@ -184,15 +184,15 @@ async def list_sms_messages(
     actor: str = Depends(get_actor_email),
 ) -> list[SmsMessageSummary]:
     rows = await sms_repo.list_messages(db, status=status, limit=limit)
-    # PHI read -> audit. The summary omits `body`, but `to_number` is the elder's
+    # PHI read -> audit. The summary omits `body`, but `to_number` is the contact's
     # E.164 phone number, which is direct PII/PHI under §10's access-logging rule,
     # so this read is audited just like the PHI-returning sibling endpoints.
     # Detail carries only the filter shape + count, NEVER the phone or body
     # (PHI-free; spec §9). Guard the write+commit so a transient DB error rolls
     # the session back instead of leaving it dirty (matches the siblings above).
-    # NOTE: no `elder_id` filter here, unlike list_follow_up_flags /
-    # list_callback_requests — per-elder SMS scoping is deferred because the D6
-    # `sms_repo.list_messages` repo does not yet expose an `elder_id` parameter.
+    # NOTE: no `contact_id` filter here, unlike list_follow_up_flags /
+    # list_callback_requests — per-contact SMS scoping is deferred because the D6
+    # `sms_repo.list_messages` repo does not yet expose an `contact_id` parameter.
     try:
         await admin_audit.record(
             db,
@@ -268,7 +268,7 @@ async def update_follow_up_flag(
         if fresh.status == body.status:
             # Idempotent 200 no-op: stamps untouched, no .update row, transition
             # metric NOT incremented. The response body is still a PHI read
-            # (reason + elder_name), so it writes a PHI-free noop_read audit row
+            # (reason + contact_name), so it writes a PHI-free noop_read audit row
             # (spec §6.2) — same commit-with-rollback guard as the siblings.
             try:
                 await admin_audit.record(
@@ -330,7 +330,7 @@ async def update_callback_request(
         if fresh.status == body.status:
             # Idempotent 200 no-op: stamps untouched, no .update row, transition
             # metric NOT incremented. The response body is still a PHI read
-            # (notes + elder_name), so it writes a PHI-free noop_read audit row
+            # (notes + contact_name), so it writes a PHI-free noop_read audit row
             # (spec §6.2) — same commit-with-rollback guard as the siblings.
             try:
                 await admin_audit.record(

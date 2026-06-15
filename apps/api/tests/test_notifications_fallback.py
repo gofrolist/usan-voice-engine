@@ -32,17 +32,17 @@ async def _truncate(session_factory):
         await db.execute(
             text(
                 "TRUNCATE family_tasks, family_contacts, follow_up_flags, sms_messages, "
-                "calls, elders RESTART IDENTITY CASCADE"
+                "calls, contacts RESTART IDENTITY CASCADE"
             )
         )
         await db.commit()
 
 
-async def _elder(db) -> uuid.UUID:
+async def _contact(db) -> uuid.UUID:
     return (
         await db.execute(
             text(
-                "INSERT INTO elders (name, phone_e164, timezone) "
+                "INSERT INTO contacts (name, phone_e164, timezone) "
                 "VALUES ('Ada', :p, 'UTC') RETURNING id"
             ),
             {"p": f"+1555{str(uuid.uuid4().int)[:7]}"},
@@ -50,35 +50,35 @@ async def _elder(db) -> uuid.UUID:
     ).scalar_one()
 
 
-async def _contact(db, elder_id, *, prefs: dict | None = None) -> None:
+async def _family_contact(db, contact_id, *, prefs: dict | None = None) -> None:
     await db.execute(
         text(
-            "INSERT INTO family_contacts (elder_id, name, phone_e164, alert_prefs) "
+            "INSERT INTO family_contacts (contact_id, name, phone_e164, alert_prefs) "
             "VALUES (:e, 'Dana', :p, CAST(:pr AS JSONB))"
         ),
-        {"e": elder_id, "p": _FAMILY, "pr": json.dumps(prefs or {})},
+        {"e": contact_id, "p": _FAMILY, "pr": json.dumps(prefs or {})},
     )
 
 
-async def _call(db, elder_id) -> uuid.UUID:
+async def _call(db, contact_id) -> uuid.UUID:
     return (
         await db.execute(
             text(
-                "INSERT INTO calls (elder_id, direction, status) "
+                "INSERT INTO calls (contact_id, direction, status) "
                 "VALUES (:e, 'outbound', 'no_answer') RETURNING id"
             ),
-            {"e": elder_id},
+            {"e": contact_id},
         )
     ).scalar_one()
 
 
 async def test_dispatch_no_contacts_returns_empty_and_sends_nothing(session_factory):
     async with session_factory() as db:
-        elder_id = await _elder(db)
+        contact_id = await _contact(db)
         await db.commit()
     async with session_factory() as db:
         dispatch = await notifications.dispatch_family_alert(
-            db, elder_id=elder_id, reason="crisis", dedupe_base="crisis:1"
+            db, contact_id=contact_id, reason="crisis", dedupe_base="crisis:1"
         )
         await db.commit()
         assert dispatch.notified == []
@@ -90,12 +90,12 @@ async def test_dispatch_no_contacts_returns_empty_and_sends_nothing(session_fact
 
 async def test_dispatch_opted_in_contact_enqueues(session_factory):
     async with session_factory() as db:
-        elder_id = await _elder(db)
-        await _contact(db, elder_id)
+        contact_id = await _contact(db)
+        await _family_contact(db, contact_id)
         await db.commit()
     async with session_factory() as db:
         dispatch = await notifications.dispatch_family_alert(
-            db, elder_id=elder_id, reason="crisis", dedupe_base="crisis:7"
+            db, contact_id=contact_id, reason="crisis", dedupe_base="crisis:7"
         )
         await db.commit()
         assert [c.phone_e164 for c in dispatch.notified] == [_FAMILY]
@@ -109,12 +109,12 @@ async def test_dispatch_opted_in_contact_enqueues(session_factory):
 
 async def test_dispatch_opted_out_contact_not_notified_but_had_contacts(session_factory):
     async with session_factory() as db:
-        elder_id = await _elder(db)
-        await _contact(db, elder_id, prefs={"crisis": False})
+        contact_id = await _contact(db)
+        await _family_contact(db, contact_id, prefs={"crisis": False})
         await db.commit()
     async with session_factory() as db:
         dispatch = await notifications.dispatch_family_alert(
-            db, elder_id=elder_id, reason="crisis", dedupe_base="crisis:9"
+            db, contact_id=contact_id, reason="crisis", dedupe_base="crisis:9"
         )
         await db.commit()
         assert dispatch.notified == []
@@ -125,12 +125,12 @@ async def test_dispatch_opted_out_contact_not_notified_but_had_contacts(session_
 
 async def test_ensure_operator_missed_flag_is_idempotent(session_factory):
     async with session_factory() as db:
-        elder_id = await _elder(db)
-        call_id = await _call(db, elder_id)
+        contact_id = await _contact(db)
+        call_id = await _call(db, contact_id)
         await db.commit()
     async with session_factory() as db:
-        await flags_repo.ensure_operator_missed_flag(db, call_id=call_id, elder_id=elder_id)
-        await flags_repo.ensure_operator_missed_flag(db, call_id=call_id, elder_id=elder_id)
+        await flags_repo.ensure_operator_missed_flag(db, call_id=call_id, contact_id=contact_id)
+        await flags_repo.ensure_operator_missed_flag(db, call_id=call_id, contact_id=contact_id)
         await db.commit()
     async with session_factory() as db:
         flags = (

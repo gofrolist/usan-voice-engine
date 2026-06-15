@@ -15,7 +15,7 @@ describe("fieldMeta prompt help text", () => {
   it("points the personalization template at {{variables}} and legacy slots", () => {
     const help = fieldMeta["prompts.inbound_personalization_template"]!.help;
     expect(help).toMatch(/\{\{variable\}\}/);
-    expect(help).toContain("{elder_name}");
+    expect(help).toContain("{contact_name}");
     expect(help).toContain("{last_check_in_line}");
   });
 

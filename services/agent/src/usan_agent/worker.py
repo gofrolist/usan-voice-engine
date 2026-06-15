@@ -46,7 +46,7 @@ class CallMetadata:
 
     Inbound dispatch-rule jobs carry no metadata, so absence means inbound.
     ``resolved_vars`` holds the API-resolved DATA built-ins; ``timezone`` is the
-    elder's IANA tz string.  The agent adds ``current_time``/``current_date``
+    contact's IANA tz string.  The agent adds ``current_time``/``current_date``
     from ``timezone`` via ``build_vars``.  ``dynamic_vars`` stays the operator's
     custom map (the idempotency payload — never merged with built-ins).
     """
@@ -108,9 +108,9 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
     """Inbound: wait for the caller, look them up, run a personalized check-in.
 
     Uses the inbound default config (cfg). No voicemail detection on inbound (spec §7).
-    A known elder gets the tool-driven check-in with a personalized opening + transcript
+    A known contact gets the tool-driven check-in with a personalized opening + transcript
     flush; an unknown number or a failed lookup falls back to a greet-only conversation
-    (no per-elder state, so no orphaned wellness/medication logs).
+    (no per-contact state, so no orphaned wellness/medication logs).
     """
     participant = await ctx.wait_for_participant()
     phone = _caller_phone(participant)
@@ -122,7 +122,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
     # audio capture is ever needed, start the session first and reconfigure the
     # agent after the lookup.
     info = await start_inbound_call(phone, ctx.room.name, settings)
-    if info and info.get("elder_known") and info.get("call_id"):
+    if info and info.get("contact_known") and info.get("call_id"):
         call_id = str(info["call_id"])
         dynamic_vars = info.get("dynamic_vars") or {}
         data = CheckInData(
@@ -141,14 +141,14 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
-        # Deterministic crisis safety net for inbound known-elder calls too (US1 / FR-002).
+        # Deterministic crisis safety net for inbound known-contact calls too (US1 / FR-002).
         _arm_crisis_safety_net(session, call_id=call_id, settings=settings)
         # Hold a reference so the guard task is not garbage-collected before it
         # completes (asyncio keeps only a weak reference to fire-and-forget tasks).
         _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
         _BACKGROUND_TASKS.add(_guard_task)
         _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
-        log.info("Inbound check-in started for known elder (call_id={cid})", cid=call_id)
+        log.info("Inbound check-in started for known contact (call_id={cid})", cid=call_id)
         # Consent before capture: the disclosure must finish playing before egress
         # starts, so no audio is recorded prior to the spoken notice (consent ordering).
         await say_recording_disclosure(session, cfg)
@@ -156,7 +156,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
         await session.generate_reply(instructions=cfg.prompts.inbound_opening)
         return
 
-    # Unknown caller or lookup failed: greet-only, no per-elder state.
+    # Unknown caller or lookup failed: greet-only, no per-contact state.
     session = build_session(settings, cfg)
     agent = build_agent(cfg)
     await session.start(agent=agent, room=ctx.room)
@@ -165,7 +165,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
     _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
     _BACKGROUND_TASKS.add(_guard_task)
     _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
-    log.info("Inbound greet-only (no known elder)")
+    log.info("Inbound greet-only (no known contact)")
     await greet(session, cfg)
 
 
@@ -204,7 +204,7 @@ async def _max_duration_guard(ctx: JobContext, max_s: float) -> None:
     except asyncio.CancelledError:
         return
     logger.bind(room=ctx.room.name).warning("Max call duration reached; ending job")
-    # Hang up the elder's SIP/PSTN leg first: shutdown() disconnects the agent but
+    # Hang up the contact's SIP/PSTN leg first: shutdown() disconnects the agent but
     # leaves the room (and the billable carrier leg) up until empty_timeout. Awaiting
     # matters — delete_room enqueues work that shutdown would otherwise cancel. Mirrors
     # check_in._do_end_call / voicemail_action.leave_voicemail (delete_room then shutdown).
@@ -275,7 +275,7 @@ async def _handle_crisis(
 ) -> None:
     """Escalate a deterministically-detected crisis and speak the emergency resource.
 
-    Best-effort: a failed escalation still speaks a safe fallback so the elder always
+    Best-effort: a failed escalation still speaks a safe fallback so the contact always
     hears help. The server-side raise_crisis records the urgent flag and notifies family.
     """
     script: str | None = None

@@ -1,7 +1,7 @@
 """Resolve the data-tier built-in variables for a call (Admin-UI Phase 2, contract C).
 
 The agent has no database, so the API resolves the 8 DATA built-ins from the loaded
-elder + latest WellnessLog + the elder's medication schedule, and passes the elder's
+contact + latest WellnessLog + the contact's medication schedule, and passes the contact's
 IANA timezone alongside. The two runtime CLOCK built-ins (current_time/current_date)
 are resolved agent-side at call answer and are intentionally NOT produced here.
 
@@ -15,15 +15,14 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from usan_api.db.models import ConversationSummary, Elder, PersonalFact, WellnessLog
+from usan_api.db.models import Contact, ConversationSummary, PersonalFact, WellnessLog
 
 # The 8 data built-ins this resolver emits (contract C). current_time/current_date
 # are deliberately excluded — the agent adds them.
 DATA_BUILTIN_NAMES: frozenset[str] = frozenset(
     {
         "first_name",
-        "elder_name",
-        "contact_name",  # US4 alias of elder_name (FR-024) — same elder.name source
+        "contact_name",
         "call_direction",
         "last_check_in",
         "last_check_in_line",
@@ -33,12 +32,12 @@ DATA_BUILTIN_NAMES: frozenset[str] = frozenset(
         "open_family_tasks",
         "pending_med_reasks",  # US3 / FR-005 — meds reported not-taken, to re-ask
         # US4 / FR-024 — durable memory carried across calls. Resolved API-side from the
-        # elder's active personal_facts + most recent conversation_summary.
+        # contact's active personal_facts + most recent conversation_summary.
         "personal_facts",
         "last_call_summary",
         "open_plans",
         "important_dates",
-        # US6 / FR-032 — "true" when the elder is due for this month's wellbeing survey
+        # US6 / FR-032 — "true" when the contact is due for this month's wellbeing survey
         # (no wellbeing_survey_results row for the local month yet), else "".
         "survey_due",
     }
@@ -50,7 +49,7 @@ _IMPORTANT_DATE_WINDOW_DAYS = 1
 
 
 def format_last_check_in(log: Any) -> str:
-    """A short human summary of the elder's most recent wellness log.
+    """A short human summary of the contact's most recent wellness log.
 
     Moved here from routers.calls so both inbound and outbound resolution share one
     implementation; routers.calls re-exports it for back-compat.
@@ -71,9 +70,9 @@ def _last_check_in_line(log: Any) -> str:
     return f"For context, their last check-in was {format_last_check_in(log)}."
 
 
-def _today_meds(elder: Any) -> str:
-    """Comma-join the names of the elder's scheduled meds (same source as get_today_meds)."""
-    raw = elder.meta.get("medication_schedule", [])
+def _today_meds(contact: Any) -> str:
+    """Comma-join the names of the contact's scheduled meds (same source as get_today_meds)."""
+    raw = contact.meta.get("medication_schedule", [])
     if not isinstance(raw, list):
         return ""
     names: list[str] = []
@@ -86,7 +85,7 @@ def _today_meds(elder: Any) -> str:
 
 
 def resolve_builtin_vars(
-    elder: Elder | None,
+    contact: Contact | None,
     last_log: WellnessLog | None,
     *,
     direction: Literal["inbound", "outbound"],
@@ -98,11 +97,11 @@ def resolve_builtin_vars(
     important_dates: list[str] | None = None,
     survey_due: bool = False,
 ) -> tuple[dict[str, str], str]:
-    """Resolve the data built-ins + the elder's timezone.
+    """Resolve the data built-ins + the contact's timezone.
 
     Returns ``(resolved_vars, timezone)``. Every value is a plain string; a missing
     source yields ``""`` (the agent applies catalog defaults). An unknown caller
-    (``elder is None``) still resolves ``call_direction`` and blanks the rest.
+    (``contact is None``) still resolves ``call_direction`` and blanks the rest.
     ``open_family_tasks`` (US2 / FR-009) and ``pending_med_reasks`` (US3 / FR-005) are
     passed in by the caller (which has the DB session) as the list of open task messages /
     not-taken medication names; the resolver renders them prompt-ready. Kept plain params —
@@ -111,8 +110,7 @@ def resolve_builtin_vars(
     """
     resolved: dict[str, str] = {
         "first_name": "",
-        "elder_name": "",
-        "contact_name": "",  # US4 alias of elder_name (FR-024)
+        "contact_name": "",
         "call_direction": direction,
         "last_check_in": "",
         "last_check_in_line": "",
@@ -137,14 +135,12 @@ def resolve_builtin_vars(
         "survey_due": "true" if survey_due else "",
     }
     timezone = ""
-    if elder is not None:
-        full = elder.name or ""
-        resolved["elder_name"] = full
-        # contact_name aliases elder_name from the same elder.name source (FR-024).
+    if contact is not None:
+        full = contact.name or ""
         resolved["contact_name"] = full
         resolved["first_name"] = full.split()[0] if full.split() else ""
-        resolved["today_meds"] = _today_meds(elder)
-        timezone = elder.timezone or ""
+        resolved["today_meds"] = _today_meds(contact)
+        timezone = contact.timezone or ""
     if last_log is not None:
         resolved["last_check_in"] = format_last_check_in(last_log)
         resolved["last_check_in_line"] = _last_check_in_line(last_log)
@@ -155,8 +151,8 @@ def resolve_builtin_vars(
     return resolved, timezone
 
 
-def _elder_today(timezone: str, now: datetime) -> date:
-    """Today's date in the elder's timezone (falls back to ``now``'s date on a bad tz)."""
+def _contact_today(timezone: str, now: datetime) -> date:
+    """Today's date in the contact's timezone (falls back to ``now``'s date on a bad tz)."""
     if not timezone:
         return now.date()
     try:
@@ -172,7 +168,7 @@ def build_memory_params(
     timezone: str,
     now: datetime,
 ) -> dict[str, Any]:
-    """Turn the elder's active facts + latest summary into the four memory built-in
+    """Turn the contact's active facts + latest summary into the four memory built-in
     inputs for ``resolve_builtin_vars`` (pure; the caller does the DB load + injects now).
 
     ``important_date`` facts are projected into ``important_dates`` (only those within
@@ -180,7 +176,7 @@ def build_memory_params(
     duplicated into ``personal_facts``. ``last_call_summary``/``open_plans`` come from the
     most recent summary.
     """
-    today = _elder_today(timezone, now)
+    today = _contact_today(timezone, now)
     window = {
         ((today + timedelta(days=d)).month, (today + timedelta(days=d)).day)
         for d in range(-_IMPORTANT_DATE_WINDOW_DAYS, _IMPORTANT_DATE_WINDOW_DAYS + 1)

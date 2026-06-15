@@ -71,7 +71,7 @@ async def create_batch_with_targets(
             CallBatchTarget(
                 batch_id=batch.id,
                 target_index=index,
-                elder_id=target.elder_id,
+                contact_id=target.contact_id,
                 dynamic_vars=target.dynamic_vars,
                 profile_override=target.profile_override,
             )

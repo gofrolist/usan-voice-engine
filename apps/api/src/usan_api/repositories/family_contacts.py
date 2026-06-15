@@ -1,6 +1,6 @@
 """family_contacts repository (US2 / T026).
 
-Contacts are pre-registered per elder by an operator; the inbound Telnyx webhook
+Contacts are pre-registered per contact by an operator; the inbound Telnyx webhook
 routes a sender by phone (``find_contacts_by_phone``) and the notification layer picks
 alert recipients honoring each contact's ``alert_prefs`` (``list_alert_recipients``).
 All functions are flush-only; the caller commits.
@@ -20,14 +20,14 @@ _MUTABLE_FIELDS = frozenset({"name", "phone_e164", "relationship", "alert_prefs"
 async def create_family_contact(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     name: str,
     phone_e164: str,
     relationship: str | None = None,
     alert_prefs: dict[str, Any] | None = None,
 ) -> FamilyContact:
     row = FamilyContact(
-        elder_id=elder_id,
+        contact_id=contact_id,
         name=name,
         phone_e164=phone_e164,
         relationship=relationship,
@@ -48,17 +48,17 @@ async def get_family_contact(db: AsyncSession, contact_id: uuid.UUID) -> FamilyC
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
-async def list_family_contacts(db: AsyncSession, *, elder_id: uuid.UUID) -> list[FamilyContact]:
+async def list_family_contacts(db: AsyncSession, *, contact_id: uuid.UUID) -> list[FamilyContact]:
     stmt = (
         select(FamilyContact)
-        .where(FamilyContact.elder_id == elder_id)
+        .where(FamilyContact.contact_id == contact_id)
         .order_by(FamilyContact.created_at, FamilyContact.id)
     )
     return list((await db.execute(stmt)).scalars().all())
 
 
 async def find_contacts_by_phone(db: AsyncSession, phone_e164: str) -> list[FamilyContact]:
-    """All contacts with this number (may span >1 elder — phone is not globally unique)."""
+    """All contacts with this number (may span >1 contact — phone is not globally unique)."""
     stmt = (
         select(FamilyContact)
         .where(FamilyContact.phone_e164 == phone_e164)
@@ -68,15 +68,15 @@ async def find_contacts_by_phone(db: AsyncSession, phone_e164: str) -> list[Fami
 
 
 async def list_alert_recipients(
-    db: AsyncSession, *, elder_id: uuid.UUID, kind: str
+    db: AsyncSession, *, contact_id: uuid.UUID, kind: str
 ) -> list[FamilyContact]:
-    """Contacts who should receive a ``kind`` alert for this elder.
+    """Contacts who should receive a ``kind`` alert for this contact.
 
     Fail-open: a contact receives the alert unless ``alert_prefs[kind]`` is explicitly
     falsey — a missing pref means opted-in, which is the safe default for life-safety
     alerts (FR-007/FR-009).
     """
-    contacts = await list_family_contacts(db, elder_id=elder_id)
+    contacts = await list_family_contacts(db, contact_id=contact_id)
     return [c for c in contacts if c.alert_prefs.get(kind, True)]
 
 

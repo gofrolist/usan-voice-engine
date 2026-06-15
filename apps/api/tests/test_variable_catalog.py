@@ -11,8 +11,7 @@ def test_builtin_variables_are_the_contract_names_in_order():
     names = [v.name for v in BUILTIN_VARIABLES]
     assert names == [
         "first_name",
-        "elder_name",
-        "contact_name",  # US4 alias of elder_name (FR-024) — adjacent to elder_name
+        "contact_name",
         "call_direction",
         "current_time",
         "current_date",
@@ -42,10 +41,8 @@ def test_every_builtin_is_tier_builtin_and_specced():
         assert isinstance(v.default, str)
 
 
-def test_first_name_and_elder_name_default_to_there():
+def test_first_name_and_contact_name_default_to_there():
     assert BUILTIN_DEFAULTS["first_name"] == "there"
-    assert BUILTIN_DEFAULTS["elder_name"] == "there"
-    # contact_name aliases elder_name and shares its "there" default (FR-024).
     assert BUILTIN_DEFAULTS["contact_name"] == "there"
 
 
@@ -71,7 +68,7 @@ def test_data_builtins_default_to_empty_string():
 
 def test_builtin_names_is_frozenset_of_all_builtins():
     assert frozenset(v.name for v in BUILTIN_VARIABLES) == BUILTIN_NAMES
-    assert len(BUILTIN_NAMES) == 18  # 13 + 4 US4 memory builtins + 1 US6 survey_due
+    assert len(BUILTIN_NAMES) == 17  # 12 base + 4 US4 memory builtins + 1 US6 survey_due
 
 
 def test_builtin_defaults_cover_every_name():
@@ -86,12 +83,12 @@ PHI_NAMES = {
     "last_mood",
     "last_pain",
     "today_meds",
-    # Family-task text is elder-specific and may reference health — warn if used in a
+    # Family-task text is contact-specific and may reference health — warn if used in a
     # field spoken before identity confirmation / to voicemail (US2 / FR-009).
     "open_family_tasks",
     # Names a medication (health info) — same PHI warning surface (US3 / FR-005).
     "pending_med_reasks",
-    # US4 / FR-024 — memory built-ins embed elder-specific (often health) context.
+    # US4 / FR-024 — memory built-ins embed contact-specific (often health) context.
     "personal_facts",
     "last_call_summary",
     "open_plans",

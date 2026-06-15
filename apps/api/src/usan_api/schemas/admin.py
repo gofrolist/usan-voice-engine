@@ -15,7 +15,7 @@ class AuditEntryOut(BaseModel):
     created_at: datetime
 
 
-class ElderSummary(BaseModel):
+class ContactSummary(BaseModel):
     id: uuid.UUID
     name: str
     masked_phone: str

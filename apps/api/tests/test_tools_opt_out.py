@@ -1,10 +1,10 @@
 """T065 (US7): register_opt_out tool contract.
 
-A call-scoped ``register_opt_out`` honors a spoken opt-out (FR-037): it adds the elder's
+A call-scoped ``register_opt_out`` honors a spoken opt-out (FR-037): it adds the contact's
 number to the do-not-call list (so future outbound is suppressed — SC-010), enqueues a
-one-time PHI-free opt-out acknowledgement SMS to the elder, and raises a routine
+one-time PHI-free opt-out acknowledgement SMS to the contact, and raises a routine
 ``operator_alert`` follow-up flag so a human understands why calls stopped (FR-039).
-Idempotent within a call. Token-scope and missing-elder guards mirror the other tools.
+Idempotent within a call. Token-scope and missing-contact guards mirror the other tools.
 """
 
 import asyncio
@@ -57,9 +57,9 @@ def _phone() -> str:
     return f"+1555{str(uuid.uuid4().int)[:7]}"
 
 
-def _create_elder(client, phone: str) -> str:
+def _create_contact(client, phone: str) -> str:
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={"name": "Ada", "phone_e164": phone, "timezone": "UTC", "metadata": {}},
         headers=_OP,
     )
@@ -67,10 +67,14 @@ def _create_elder(client, phone: str) -> str:
     return r.json()["id"]
 
 
-def _enqueue(client, elder_id: str) -> dict:
+def _enqueue(client, contact_id: str) -> dict:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"oo-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"oo-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202, r.text
@@ -134,8 +138,8 @@ def _operator_flags(url, call_id: str) -> list[FollowUpFlag]:
 
 def test_register_opt_out_adds_dnc_acks_and_flags(client, mock_dispatch, async_database_url):
     phone = _phone()
-    elder_id = _create_elder(client, phone)
-    call_id = _enqueue(client, elder_id)["id"]
+    contact_id = _create_contact(client, phone)
+    call_id = _enqueue(client, contact_id)["id"]
 
     r = client.post(
         "/v1/tools/register_opt_out",
@@ -144,12 +148,12 @@ def test_register_opt_out_adds_dnc_acks_and_flags(client, mock_dispatch, async_d
     )
     assert r.status_code == 200, r.text
 
-    # DNC entry created for the elder's number (SC-010: no further outbound).
+    # DNC entry created for the contact's number (SC-010: no further outbound).
     entry = _dnc_entry(async_database_url, phone)
     assert entry is not None
     assert entry.reason  # an audit reason is recorded
 
-    # Exactly one PHI-free opt-out ack to the elder (call_id IS NULL — outbox-delivered).
+    # Exactly one PHI-free opt-out ack to the contact (call_id IS NULL — outbox-delivered).
     acks = _opt_out_acks(async_database_url, phone)
     assert len(acks) == 1
     ack = acks[0]
@@ -167,8 +171,8 @@ def test_register_opt_out_adds_dnc_acks_and_flags(client, mock_dispatch, async_d
 
 def test_register_opt_out_is_idempotent_within_call(client, mock_dispatch, async_database_url):
     phone = _phone()
-    elder_id = _create_elder(client, phone)
-    call_id = _enqueue(client, elder_id)["id"]
+    contact_id = _create_contact(client, phone)
+    call_id = _enqueue(client, contact_id)["id"]
 
     assert (
         client.post(
@@ -191,15 +195,19 @@ def test_register_opt_out_is_idempotent_within_call(client, mock_dispatch, async
 def test_register_opt_out_suppresses_future_outbound(client, mock_dispatch, async_database_url):
     # SC-010: once opted out, a later outbound enqueue is terminal-at-birth DNC_BLOCKED.
     phone = _phone()
-    elder_id = _create_elder(client, phone)
-    call_id = _enqueue(client, elder_id)["id"]
+    contact_id = _create_contact(client, phone)
+    call_id = _enqueue(client, contact_id)["id"]
     client.post("/v1/tools/register_opt_out", json={"call_id": call_id}, headers=_auth(call_id))
 
     # A DNC-blocked enqueue is terminal at birth: the call is created with status
     # dnc_blocked and never dialed (the response is 200, not the 202 of a queued dial).
     later = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"oo-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"oo-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert later.status_code == 200, later.text
@@ -208,8 +216,8 @@ def test_register_opt_out_suppresses_future_outbound(client, mock_dispatch, asyn
 
 def test_register_opt_out_rejects_wrong_call_token(client, mock_dispatch, async_database_url):
     phone = _phone()
-    elder_id = _create_elder(client, phone)
-    call_id = _enqueue(client, elder_id)["id"]
+    contact_id = _create_contact(client, phone)
+    call_id = _enqueue(client, contact_id)["id"]
     other = str(uuid.uuid4())
     r = client.post(
         "/v1/tools/register_opt_out",
@@ -219,8 +227,8 @@ def test_register_opt_out_rejects_wrong_call_token(client, mock_dispatch, async_
     assert r.status_code == 403
 
 
-def test_register_opt_out_409_when_call_has_no_elder(client, mock_dispatch):
-    # An inbound call from an unknown number has no elder; the tool 409s rather than
+def test_register_opt_out_409_when_call_has_no_contact(client, mock_dispatch):
+    # An inbound call from an unknown number has no contact; the tool 409s rather than
     # guessing whose number to suppress.
     inbound = client.post(
         "/v1/calls/inbound",

@@ -8,7 +8,7 @@
 	request_body {
 		max_size 1MB
 	}
-	# The operator/management endpoints (/v1/elders, /v1/dnc, /v1/calls) are
+	# The operator/management endpoints (/v1/contacts, /v1/dnc, /v1/calls) are
 	# authenticated at the app layer via OPERATOR_API_KEY. An operator may add a
 	# defense-in-depth IP allowlist for those paths here (e.g. a matcher with
 	# `remote_ip` + `abort`) — not required for correctness.
@@ -24,7 +24,7 @@
 	# ungated public api host so the admin plane has a single gated entry point
 	# (defense in depth: a stolen session cookie can't be replayed off-CIDR here, and
 	# the OAuth routes aren't probeable). The SPA + /v1 are same-origin on admin.<domain>;
-	# the agent (/v1/runtime, /v1/calls/*) and operator (/v1/elders, /v1/dnc, /v1/calls)
+	# the agent (/v1/runtime, /v1/calls/*) and operator (/v1/contacts, /v1/dnc, /v1/calls)
 	# planes do not use these prefixes, so nothing legitimate is blocked.
 	@adminplane path /v1/admin/* /v1/auth/*
 	respond @adminplane 403

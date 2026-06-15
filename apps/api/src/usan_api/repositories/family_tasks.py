@@ -15,7 +15,7 @@ from sqlalchemy.sql import func
 
 from usan_api.db.models import FamilyTask
 
-# Bound the per-elder open-task injection so a backlog never floods the prompt.
+# Bound the per-contact open-task injection so a backlog never floods the prompt.
 _MAX_OPEN_INJECT = 20
 _MAX_LIST_LIMIT = 500
 
@@ -23,14 +23,14 @@ _MAX_LIST_LIMIT = 500
 async def create_family_task(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     family_contact_id: uuid.UUID | None,
     message: str,
     needs_safety_review: bool = False,
     status: str = "open",
 ) -> FamilyTask:
     row = FamilyTask(
-        elder_id=elder_id,
+        contact_id=contact_id,
         family_contact_id=family_contact_id,
         message=message,
         needs_safety_review=needs_safety_review,
@@ -45,7 +45,7 @@ async def create_family_task(
 async def create_inbound_task(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     family_contact_id: uuid.UUID | None,
     message: str,
     inbound_message_id: str,
@@ -60,7 +60,7 @@ async def create_inbound_task(
     insert_stmt = (
         pg_insert(FamilyTask)
         .values(
-            elder_id=elder_id,
+            contact_id=contact_id,
             family_contact_id=family_contact_id,
             message=message,
             status="open",
@@ -89,13 +89,13 @@ async def get_family_task(db: AsyncSession, task_id: int) -> FamilyTask | None:
 
 
 async def list_open_family_tasks(
-    db: AsyncSession, *, elder_id: uuid.UUID, limit: int = _MAX_OPEN_INJECT
+    db: AsyncSession, *, contact_id: uuid.UUID, limit: int = _MAX_OPEN_INJECT
 ) -> list[FamilyTask]:
     """Open, non-safety-review tasks to convey on the next call (oldest first)."""
     stmt = (
         select(FamilyTask)
         .where(
-            FamilyTask.elder_id == elder_id,
+            FamilyTask.contact_id == contact_id,
             FamilyTask.status == "open",
             FamilyTask.needs_safety_review.is_(False),
         )
@@ -108,17 +108,17 @@ async def list_open_family_tasks(
 async def list_family_tasks(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID | None = None,
+    contact_id: uuid.UUID | None = None,
     status: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[FamilyTask]:
-    """Admin read model: newest-first, optionally filtered by elder/status."""
+    """Admin read model: newest-first, optionally filtered by contact/status."""
     limit = max(1, min(limit, _MAX_LIST_LIMIT))
     offset = max(0, offset)
     stmt = select(FamilyTask)
-    if elder_id is not None:
-        stmt = stmt.where(FamilyTask.elder_id == elder_id)
+    if contact_id is not None:
+        stmt = stmt.where(FamilyTask.contact_id == contact_id)
     if status is not None:
         stmt = stmt.where(FamilyTask.status == status)
     # needs-review tasks first (operators must action them), then newest-first.
@@ -167,9 +167,9 @@ async def close_family_task(db: AsyncSession, task_id: int, *, actor: str) -> Fa
 
 
 async def mark_all_delivered(
-    db: AsyncSession, *, elder_id: uuid.UUID, call_id: uuid.UUID
+    db: AsyncSession, *, contact_id: uuid.UUID, call_id: uuid.UUID
 ) -> list[FamilyTask]:
-    """Mark every conveyed open task delivered for an elder in one guarded UPDATE (T031).
+    """Mark every conveyed open task delivered for an contact in one guarded UPDATE (T031).
 
     Targets exactly the set ``list_open_family_tasks`` injects (``status='open' AND
     needs_safety_review IS FALSE``) — a safety-review task that was never conveyed is
@@ -180,7 +180,7 @@ async def mark_all_delivered(
     stmt = (
         update(FamilyTask)
         .where(
-            FamilyTask.elder_id == elder_id,
+            FamilyTask.contact_id == contact_id,
             FamilyTask.status == "open",
             FamilyTask.needs_safety_review.is_(False),
         )

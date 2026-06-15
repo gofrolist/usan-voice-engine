@@ -1,7 +1,7 @@
 """T044 (US4): personal memory built-ins are carried into the next call.
 
 The four memory built-ins (``personal_facts``, ``last_call_summary``, ``open_plans``,
-``important_dates``) are resolved API-side from the elder's active ``personal_facts`` and
+``important_dates``) are resolved API-side from the contact's active ``personal_facts`` and
 their most recent ``conversation_summaries`` row, then carried OUT-OF-BAND in the
 ``resolved_vars`` the call-create path hands to ``dispatch_agent`` — the same carry
 channel as ``open_family_tasks`` / ``pending_med_reasks``. Both the outbound enqueue and
@@ -49,13 +49,13 @@ def _worker_auth(secret: str = "s" * 32) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_elder(session_factory) -> tuple[str, str]:
+async def _make_contact(session_factory) -> tuple[str, str]:
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with session_factory() as db:
         eid = (
             await db.execute(
                 text(
-                    "INSERT INTO elders (name, phone_e164, timezone) "
+                    "INSERT INTO contacts (name, phone_e164, timezone) "
                     "VALUES ('Ada', :p, 'UTC') RETURNING id"
                 ),
                 {"p": phone},
@@ -65,10 +65,14 @@ async def _make_elder(session_factory) -> tuple[str, str]:
         return str(eid), phone
 
 
-def _enqueue_call(client, elder_id: str) -> str:
+def _enqueue_call(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"mem-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"mem-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202, r.text
@@ -77,22 +81,22 @@ def _enqueue_call(client, elder_id: str) -> str:
 
 async def _seed_fact(
     session_factory,
-    elder_id: str,
+    contact_id: str,
     *,
     category: str,
     content: str,
     structured: str = "{}",
     active: bool = True,
-    source: str = "elder_stated",
+    source: str = "contact_stated",
 ) -> None:
     async with session_factory() as db:
         await db.execute(
             text(
-                "INSERT INTO personal_facts (elder_id, category, content, structured, source, "
+                "INSERT INTO personal_facts (contact_id, category, content, structured, source, "
                 "active) VALUES (CAST(:e AS uuid), :c, :t, CAST(:s AS jsonb), :src, :a)"
             ),
             {
-                "e": elder_id,
+                "e": contact_id,
                 "c": category,
                 "t": content,
                 "s": structured,
@@ -104,16 +108,16 @@ async def _seed_fact(
 
 
 async def _seed_summary(
-    session_factory, call_id: str, elder_id: str, *, summary: str, open_plans: str
+    session_factory, call_id: str, contact_id: str, *, summary: str, open_plans: str
 ) -> None:
     async with session_factory() as db:
         await db.execute(
             text(
-                "INSERT INTO conversation_summaries (call_id, elder_id, summary, open_plans, "
+                "INSERT INTO conversation_summaries (call_id, contact_id, summary, open_plans, "
                 "model_version) VALUES (CAST(:c AS uuid), CAST(:e AS uuid), :s, CAST(:p AS jsonb), "
                 "'test')"
             ),
-            {"c": call_id, "e": elder_id, "s": summary, "p": open_plans},
+            {"c": call_id, "e": contact_id, "s": summary, "p": open_plans},
         )
         await db.commit()
 
@@ -125,19 +129,19 @@ def _last_vars(dispatch_spy) -> dict:
 async def test_active_facts_and_latest_summary_carried_outbound(
     client, dispatch_spy, session_factory
 ):
-    elder_id, _ = await _make_elder(session_factory)
-    await _seed_fact(session_factory, elder_id, category="person", content="son Tom lives nearby")
-    await _seed_fact(session_factory, elder_id, category="routine", content="walks every morning")
-    prior = _enqueue_call(client, elder_id)
+    contact_id, _ = await _make_contact(session_factory)
+    await _seed_fact(session_factory, contact_id, category="person", content="son Tom lives nearby")
+    await _seed_fact(session_factory, contact_id, category="routine", content="walks every morning")
+    prior = _enqueue_call(client, contact_id)
     await _seed_summary(
         session_factory,
         prior,
-        elder_id,
+        contact_id,
         summary="Chatted about the garden.",
         open_plans='["water the roses", "call the pharmacy"]',
     )
 
-    _enqueue_call(client, elder_id)
+    _enqueue_call(client, contact_id)
     v = _last_vars(dispatch_spy)
     assert "son Tom lives nearby" in v["personal_facts"]
     assert "walks every morning" in v["personal_facts"]
@@ -148,50 +152,50 @@ async def test_active_facts_and_latest_summary_carried_outbound(
 
 async def test_only_active_facts_carried(client, dispatch_spy, session_factory):
     # Superseded facts (active=false) are history — they must not be re-injected.
-    elder_id, _ = await _make_elder(session_factory)
-    await _seed_fact(session_factory, elder_id, category="preference", content="likes black tea")
+    contact_id, _ = await _make_contact(session_factory)
+    await _seed_fact(session_factory, contact_id, category="preference", content="likes black tea")
     await _seed_fact(
-        session_factory, elder_id, category="preference", content="liked green tea", active=False
+        session_factory, contact_id, category="preference", content="liked green tea", active=False
     )
-    _enqueue_call(client, elder_id)
+    _enqueue_call(client, contact_id)
     v = _last_vars(dispatch_spy)
     assert "likes black tea" in v["personal_facts"]
     assert "green tea" not in v["personal_facts"]
 
 
 async def test_latest_summary_wins(client, dispatch_spy, session_factory):
-    elder_id, _ = await _make_elder(session_factory)
-    older = _enqueue_call(client, elder_id)
-    await _seed_summary(session_factory, older, elder_id, summary="Older recap.", open_plans="[]")
-    newer = _enqueue_call(client, elder_id)
-    await _seed_summary(session_factory, newer, elder_id, summary="Newer recap.", open_plans="[]")
+    contact_id, _ = await _make_contact(session_factory)
+    older = _enqueue_call(client, contact_id)
+    await _seed_summary(session_factory, older, contact_id, summary="Older recap.", open_plans="[]")
+    newer = _enqueue_call(client, contact_id)
+    await _seed_summary(session_factory, newer, contact_id, summary="Newer recap.", open_plans="[]")
 
-    _enqueue_call(client, elder_id)
+    _enqueue_call(client, contact_id)
     assert _last_vars(dispatch_spy)["last_call_summary"] == "Newer recap."
 
 
 async def test_important_dates_window(client, dispatch_spy, session_factory):
     # important_dates surfaces only dates within ±1 day of today (anniversary match on
     # month/day), so a birthday today is offered while a date months away is not.
-    elder_id, _ = await _make_elder(session_factory)
+    contact_id, _ = await _make_contact(session_factory)
     today = datetime.now(UTC).date()
     far = today + timedelta(days=60)
     await _seed_fact(
         session_factory,
-        elder_id,
+        contact_id,
         category="important_date",
         content="birthday",
         structured=f'{{"date": "{today.isoformat()}", "label": "her birthday"}}',
     )
     await _seed_fact(
         session_factory,
-        elder_id,
+        contact_id,
         category="important_date",
         content="anniversary",
         structured=f'{{"date": "{far.isoformat()}", "label": "wedding anniversary"}}',
     )
 
-    _enqueue_call(client, elder_id)
+    _enqueue_call(client, contact_id)
     v = _last_vars(dispatch_spy)
     assert "her birthday" in v["important_dates"]
     assert "wedding anniversary" not in v["important_dates"]
@@ -200,11 +204,11 @@ async def test_important_dates_window(client, dispatch_spy, session_factory):
 
 
 async def test_inbound_carries_memory(client, dispatch_spy, session_factory):
-    # The inbound resolver in routers/calls.py is a SEPARATE carry site; an elder who
+    # The inbound resolver in routers/calls.py is a SEPARATE carry site; an contact who
     # calls IN must still be greeted with their remembered facts.
-    elder_id, phone = await _make_elder(session_factory)
+    contact_id, phone = await _make_contact(session_factory)
     await _seed_fact(
-        session_factory, elder_id, category="person", content="neighbor Joan helps out"
+        session_factory, contact_id, category="person", content="neighbor Joan helps out"
     )
 
     resp = client.post(

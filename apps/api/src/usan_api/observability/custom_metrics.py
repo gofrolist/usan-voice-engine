@@ -5,7 +5,7 @@ name. To expose `usan_calls_total` the Counter is constructed as `usan_calls`.
 
 Metrics register against the process-global default registry at import time, so
 they are created exactly once per process (module import is cached). Labels are
-a small, bounded, PHI-FREE set — never put call_id, elder id, phone number, or
+a small, bounded, PHI-FREE set — never put call_id, contact id, phone number, or
 free-text reasons in a label (unbounded cardinality and a PHI leak; spec §6/§15).
 
 Increment-after-commit discipline (batch/scheduler spec §7): counters that
@@ -14,8 +14,8 @@ commit, so a crash between write and commit can never double-count.
 
 Structurally impossible usan_materialized_calls_total label combinations —
 never emitted (batch/scheduler spec §7):
-- result="skipped_elder_deleted" with source="schedule": deleting an elder
-  CASCADE-deletes their schedules, so a schedule row never outlives its elder.
+- result="skipped_contact_deleted" with source="schedule": deleting an contact
+  CASCADE-deletes their schedules, so a schedule row never outlives its contact.
 - result="rescheduled" with source="batch": batch targets have no next_run_at
   to go stale, hence nothing to reschedule.
 result="skipped_window" with source="batch" IS emitted since the per-profile
@@ -98,7 +98,7 @@ ADMIN_QUEUE_TRANSITIONS_TOTAL = Counter(
 )
 
 # source: schedule|batch ; result: created|replayed|dnc_blocked|skipped_window|
-# skipped_invalid_timezone|skipped_daily_cap|skipped_elder_deleted|rescheduled|
+# skipped_invalid_timezone|skipped_daily_cap|skipped_contact_deleted|rescheduled|
 # key_conflict. Incremented per materialization decision, after commit. See the
 # module docstring for the structurally impossible source x result combinations.
 MATERIALIZED_CALLS_TOTAL = Counter(

@@ -1,13 +1,13 @@
 """Monthly family report job (US8 / T078; FR-012 / SC-012).
 
-Once a month, for each elder with at least one call in the just-completed calendar month,
+Once a month, for each contact with at least one call in the just-completed calendar month,
 generate a status-and-trends report and deliver it to the family contact. The aggregated
 trends (calls, mood, med adherence, survey) and the LLM narrative are PHI and stay on the
 ``family_reports`` row in BAA Postgres; the family SMS is a FIXED, PHI-FREE template
-(Constitution II / T083) that only signals the elder is engaged. When no family contact is
+(Constitution II / T083) that only signals the contact is engaged. When no family contact is
 registered the report is marked ``no_contact`` so operators follow up (FR-013).
 
-Idempotent: one report per ``(elder, period_month)``. The narrative uses Vertex AI
+Idempotent: one report per ``(contact, period_month)``. The narrative uses Vertex AI
 (``vertexai=True`` + ADC, NEVER the Gemini Developer API) when summarization is configured,
 else a deterministic non-LLM fallback. Ship-inert: wired only when
 ``family_report_poller_enabled`` is set (main.py lifespan).
@@ -25,9 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from usan_api import notifications
 from usan_api.db.base import CallStatus
-from usan_api.db.models import Call, Elder, MedicationLog, WellnessLog
+from usan_api.db.models import Call, Contact, MedicationLog, WellnessLog
 from usan_api.db.session import get_session_factory
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import family_contacts as family_contacts_repo
 from usan_api.repositories import family_reports as family_reports_repo
 from usan_api.repositories import survey_results as survey_results_repo
@@ -37,8 +37,8 @@ from usan_api.vertex_test import run_vertex_turn
 _MAX_NARRATIVE_CHARS = 4000
 
 # Per-cycle ceiling on NEW reports generated, so one cycle cannot fire an unbounded burst
-# of multi-second Vertex calls across a large elder population (review: resource exhaustion).
-# Already-reported elders are skipped cheaply (get_for_month) and don't count, so the cycle
+# of multi-second Vertex calls across a large contact population (review: resource exhaustion).
+# Already-reported contacts are skipped cheaply (get_for_month) and don't count, so the cycle
 # advances ~_GENERATE_BUDGET fresh reports at a time; the rest follow on later cycles.
 _GENERATE_BUDGET = 100
 # Hard bound on a single narrative round-trip so a hung Vertex call can't stall the poller
@@ -46,7 +46,7 @@ _GENERATE_BUDGET = 100
 _VERTEX_TIMEOUT_S = 30.0
 
 _REPORT_SYSTEM = (
-    "You write a brief, warm monthly status note about an elderly person's wellness "
+    "You write a brief, warm monthly status note about a person's wellness "
     "check-ins for their care team's internal record. Respond with 1-3 plain sentences, "
     "factual and kind. Do not invent details beyond the figures provided."
 )
@@ -57,9 +57,9 @@ def _utcnow() -> datetime:
 
 
 def _previous_month_anchor(now: datetime, timezone: str) -> date:
-    """First-of-month DATE for the month BEFORE ``now`` in the elder's local month.
+    """First-of-month DATE for the month BEFORE ``now`` in the contact's local month.
 
-    Reuses the survey anchor (elder-local, fail-soft on a bad tz) so the report period
+    Reuses the survey anchor (contact-local, fail-soft on a bad tz) so the report period
     aligns with the wellbeing survey month.
     """
     this_month = survey_results_repo.month_anchor(timezone, now)
@@ -67,7 +67,7 @@ def _previous_month_anchor(now: datetime, timezone: str) -> date:
 
 
 def _month_window(period_month: date, timezone: str) -> tuple[datetime, datetime]:
-    """[start, end) UTC instants bounding ``period_month`` in the elder's local month."""
+    """[start, end) UTC instants bounding ``period_month`` in the contact's local month."""
     try:
         tz = ZoneInfo(timezone) if timezone else ZoneInfo("UTC")
     except ZoneInfoNotFoundError, ValueError, KeyError:
@@ -84,7 +84,7 @@ def _month_window(period_month: date, timezone: str) -> tuple[datetime, datetime
 async def _aggregate(
     db: AsyncSession,
     *,
-    elder_id: Any,
+    contact_id: Any,
     start: datetime,
     end: datetime,
     period_month: date,
@@ -95,7 +95,7 @@ async def _aggregate(
             select(func.count())
             .select_from(Call)
             .where(
-                Call.elder_id == elder_id,
+                Call.contact_id == contact_id,
                 Call.status == CallStatus.COMPLETED,
                 Call.answered_at >= start,
                 Call.answered_at < end,
@@ -106,7 +106,7 @@ async def _aggregate(
     avg_mood_raw = (
         await db.execute(
             select(func.avg(WellnessLog.mood)).where(
-                WellnessLog.elder_id == elder_id,
+                WellnessLog.contact_id == contact_id,
                 WellnessLog.logged_at >= start,
                 WellnessLog.logged_at < end,
             )
@@ -120,7 +120,7 @@ async def _aggregate(
                 func.count(),
                 func.count().filter(MedicationLog.taken.is_(True)),
             ).where(
-                MedicationLog.elder_id == elder_id,
+                MedicationLog.contact_id == contact_id,
                 MedicationLog.logged_at >= start,
                 MedicationLog.logged_at < end,
             )
@@ -129,7 +129,7 @@ async def _aggregate(
     med_adherence = round(taken_meds / total_meds, 2) if total_meds else None
 
     survey = await survey_results_repo.get_for_month(
-        db, elder_id=elder_id, period_month=period_month
+        db, contact_id=contact_id, period_month=period_month
     )
     survey_summary = (
         {
@@ -193,28 +193,28 @@ async def _narrative(
 async def _generate_one(
     factory: async_sessionmaker[AsyncSession],
     settings: Settings,
-    elder_id: Any,
+    contact_id: Any,
     moment: datetime,
 ) -> bool:
-    """Generate + deliver one elder's report for the prior month. True if a report was made."""
+    """Generate + deliver one contact's report for the prior month. True if a report was made."""
     # Phase 1 — read-only aggregation in a short-lived session. We must NOT hold a DB
     # connection/transaction open across the multi-second Vertex narrative call (review M7),
     # so the session closes before the network round-trip below.
     async with factory() as db:
-        elder = await elders_repo.get_elder(db, elder_id)
-        if elder is None:
+        contact = await contacts_repo.get_contact(db, contact_id)
+        if contact is None:
             return False
-        period_month = _previous_month_anchor(moment, elder.timezone)
+        period_month = _previous_month_anchor(moment, contact.timezone)
         if await family_reports_repo.get_for_month(
-            db, elder_id=elder_id, period_month=period_month
+            db, contact_id=contact_id, period_month=period_month
         ):
-            return False  # idempotent: already generated this elder's month
-        start, end = _month_window(period_month, elder.timezone)
+            return False  # idempotent: already generated this contact's month
+        start, end = _month_window(period_month, contact.timezone)
         calls_completed, metrics = await _aggregate(
-            db, elder_id=elder_id, start=start, end=end, period_month=period_month
+            db, contact_id=contact_id, start=start, end=end, period_month=period_month
         )
     if calls_completed == 0:
-        return False  # SC-012: only elders with at least one call in the period
+        return False  # SC-012: only contacts with at least one call in the period
 
     # Vertex narrative OUTSIDE any DB transaction (no connection held during the network call).
     narrative, model_version = await _narrative(metrics, calls_completed, settings)
@@ -223,16 +223,16 @@ async def _generate_one(
     # create() is ON CONFLICT DO NOTHING, so a worker that lost the race gets report=None.
     async with factory() as db:
         recipients = await family_contacts_repo.list_alert_recipients(
-            db, elder_id=elder_id, kind="report"
+            db, contact_id=contact_id, kind="report"
         )
         has_contact = bool(recipients) or bool(
-            await family_contacts_repo.list_family_contacts(db, elder_id=elder_id)
+            await family_contacts_repo.list_family_contacts(db, contact_id=contact_id)
         )
         status = "sent" if has_contact else "no_contact"
 
         report = await family_reports_repo.create(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             period_month=period_month,
             calls_completed=calls_completed,
             metrics=metrics,
@@ -246,14 +246,15 @@ async def _generate_one(
         if recipients:
             body = notifications.build_family_report_body()
             first_sms = None
-            for contact in recipients:
+            for recipient in recipients:
                 sms = await notifications.enqueue_family_report(
                     db,
-                    elder_id=elder_id,
-                    to_number=contact.phone_e164,
+                    contact_id=contact_id,
+                    to_number=recipient.phone_e164,
                     body=body,
                     dedupe_key=(
-                        f"family_report:{elder_id}:{period_month.isoformat()}:{contact.phone_e164}"
+                        f"family_report:{contact_id}:{period_month.isoformat()}:"
+                        f"{recipient.phone_e164}"
                     ),
                 )
                 first_sms = first_sms or sms
@@ -261,7 +262,7 @@ async def _generate_one(
                 report.sms_message_id = first_sms.id
 
         await db.commit()
-        logger.bind(elder_id=str(elder_id), status=status, calls=calls_completed).info(
+        logger.bind(contact_id=str(contact_id), status=status, calls=calls_completed).info(
             "Generated monthly family report"
         )
         return True
@@ -273,20 +274,20 @@ async def poll_once(
     *,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """One report cycle: generate the prior month's report for each eligible elder.
+    """One report cycle: generate the prior month's report for each eligible contact.
 
-    ``now`` overrides the clock for deterministic tests. Each elder is processed in its own
-    transaction; the unique ``(elder, period_month)`` makes the whole cycle idempotent.
+    ``now`` overrides the clock for deterministic tests. Each contact is processed in its own
+    transaction; the unique ``(contact, period_month)`` makes the whole cycle idempotent.
     """
     moment = now if now is not None else _utcnow()
     async with factory() as db:
-        elder_ids = list((await db.execute(select(Elder.id))).scalars())
+        contact_ids = list((await db.execute(select(Contact.id))).scalars())
 
     generated = 0
-    for elder_id in elder_ids:
+    for contact_id in contact_ids:
         if generated >= _GENERATE_BUDGET:
-            break  # cap expensive Vertex bursts per cycle; remaining elders run next cycle
-        if await _generate_one(factory, settings, elder_id, moment):
+            break  # cap expensive Vertex bursts per cycle; remaining contacts run next cycle
+        if await _generate_one(factory, settings, contact_id, moment):
             generated += 1
     return {"generated": generated}
 

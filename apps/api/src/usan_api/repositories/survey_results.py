@@ -1,8 +1,8 @@
 """wellbeing_survey_results repository (US6 / T060).
 
-The monthly wellbeing survey, anchored to a first-of-month DATE in the elder's local
+The monthly wellbeing survey, anchored to a first-of-month DATE in the contact's local
 timezone. ``upsert_for_month`` is once-per-month idempotent via the unique
-``(elder_id, period_month)`` (ON CONFLICT DO NOTHING then return-existing), so a repeated
+``(contact_id, period_month)`` (ON CONFLICT DO NOTHING then return-existing), so a repeated
 ``record_survey`` the same month writes nothing and returns the original row (FR-032 /
 SC-008). ``exists_for_month`` backs the ``survey_due`` builtin. All functions are
 flush-only; the caller commits.
@@ -21,10 +21,10 @@ from usan_api.db.models import WellbeingSurveyResult
 
 
 def month_anchor(timezone: str, now: datetime) -> date:
-    """First-of-month anchor for ``now`` in the elder's local month (FR-032).
+    """First-of-month anchor for ``now`` in the contact's local month (FR-032).
 
     Falls back to ``now``'s UTC date on an empty/garbled timezone, exactly like
-    ``builtin_vars._elder_today`` — a bad tz never crashes survey recording, it just
+    ``builtin_vars._contact_today`` — a bad tz never crashes survey recording, it just
     anchors to the server-day month.
     """
     local = now.date()
@@ -43,25 +43,25 @@ async def _get(db: AsyncSession, survey_id: int) -> WellbeingSurveyResult | None
 
 
 async def get_for_month(
-    db: AsyncSession, *, elder_id: uuid.UUID, period_month: date
+    db: AsyncSession, *, contact_id: uuid.UUID, period_month: date
 ) -> WellbeingSurveyResult | None:
-    """The elder's survey row for ``period_month``, if one exists."""
+    """The contact's survey row for ``period_month``, if one exists."""
     return (
         await db.execute(
             select(WellbeingSurveyResult).where(
-                WellbeingSurveyResult.elder_id == elder_id,
+                WellbeingSurveyResult.contact_id == contact_id,
                 WellbeingSurveyResult.period_month == period_month,
             )
         )
     ).scalar_one_or_none()
 
 
-async def exists_for_month(db: AsyncSession, *, elder_id: uuid.UUID, period_month: date) -> bool:
-    """Whether the elder already has a survey this month (``survey_due`` is its negation)."""
+async def exists_for_month(db: AsyncSession, *, contact_id: uuid.UUID, period_month: date) -> bool:
+    """Whether the contact already has a survey this month (``survey_due`` is its negation)."""
     found = (
         await db.execute(
             select(WellbeingSurveyResult.id).where(
-                WellbeingSurveyResult.elder_id == elder_id,
+                WellbeingSurveyResult.contact_id == contact_id,
                 WellbeingSurveyResult.period_month == period_month,
             )
         )
@@ -73,7 +73,7 @@ async def upsert_for_month(
     db: AsyncSession,
     *,
     call_id: uuid.UUID,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     period_month: date,
     loneliness: int | None,
     mood: int | None,
@@ -82,7 +82,7 @@ async def upsert_for_month(
 ) -> tuple[WellbeingSurveyResult, bool]:
     """Record this month's survey once. Returns ``(row, created)``.
 
-    INSERT ... ON CONFLICT (elder_id, period_month) DO NOTHING: a first call inserts and
+    INSERT ... ON CONFLICT (contact_id, period_month) DO NOTHING: a first call inserts and
     returns ``(row, True)``; a repeat the same month inserts nothing and returns the
     existing row as ``(row, False)`` (FR-032). Flush-only.
     """
@@ -90,7 +90,7 @@ async def upsert_for_month(
         pg_insert(WellbeingSurveyResult)
         .values(
             call_id=call_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             period_month=period_month,
             loneliness=loneliness,
             mood=mood,
@@ -99,7 +99,7 @@ async def upsert_for_month(
         )
         .on_conflict_do_nothing(
             index_elements=[
-                WellbeingSurveyResult.elder_id,
+                WellbeingSurveyResult.contact_id,
                 WellbeingSurveyResult.period_month,
             ]
         )
@@ -111,7 +111,7 @@ async def upsert_for_month(
         created = await _get(db, new_id)
         assert created is not None  # just inserted in this txn
         return created, True
-    existing = await get_for_month(db, elder_id=elder_id, period_month=period_month)
+    existing = await get_for_month(db, contact_id=contact_id, period_month=period_month)
     if existing is None:  # pragma: no cover - the conflict guarantees a row exists
         raise RuntimeError("survey conflict without an existing row")
     return existing, False

@@ -2,14 +2,14 @@
 
 The catalog itself is CODE (operator-curatable in a later iteration, like
 ``emergency_resources``): each entry is a small, self-contained breathing exercise,
-memory exercise, or light game with a spoken ``script`` the agent reads warmly. Per-elder
+memory exercise, or light game with a spoken ``script`` the agent reads warmly. Per-contact
 *recent use* lives in the ``activity_history`` table, not here.
 
 ``select_activity`` is the pure non-repeat policy (FR-034 / SC-009): it never repeats an
-activity that was used within the last 30 days OR is among the elder's last 3 used (the
+activity that was used within the last 30 days OR is among the contact's last 3 used (the
 union — the larger exclusion set), preferring a never-used one for variety, then the
 least-recently-used. When every candidate is excluded (the catalog is exhausted for this
-elder) it falls back to the least-recently-used overall. Pure + deterministic so the
+contact) it falls back to the least-recently-used overall. Pure + deterministic so the
 ``get_activity`` endpoint stays a thin orchestrator (load history -> select -> record use).
 """
 
@@ -26,7 +26,7 @@ ActivityKindFilter = Literal["any", "breathing", "memory", "game"]
 
 @dataclass(frozen=True)
 class Activity:
-    """One catalog activity. ``script`` is spoken to the elder; keep it calm and concrete."""
+    """One catalog activity. ``script`` is spoken to the contact; keep it calm and concrete."""
 
     key: str
     kind: ActivityKind
@@ -35,7 +35,7 @@ class Activity:
 
 
 # Recency policy (FR-034). "Recently used" = used within the last 30 days OR among the
-# elder's last 3 uses — the union (whichever set is larger). Tunable in one place.
+# contact's last 3 uses — the union (whichever set is larger). Tunable in one place.
 RECENT_DAYS = 30
 RECENT_COUNT = 3
 
@@ -132,7 +132,7 @@ def select_activity(
 ) -> Activity:
     """Pick a mood-boosting activity not used recently (FR-034 / SC-009).
 
-    ``history`` is the elder's ``activity_history`` rows, MOST-RECENT-FIRST. Excludes
+    ``history`` is the contact's ``activity_history`` rows, MOST-RECENT-FIRST. Excludes
     anything used within ``RECENT_DAYS`` or among the last ``RECENT_COUNT`` uses (the
     union), then returns the never-used or least-recently-used candidate. When all
     candidates are excluded (catalog exhausted), returns the least-recently-used overall.

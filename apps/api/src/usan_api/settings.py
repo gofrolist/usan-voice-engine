@@ -43,7 +43,7 @@ class Settings(BaseSettings):
         default=1800, ge=60, le=7200, alias="OUTBOUND_MAX_CALL_DURATION_S"
     )
     jwt_signing_key: SecretStr = Field(..., min_length=32, alias="JWT_SIGNING_KEY")
-    # Static bearer token guarding the operator/management plane (elders, DNC, and
+    # Static bearer token guarding the operator/management plane (contacts, DNC, and
     # outbound call enqueue/lookup). Distinct from the agent's per-call JWTs. Held as
     # SecretStr so it is masked in repr()/model_dump()/tracebacks, never logged raw.
     operator_api_key: SecretStr = Field(..., min_length=16, alias="OPERATOR_API_KEY")
@@ -131,15 +131,15 @@ class Settings(BaseSettings):
     # (~5 simultaneous calls empirically saturated 2 vCPU; 8 on 4 vCPU is the
     # conservative start — measure before raising, per the v0.1.0 overwhelm lesson).
     # RESERVED_CONCURRENCY keeps headroom for ad-hoc/inbound calls, away from the
-    # pollers. The daily cap bounds TOTAL autonomous roots/elder/day across every
+    # pollers. The daily cap bounds TOTAL autonomous roots/contact/day across every
     # source (both US5 wellness slots — morning + evening — AND batch campaigns).
-    # At the default of 2 a single-slot elder gets one wellness call plus one batch
-    # campaign; a two-slot elder's morning+evening fill the cap, so a same-day batch
-    # to that elder is intentionally capped out (the harassment guard working as
+    # At the default of 2 a single-slot contact gets one wellness call plus one batch
+    # campaign; a two-slot contact's morning+evening fill the cap, so a same-day batch
+    # to that contact is intentionally capped out (the harassment guard working as
     # designed). A slot beyond the cap skips observably (skipped_daily_cap) and
     # retries next day — never a silent drop, never a late dial. Raise the cap to
-    # leave batch headroom for two-slot elders; lower it (>=1) only if one autonomous
-    # call/elder/day is the intended ceiling. AUTONOMOUS_DIALING_PAUSED is the
+    # leave batch headroom for two-slot contacts; lower it (>=1) only if one autonomous
+    # call/contact/day is the intended ceiling. AUTONOMOUS_DIALING_PAUSED is the
     # state-preserving emergency stop (§5.4, §10).
     scheduler_poller_enabled: bool = Field(default=False, alias="SCHEDULER_POLLER_ENABLED")
     scheduler_poll_interval_s: int = Field(
@@ -149,8 +149,8 @@ class Settings(BaseSettings):
     concurrency_gate_enabled: bool = Field(default=False, alias="CONCURRENCY_GATE_ENABLED")
     max_concurrent_calls: int = Field(default=8, ge=1, le=50, alias="MAX_CONCURRENT_CALLS")
     reserved_concurrency: int = Field(default=2, ge=0, le=20, alias="RESERVED_CONCURRENCY")
-    max_autonomous_calls_per_elder_per_day: int = Field(
-        default=2, ge=1, le=10, alias="MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY"
+    max_autonomous_calls_per_contact_per_day: int = Field(
+        default=2, ge=1, le=10, alias="MAX_AUTONOMOUS_CALLS_PER_CONTACT_PER_DAY"
     )
     autonomous_dialing_paused: bool = Field(default=False, alias="AUTONOMOUS_DIALING_PAUSED")
 
@@ -301,7 +301,7 @@ class Settings(BaseSettings):
     @classmethod
     def _https_scheme(cls, v: str) -> str:
         # Both carry a bearer secret in the Authorization header (the Telnyx / Cartesia
-        # API key), and the SMS flush also POSTs the rendered body + the elder's phone;
+        # API key), and the SMS flush also POSTs the rendered body + the contact's phone;
         # a plaintext/hostile endpoint would leak the secret (and PHI). Require https://
         # (operator config).
         if not v.startswith("https://"):

@@ -52,7 +52,7 @@ def build_opt_out_ack_body() -> str:
 
 # PHI-FREE monthly family report SMS (US8 / FR-012). The status-and-trends detail (mood,
 # adherence, survey) stays in Postgres on the family_reports row; the SMS only signals that
-# the elder is engaged and invites the family to call for specifics (Constitution II / T083).
+# the contact is engaged and invites the family to call for specifics (Constitution II / T083).
 _FAMILY_REPORT_BODY = (
     "This is USAN Retirement with a monthly update on your loved one. They have been "
     "staying in touch with us through their wellness calls this month. Call us anytime "
@@ -68,7 +68,7 @@ def build_family_report_body() -> str:
 async def enqueue_family_alert(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     to_number: str,
     reason: FamilyAlertReason,
     dedupe_key: str,
@@ -76,7 +76,7 @@ async def enqueue_family_alert(
     """Enqueue a PHI-minimized family alert (crisis / missed-call). Idempotent."""
     return await sms_repo.create_notification(
         db,
-        elder_id=elder_id,
+        contact_id=contact_id,
         to_number=to_number,
         kind="family_alert",
         body=build_family_alert_body(reason),
@@ -89,7 +89,7 @@ class AlertDispatch:
     """Outcome of resolving + enqueuing a family alert (US2 / T033/T034/T088).
 
     ``notified`` are the contacts opted in to this alert kind (an SMS was enqueued to
-    each). ``had_contacts`` is True if ANY contact is registered for the elder — so a
+    each). ``had_contacts`` is True if ANY contact is registered for the contact — so a
     caller routes to the operator queue (FR-013) only on a true absence, not when every
     contact merely opted out.
     """
@@ -101,7 +101,7 @@ class AlertDispatch:
 async def dispatch_family_alert(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     reason: FamilyAlertReason,
     dedupe_base: str,
 ) -> AlertDispatch:
@@ -114,12 +114,12 @@ async def dispatch_family_alert(
     Flush-only; the caller commits.
     """
     recipients = await family_contacts_repo.list_alert_recipients(
-        db, elder_id=elder_id, kind=reason
+        db, contact_id=contact_id, kind=reason
     )
     for contact in recipients:
         await enqueue_family_alert(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             to_number=contact.phone_e164,
             reason=reason,
             dedupe_key=f"{dedupe_base}:{contact.phone_e164}",
@@ -127,18 +127,18 @@ async def dispatch_family_alert(
     # Only pay the extra query when no one was opted in — distinguishes "no contact
     # registered" (operator fallback) from "all contacts opted out" (deliberate silence).
     had_contacts = bool(recipients) or bool(
-        await family_contacts_repo.list_family_contacts(db, elder_id=elder_id)
+        await family_contacts_repo.list_family_contacts(db, contact_id=contact_id)
     )
     return AlertDispatch(notified=list(recipients), had_contacts=had_contacts)
 
 
 async def enqueue_opt_out_ack(
-    db: AsyncSession, *, elder_id: uuid.UUID, to_number: str, dedupe_key: str
+    db: AsyncSession, *, contact_id: uuid.UUID, to_number: str, dedupe_key: str
 ) -> SmsMessage | None:
     """Enqueue the one-time PHI-free opt-out acknowledgement. Idempotent."""
     return await sms_repo.create_notification(
         db,
-        elder_id=elder_id,
+        contact_id=contact_id,
         to_number=to_number,
         kind="opt_out_ack",
         body=build_opt_out_ack_body(),
@@ -149,7 +149,7 @@ async def enqueue_opt_out_ack(
 async def enqueue_family_report(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     to_number: str,
     body: str,
     dedupe_key: str,
@@ -158,7 +158,7 @@ async def enqueue_family_report(
     (the full report narrative stays in Postgres; the SMS only signals an update)."""
     return await sms_repo.create_notification(
         db,
-        elder_id=elder_id,
+        contact_id=contact_id,
         to_number=to_number,
         kind="family_report",
         body=body,

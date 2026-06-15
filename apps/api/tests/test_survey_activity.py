@@ -1,8 +1,8 @@
 """T057 (US6): contract tests for the wellbeing tools.
 
 ``record_survey`` (POST /v1/tools/record_survey) records the monthly wellbeing survey
-exactly once per elder per calendar month — a repeat within the month is a no-op that
-returns the existing row (unique ``(elder_id, period_month)``; FR-032 / SC-008).
+exactly once per contact per calendar month — a repeat within the month is a no-op that
+returns the existing row (unique ``(contact_id, period_month)``; FR-032 / SC-008).
 
 ``get_activity`` (POST /v1/tools/get_activity) returns a mood-boosting activity not used
 recently and records the use, so consecutive calls do not repeat until the catalog is
@@ -62,12 +62,12 @@ def _auth(call_id: str) -> dict:
     return {"Authorization": f"Bearer {_service_token(call_id)}"}
 
 
-async def _make_elder(session_factory, *, tz: str = "UTC") -> str:
+async def _make_contact(session_factory, *, tz: str = "UTC") -> str:
     async with session_factory() as db:
         eid = (
             await db.execute(
                 text(
-                    "INSERT INTO elders (name, phone_e164, timezone) "
+                    "INSERT INTO contacts (name, phone_e164, timezone) "
                     "VALUES ('Ada', :p, :tz) RETURNING id"
                 ),
                 {"p": f"+1555{str(uuid.uuid4().int)[:7]}", "tz": tz},
@@ -77,10 +77,14 @@ async def _make_elder(session_factory, *, tz: str = "UTC") -> str:
         return str(eid)
 
 
-def _enqueue_call(client, elder_id: str) -> str:
+def _enqueue_call(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"wb-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"wb-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202, r.text
@@ -90,15 +94,15 @@ def _enqueue_call(client, elder_id: str) -> str:
 # --- record_survey ---------------------------------------------------------
 
 
-async def _surveys(session_factory, elder_id: str):
+async def _surveys(session_factory, contact_id: str):
     async with session_factory() as db:
         return (
             await db.execute(
                 text(
                     "SELECT id, period_month, loneliness, mood, satisfaction, raw "
-                    "FROM wellbeing_survey_results WHERE elder_id = :e ORDER BY id"
+                    "FROM wellbeing_survey_results WHERE contact_id = :e ORDER BY id"
                 ),
-                {"e": elder_id},
+                {"e": contact_id},
             )
         ).all()
 
@@ -112,8 +116,8 @@ def _record_survey(client, call_id: str, **body):
 
 
 async def test_record_survey_inserts_for_current_month(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
 
     r = _record_survey(client, call_id, loneliness=2, mood=4, satisfaction=3)
     assert r.status_code == 200, r.text
@@ -122,16 +126,16 @@ async def test_record_survey_inserts_for_current_month(client, mock_dispatch, se
     # period_month is a first-of-month anchor (data-model).
     assert body["period_month"].endswith("-01")
 
-    rows = await _surveys(session_factory, elder_id)
+    rows = await _surveys(session_factory, contact_id)
     assert len(rows) == 1
     assert (rows[0].loneliness, rows[0].mood, rows[0].satisfaction) == (2, 4, 3)
 
 
 async def test_record_survey_is_once_per_month_idempotent(client, mock_dispatch, session_factory):
-    # Unique (elder_id, period_month): a second survey the same month returns the existing
+    # Unique (contact_id, period_month): a second survey the same month returns the existing
     # row and writes nothing new (FR-032 / SC-008) — no duplicate, no 409.
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
 
     first = _record_survey(client, call_id, loneliness=1, mood=2, satisfaction=2)
     assert first.status_code == 200, first.text
@@ -139,32 +143,32 @@ async def test_record_survey_is_once_per_month_idempotent(client, mock_dispatch,
     assert second.status_code == 200, second.text
 
     assert second.json()["id"] == first.json()["id"]  # returns the existing row
-    rows = await _surveys(session_factory, elder_id)
+    rows = await _surveys(session_factory, contact_id)
     assert len(rows) == 1  # the repeat wrote nothing
     assert (rows[0].loneliness, rows[0].mood, rows[0].satisfaction) == (1, 2, 2)
 
 
 async def test_record_survey_rejects_out_of_scale(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
     r = _record_survey(client, call_id, mood=9)  # 1-5 scale
     assert r.status_code == 422, r.text
-    assert await _surveys(session_factory, elder_id) == []
+    assert await _surveys(session_factory, contact_id) == []
 
 
 async def test_record_survey_token_scoped_to_other_call_is_rejected(
     client, mock_dispatch, session_factory
 ):
-    elder_id = await _make_elder(session_factory)
-    call_a = _enqueue_call(client, elder_id)
-    call_b = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_a = _enqueue_call(client, contact_id)
+    call_b = _enqueue_call(client, contact_id)
     r = client.post(
         "/v1/tools/record_survey",
         json={"call_id": call_b, "mood": 3},
         headers=_auth(call_a),
     )
     assert r.status_code == 403, r.text
-    assert await _surveys(session_factory, elder_id) == []
+    assert await _surveys(session_factory, contact_id) == []
 
 
 # --- get_activity ----------------------------------------------------------
@@ -179,8 +183,8 @@ def _get_activity(client, call_id: str, **body):
 
 
 async def test_get_activity_returns_script_and_records_use(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
 
     r = _get_activity(client, call_id)
     assert r.status_code == 200, r.text
@@ -192,8 +196,8 @@ async def test_get_activity_returns_script_and_records_use(client, mock_dispatch
     async with session_factory() as db:
         rows = (
             await db.execute(
-                text("SELECT activity_key, call_id FROM activity_history WHERE elder_id = :e"),
-                {"e": elder_id},
+                text("SELECT activity_key, call_id FROM activity_history WHERE contact_id = :e"),
+                {"e": contact_id},
             )
         ).all()
     assert len(rows) == 1  # the use was recorded
@@ -208,32 +212,32 @@ async def test_get_activity_does_not_repeat_until_exhausted(client, mock_dispatc
     from usan_api import activities_catalog
 
     total = len(activities_catalog.list_activities("any"))
-    elder_id = await _make_elder(session_factory)
+    contact_id = await _make_contact(session_factory)
 
     seen: list[str] = []
     for _ in range(total):
-        call_id = _enqueue_call(client, elder_id)
+        call_id = _enqueue_call(client, contact_id)
         key = _get_activity(client, call_id).json()["activity_key"]
         seen.append(key)
     assert len(set(seen)) == total  # every distinct activity used, no repeat yet
 
     # Catalog now exhausted -> the next pick is the least-recently-used (the first used).
-    call_id = _enqueue_call(client, elder_id)
+    call_id = _enqueue_call(client, contact_id)
     assert _get_activity(client, call_id).json()["activity_key"] == seen[0]
 
 
 async def test_get_activity_kind_filter(client, mock_dispatch, session_factory):
     from usan_api import activities_catalog
 
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
     key = _get_activity(client, call_id, kind="breathing").json()["activity_key"]
     assert activities_catalog.by_key(key).kind == "breathing"
 
 
 async def test_get_activity_rejects_unknown_kind(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
     r = _get_activity(client, call_id, kind="dancing")  # closed set
     assert r.status_code == 422, r.text
 

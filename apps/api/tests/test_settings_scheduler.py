@@ -24,7 +24,7 @@ def test_scheduler_defaults_are_inert():
     assert s.scheduler_batch_size == 50
     assert s.max_concurrent_calls == 8
     assert s.reserved_concurrency == 2
-    assert s.max_autonomous_calls_per_elder_per_day == 2
+    assert s.max_autonomous_calls_per_contact_per_day == 2
 
 
 @pytest.mark.parametrize(
@@ -34,7 +34,7 @@ def test_scheduler_defaults_are_inert():
         {"SCHEDULER_POLL_INTERVAL_S": "601"},  # gt 600
         {"SCHEDULER_BATCH_SIZE": "0"},  # lt 1
         {"MAX_CONCURRENT_CALLS": "51"},  # gt 50
-        {"MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY": "0"},  # lt 1
+        {"MAX_AUTONOMOUS_CALLS_PER_CONTACT_PER_DAY": "0"},  # lt 1
     ],
 )
 def test_scheduler_bounds_enforced(overrides: dict[str, str]):

@@ -13,7 +13,7 @@ from usan_api import livekit_dispatch
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.settings import Settings
 
 
@@ -64,10 +64,12 @@ async def session_factory(async_database_url):
 async def _seed(factory, status=CallStatus.DIALING, room="usan-outbound-x"):
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="Ada", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(
+            db, name="Ada", phone_e164=phone, timezone="UTC"
+        )
         call = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=status,
             livekit_room=room,
@@ -561,12 +563,12 @@ async def test_dispatch_and_dial_retry_carries_resolved_vars_in_metadata(
 
     call_id, _ = await _seed(session_factory, room="usan-retry-meta")
 
-    # Enrich the elder with a timezone so the resolved tz is non-empty.
+    # Enrich the contact with a timezone so the resolved tz is non-empty.
     async with session_factory() as db:
         call = await calls_repo.get_call(db, call_id)
-        elder = await elders_repo.get_elder(db, call.elder_id)
-        elder.name = "Margaret Retry"
-        elder.timezone = "US/Central"
+        contact = await contacts_repo.get_contact(db, call.contact_id)
+        contact.name = "Margaret Retry"
+        contact.timezone = "US/Central"
         await db.commit()
 
     await livekit_dispatch.dispatch_and_dial(call_id, _settings())

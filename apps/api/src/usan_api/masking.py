@@ -1,6 +1,6 @@
 """Phone masking for admin-plane response bodies.
 
-Extracted bit-identical from ``routers/admin_elders.py::_mask`` so both the elders
+Extracted bit-identical from ``routers/admin_contacts.py::_mask`` so both the contacts
 roster and the calls read model render phones the same way (spec §6.3).
 """
 

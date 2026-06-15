@@ -59,11 +59,11 @@ export const fieldMeta: Record<string, FieldMeta> = {
   },
   "prompts.inbound_opening": {
     label: "Inbound opening",
-    help: "How to open an inbound (elder-initiated) call. Supports {{variable}} tokens (insert-variable button); missing values fall back to defaults. Max 1000 chars.",
+    help: "How to open an inbound (contact-initiated) call. Supports {{variable}} tokens (insert-variable button); missing values fall back to defaults. Max 1000 chars.",
   },
   "prompts.inbound_personalization_template": {
     label: "Inbound personalization template",
-    help: "Supports {{variable}} tokens (use the insert-variable button); missing values fall back to defaults. Legacy single-brace slots {elder_name} and {last_check_in_line} still work. Max 6000 chars.",
+    help: "Supports {{variable}} tokens (use the insert-variable button); missing values fall back to defaults. Legacy single-brace slots {contact_name} and {last_check_in_line} still work. Max 6000 chars.",
   },
 
   // Voice

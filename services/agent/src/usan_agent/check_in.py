@@ -117,7 +117,7 @@ async def _do_flag_for_followup(
 
 
 # Universal spoken fallback when the escalation POST itself fails: a crisis must
-# never end with the elder hearing nothing actionable.
+# never end with the contact hearing nothing actionable.
 _CRISIS_FALLBACK = (
     "I'm really concerned about your safety. If this is an emergency, please call 911 "
     "right now, or call or text 988 for crisis support. I'm staying right here with you."
@@ -176,7 +176,7 @@ async def _do_close_family_task(data: CheckInData, *, task_id: int | None = None
     """Mark conveyed family message(s) delivered so they aren't repeated next call.
 
     ``task_id`` is optional: the agent sees only the task TEXT (the open_family_tasks
-    builtin), so omitting it closes ALL of this elder's open tasks. On failure it returns
+    builtin), so omitting it closes ALL of this contact's open tasks. On failure it returns
     a benign confirmation rather than raising — a bookkeeping write must not derail the call.
     """
     try:
@@ -194,7 +194,7 @@ async def _do_record_personal_fact(
     content: str,
     structured: dict[str, Any] | None = None,
 ) -> str:
-    """Remember a durable fact the elder shared. On failure return a benign confirmation
+    """Remember a durable fact the contact shared. On failure return a benign confirmation
     rather than raising — a memory write must not derail the conversation."""
     try:
         await api_client.record_personal_fact(
@@ -225,7 +225,7 @@ async def _do_record_survey(
     mood: int | None = None,
     satisfaction: int | None = None,
 ) -> str:
-    """Record the elder's monthly wellbeing survey. On failure return a benign confirmation
+    """Record the contact's monthly wellbeing survey. On failure return a benign confirmation
     rather than raising — a bookkeeping write must not derail a gentle conversation."""
     try:
         await api_client.record_survey(
@@ -307,7 +307,7 @@ async def _do_send_sms(data: CheckInData, *, template_key: str) -> str:
 
 
 async def _do_send_info_sms(data: CheckInData) -> str:
-    """Text the elder the helpful-numbers SMS (US7 / FR-041). On failure return a calm
+    """Text the contact the helpful-numbers SMS (US7 / FR-041). On failure return a calm
     confirmation rather than raising — a convenience text must not derail the call."""
     try:
         await api_client.send_info_sms(data.call_id, data.settings)
@@ -367,7 +367,7 @@ async def log_wellness(
     pain_level: int | None = None,
     notes: str | None = None,
 ) -> str:
-    """Record the elder's wellness this call.
+    """Record the contact's wellness this call.
 
     Args:
         mood: Overall mood, 1 (low) to 5 (great).
@@ -384,7 +384,7 @@ async def log_medication(
     taken: bool,
     reported_time: str | None = None,
 ) -> str:
-    """Record whether the elder has taken a medication.
+    """Record whether the contact has taken a medication.
 
     Args:
         medication_name: The medication's name.
@@ -398,7 +398,7 @@ async def log_medication(
 
 @function_tool
 async def get_today_meds(ctx: RunContext[CheckInData]) -> str:
-    """List the medications the elder is scheduled to take today."""
+    """List the medications the contact is scheduled to take today."""
     return await _do_get_today_meds(ctx.userdata)
 
 
@@ -429,7 +429,7 @@ async def raise_crisis(
 ) -> str:
     """Escalate an urgent, life-safety crisis and get the emergency resource to share.
 
-    Call this the MOMENT the elder expresses any of the following, then calmly relay
+    Call this the MOMENT the contact expresses any of the following, then calmly relay
     the spoken response and stay with them:
       - "suicidal": thoughts of suicide or self-harm
       - "medical": a medical emergency (chest pain, can't breathe, a bad fall, stroke signs)
@@ -451,12 +451,12 @@ async def schedule_callback(
     requested_at: str | None = None,
     notes: str | None = None,
 ) -> str:
-    """Record that the elder would like a call back at a particular time.
+    """Record that the contact would like a call back at a particular time.
 
     This does not place a call; it stores a request for a human to action.
 
     Args:
-        requested_time_text: The elder's own words for when they'd like the call back.
+        requested_time_text: The contact's own words for when they'd like the call back.
         requested_at: Optional best-effort ISO-8601 timestamp; omit if you can't resolve one.
         notes: Optional short free-text note about the request.
     """
@@ -475,7 +475,7 @@ async def close_family_task(
 ) -> str:
     """Mark a family member's message as delivered once you've conveyed it.
 
-    Call this after you have passed the family's open message(s) on to the elder so they
+    Call this after you have passed the family's open message(s) on to the contact so they
     are not repeated on the next call. You normally do not need a task id — omit it to
     mark all the conveyed family messages delivered.
 
@@ -492,7 +492,7 @@ async def record_personal_fact(
     content: str,
     date: str | None = None,
 ) -> str:
-    """Remember a durable fact the elder shares, to use naturally on future calls.
+    """Remember a durable fact the contact shares, to use naturally on future calls.
 
     Use this when they mention something lasting worth remembering — a loved one, a
     daily routine, a preference, an important date, or relevant health context. Do not
@@ -520,7 +520,7 @@ async def record_survey(
     mood: int | None = None,
     satisfaction: int | None = None,
 ) -> str:
-    """Record the elder's short monthly wellbeing survey.
+    """Record the contact's short monthly wellbeing survey.
 
     Use this only when the monthly survey is due. Ask gently and conversationally, then
     record whatever they answer (it's fine to omit a value they'd rather not give).
@@ -537,7 +537,7 @@ async def record_survey(
 
 @function_tool
 async def get_activity(ctx: RunContext[CheckInData], kind: ActivityKind = "any") -> str:
-    """Get a short mood-boosting activity to offer when the elder's mood is low.
+    """Get a short mood-boosting activity to offer when the contact's mood is low.
 
     Returns a gentle script (a breathing exercise, a memory exercise, or a light game) for
     you to guide them through warmly. It will not repeat one used recently. Offer it kindly
@@ -551,7 +551,7 @@ async def get_activity(ctx: RunContext[CheckInData], kind: ActivityKind = "any")
 
 @function_tool
 async def send_sms(ctx: RunContext[CheckInData], template_key: str) -> str:
-    """Send the elder a pre-approved text message.
+    """Send the contact a pre-approved text message.
 
     Args:
         template_key: The id of the message template to send (choose from the
@@ -562,9 +562,9 @@ async def send_sms(ctx: RunContext[CheckInData], template_key: str) -> str:
 
 @function_tool
 async def send_info_sms(ctx: RunContext[CheckInData]) -> str:
-    """Text the elder a short list of helpful emergency and helpline phone numbers.
+    """Text the contact a short list of helpful emergency and helpline phone numbers.
 
-    Use this when the elder asks for the helpful numbers (or to have them by text). It
+    Use this when the contact asks for the helpful numbers (or to have them by text). It
     sends a fixed, pre-approved message — you do not write the text yourself.
     """
     return await _do_send_info_sms(ctx.userdata)
@@ -572,9 +572,9 @@ async def send_info_sms(ctx: RunContext[CheckInData]) -> str:
 
 @function_tool
 async def register_opt_out(ctx: RunContext[CheckInData]) -> str:
-    """Record that the elder no longer wants to be called, and stop future calls.
+    """Record that the contact no longer wants to be called, and stop future calls.
 
-    Use this when the elder clearly asks not to be called anymore (or to be taken off the
+    Use this when the contact clearly asks not to be called anymore (or to be taken off the
     list). Acknowledge warmly; this adds their number to the do-not-call list.
     """
     return await _do_register_opt_out(ctx.userdata)
@@ -582,9 +582,9 @@ async def register_opt_out(ctx: RunContext[CheckInData]) -> str:
 
 @function_tool
 async def set_spanish_callback(ctx: RunContext[CheckInData]) -> str:
-    """Promise the elder a Spanish-language callback and arrange it.
+    """Promise the contact a Spanish-language callback and arrange it.
 
-    Use this when the elder is speaking Spanish or asks to be helped in Spanish. Do not
+    Use this when the contact is speaking Spanish or asks to be helped in Spanish. Do not
     switch languages mid-call; warmly promise a callback in Spanish. This records their
     language preference and schedules the Spanish callback.
     """
@@ -642,7 +642,7 @@ async def noop_log_wellness(
     pain_level: int | None = None,
     notes: str | None = None,
 ) -> str:
-    """Record the elder's wellness this call.
+    """Record the contact's wellness this call.
 
     Args:
         mood: Overall mood, 1 (low) to 5 (great).
@@ -659,7 +659,7 @@ async def noop_log_medication(
     taken: bool,
     reported_time: str | None = None,
 ) -> str:
-    """Record whether the elder has taken a medication.
+    """Record whether the contact has taken a medication.
 
     Args:
         medication_name: The medication's name.
@@ -671,7 +671,7 @@ async def noop_log_medication(
 
 @function_tool
 async def noop_get_today_meds(ctx: RunContext[CheckInData]) -> str:
-    """List the medications the elder is scheduled to take today."""
+    """List the medications the contact is scheduled to take today."""
     return "Today's medications are: (test mode) Example Medication at 9:00 AM."
 
 
@@ -700,7 +700,7 @@ async def noop_raise_crisis(
 ) -> str:
     """Escalate an urgent, life-safety crisis and get the emergency resource to share.
 
-    Call this the MOMENT the elder expresses any of the following, then calmly relay
+    Call this the MOMENT the contact expresses any of the following, then calmly relay
     the spoken response and stay with them:
       - "suicidal": thoughts of suicide or self-harm
       - "medical": a medical emergency (chest pain, can't breathe, a bad fall, stroke signs)
@@ -724,10 +724,10 @@ async def noop_schedule_callback(
     requested_at: str | None = None,
     notes: str | None = None,
 ) -> str:
-    """Record that the elder would like a call back at a particular time.
+    """Record that the contact would like a call back at a particular time.
 
     Args:
-        requested_time_text: The elder's own words for when they'd like the call back.
+        requested_time_text: The contact's own words for when they'd like the call back.
         requested_at: Optional best-effort ISO-8601 timestamp; omit if you can't resolve one.
         notes: Optional short free-text note about the request.
     """
@@ -741,7 +741,7 @@ async def noop_close_family_task(
 ) -> str:
     """Mark a family member's message as delivered once you've conveyed it.
 
-    Call this after you have passed the family's open message(s) on to the elder so they
+    Call this after you have passed the family's open message(s) on to the contact so they
     are not repeated on the next call. You normally do not need a task id — omit it to
     mark all the conveyed family messages delivered.
 
@@ -758,7 +758,7 @@ async def noop_record_personal_fact(
     content: str,
     date: str | None = None,
 ) -> str:
-    """Remember a durable fact the elder shares, to use naturally on future calls.
+    """Remember a durable fact the contact shares, to use naturally on future calls.
 
     Use this when they mention something lasting worth remembering — a loved one, a
     daily routine, a preference, an important date, or relevant health context. Do not
@@ -783,7 +783,7 @@ async def noop_record_survey(
     mood: int | None = None,
     satisfaction: int | None = None,
 ) -> str:
-    """Record the elder's short monthly wellbeing survey.
+    """Record the contact's short monthly wellbeing survey.
 
     Use this only when the monthly survey is due. Ask gently and conversationally, then
     record whatever they answer (it's fine to omit a value they'd rather not give).
@@ -798,7 +798,7 @@ async def noop_record_survey(
 
 @function_tool
 async def noop_get_activity(ctx: RunContext[CheckInData], kind: ActivityKind = "any") -> str:
-    """Get a short mood-boosting activity to offer when the elder's mood is low.
+    """Get a short mood-boosting activity to offer when the contact's mood is low.
 
     Returns a gentle script (a breathing exercise, a memory exercise, or a light game) for
     you to guide them through warmly. It will not repeat one used recently. Offer it kindly
@@ -814,7 +814,7 @@ async def noop_get_activity(ctx: RunContext[CheckInData], kind: ActivityKind = "
 
 @function_tool
 async def noop_send_sms(ctx: RunContext[CheckInData], template_key: str) -> str:
-    """Send the elder a pre-approved text message.
+    """Send the contact a pre-approved text message.
 
     Args:
         template_key: The id of the message template to send (choose from the
@@ -825,9 +825,9 @@ async def noop_send_sms(ctx: RunContext[CheckInData], template_key: str) -> str:
 
 @function_tool
 async def noop_send_info_sms(ctx: RunContext[CheckInData]) -> str:
-    """Text the elder a short list of helpful emergency and helpline phone numbers.
+    """Text the contact a short list of helpful emergency and helpline phone numbers.
 
-    Use this when the elder asks for the helpful numbers (or to have them by text). It
+    Use this when the contact asks for the helpful numbers (or to have them by text). It
     sends a fixed, pre-approved message — you do not write the text yourself.
     """
     return "I've texted you those helpful phone numbers."
@@ -835,9 +835,9 @@ async def noop_send_info_sms(ctx: RunContext[CheckInData]) -> str:
 
 @function_tool
 async def noop_register_opt_out(ctx: RunContext[CheckInData]) -> str:
-    """Record that the elder no longer wants to be called, and stop future calls.
+    """Record that the contact no longer wants to be called, and stop future calls.
 
-    Use this when the elder clearly asks not to be called anymore (or to be taken off the
+    Use this when the contact clearly asks not to be called anymore (or to be taken off the
     list). Acknowledge warmly; this adds their number to the do-not-call list.
     """
     return "Of course — I've taken you off our call list. You won't get these calls anymore."
@@ -845,9 +845,9 @@ async def noop_register_opt_out(ctx: RunContext[CheckInData]) -> str:
 
 @function_tool
 async def noop_set_spanish_callback(ctx: RunContext[CheckInData]) -> str:
-    """Promise the elder a Spanish-language callback and arrange it.
+    """Promise the contact a Spanish-language callback and arrange it.
 
-    Use this when the elder is speaking Spanish or asks to be helped in Spanish. Do not
+    Use this when the contact is speaking Spanish or asks to be helped in Spanish. Do not
     switch languages mid-call; warmly promise a callback in Spanish. This records their
     language preference and schedules the Spanish callback.
     """
@@ -1004,7 +1004,7 @@ def build_inbound_agent(
     """The inbound check-in Agent: configured tools + personalized instructions.
 
     Substitutes ``{{tokens}}`` AND the two legacy single-brace slots
-    (``{elder_name}``, ``{last_check_in_line}``) across the inbound
+    (``{contact_name}``, ``{last_check_in_line}``) across the inbound
     personalization template, so both new and already-published templates render.
     All injected values (resolved built-in + custom) are sanitized inside
     ``build_vars`` before substitution.  ``last_check_in_line`` is derived from

@@ -1,9 +1,9 @@
 """Post-call summarization + fact extraction (US4 / T049-T050; design §memory).
 
 After a call completes, one Vertex turn over the transcript produces a short recap,
-the elder's open follow-up plans, and any durable facts worth remembering. The recap +
+the contact's open follow-up plans, and any durable facts worth remembering. The recap +
 plans become the ``last_call_summary`` / ``open_plans`` built-ins and the facts become
-``personal_facts`` (``source='extracted'``) — all carried into the elder's next call.
+``personal_facts`` (``source='extracted'``) — all carried into the contact's next call.
 
 PHI containment (Constitution II): the transcript is PHI. It is sent ONLY to Vertex AI
 via ``vertexai=True`` + ADC (reusing ``vertex_test.run_vertex_turn``) — NEVER the Gemini
@@ -45,10 +45,10 @@ _MAX_FACT_CONTENT_CHARS = 500
 _MAX_EXTRACTED_FACTS = 20
 
 _SYSTEM_INSTRUCTION = (
-    "You summarize a wellness check-in call with an elderly person for the next call's "
+    "You summarize a wellness check-in call with a person for the next call's "
     "context. Respond with ONLY a JSON object, no markdown, with keys: "
     '"summary" (1-3 sentence recap, warm and factual), '
-    '"open_plans" (array of short strings: things the elder said they intend to do or '
+    '"open_plans" (array of short strings: things the contact said they intend to do or '
     "want followed up, e.g. 'see the doctor Tuesday'; empty array if none), and "
     '"facts" (array of durable facts worth remembering long-term, each an object with '
     '"category" (one of: person, routine, preference, important_date, health_context), '
@@ -150,7 +150,7 @@ async def summarize_call_with(
     if await summaries_repo.get_for_call(db, call_id) is not None:
         return None  # idempotent: a prior trigger already summarized this call
     call = await calls_repo.get_call(db, call_id)
-    if call is None or call.elder_id is None:
+    if call is None or call.contact_id is None:
         return None
     segments = await transcripts_repo.list_for_call(db, call_id)
     transcript_text = _render_transcript(segments)
@@ -170,7 +170,7 @@ async def summarize_call_with(
     summary_row = await summaries_repo.create(
         db,
         call_id=call_id,
-        elder_id=call.elder_id,
+        contact_id=call.contact_id,
         summary=parsed.summary,
         open_plans=parsed.open_plans,
         model_version=settings.summarization_model,
@@ -179,18 +179,18 @@ async def summarize_call_with(
         # Lost a race to a concurrent trigger — it owns the facts too; don't double-write.
         return None
 
-    # Extracted facts, skipping ones already active for this elder (avoid re-adding the
-    # same fact every call). source='extracted' — never forge an elder_stated fact here.
+    # Extracted facts, skipping ones already active for this contact (avoid re-adding the
+    # same fact every call). source='extracted' — never forge an contact_stated fact here.
     # Dedup against the FULL active key set (uncapped) — list_active's 50-row injection cap
     # would let a duplicate beyond row 50 be re-inserted every call (unbounded growth).
-    existing = await personal_facts_repo.list_active_keys(db, elder_id=call.elder_id)
+    existing = await personal_facts_repo.list_active_keys(db, contact_id=call.contact_id)
     for fact in parsed.facts:
         if (fact.category, fact.content) in existing:
             continue
         existing.add((fact.category, fact.content))
         await personal_facts_repo.create(
             db,
-            elder_id=call.elder_id,
+            contact_id=call.contact_id,
             category=fact.category,
             content=fact.content,
             structured=fact.structured or None,

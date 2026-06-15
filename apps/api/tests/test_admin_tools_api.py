@@ -1,7 +1,7 @@
 """Admin read endpoint GET /v1/admin/follow-up-flags (session-gated + audited)
 plus the C2 PATCH transition matrix for both ops queues (spec §4.3/§9).
 
-Uses the cookie-jar admin_session fixture exactly like test_admin_elders_api /
+Uses the cookie-jar admin_session fixture exactly like test_admin_contacts_api /
 test_variable_catalog_api (the cookie is set on the shared `client`).
 """
 
@@ -28,9 +28,9 @@ def mock_dispatch(monkeypatch):
     monkeypatch.setattr(dialer, "schedule_dial", lambda call_id, settings: None)
 
 
-def _create_elder(client) -> str:
+def _create_contact(client) -> str:
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={
             "name": "Ada",
             "phone_e164": f"+1555{str(uuid.uuid4().int)[:7]}",
@@ -43,10 +43,14 @@ def _create_elder(client) -> str:
     return r.json()["id"]
 
 
-def _enqueue(client, elder_id: str) -> str:
+def _enqueue(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"flag-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"flag-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202
@@ -54,15 +58,15 @@ def _enqueue(client, elder_id: str) -> str:
 
 
 def _seed_flag(client, *, severity="urgent", category="medical", reason="reported chest pain"):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/flag_for_followup",
         json={"call_id": call_id, "severity": severity, "category": category, "reason": reason},
         headers={"Authorization": f"Bearer {_service_token(call_id)}"},
     )
     assert r.status_code == 200, r.text
-    return elder_id, call_id, r.json()["id"]
+    return contact_id, call_id, r.json()["id"]
 
 
 def test_follow_up_flags_requires_session(client):
@@ -70,7 +74,7 @@ def test_follow_up_flags_requires_session(client):
 
 
 def test_follow_up_flags_list_and_filter(client, mock_dispatch, admin_session):
-    elder_id, _call_id, flag_id = _seed_flag(client)
+    contact_id, _call_id, flag_id = _seed_flag(client)
 
     rows = client.get("/v1/admin/follow-up-flags").json()
     me = next(f for f in rows if f["id"] == flag_id)
@@ -79,8 +83,8 @@ def test_follow_up_flags_list_and_filter(client, mock_dispatch, admin_session):
     assert me["reason"] == "reported chest pain"
     assert me["status"] == "open"
 
-    by_elder = client.get(f"/v1/admin/follow-up-flags?elder_id={elder_id}").json()
-    assert [f["id"] for f in by_elder] == [flag_id]
+    by_contact = client.get(f"/v1/admin/follow-up-flags?contact_id={contact_id}").json()
+    assert [f["id"] for f in by_contact] == [flag_id]
 
     open_rows = client.get("/v1/admin/follow-up-flags?status=open").json()
     assert any(f["id"] == flag_id for f in open_rows)
@@ -97,7 +101,7 @@ def test_follow_up_flags_list_and_filter(client, mock_dispatch, admin_session):
 def test_follow_up_flags_read_is_audited_phi_free(client, mock_dispatch, admin_session):
     # F7: AuditEntryOut serializes `detail`. The admin read of PHI rows must be
     # audited, but the audit entry itself must carry NO PHI (no reason text).
-    _elder_id, _call_id, _flag_id = _seed_flag(client, reason="secret chest pain note")
+    _contact_id, _call_id, _flag_id = _seed_flag(client, reason="secret chest pain note")
     client.get("/v1/admin/follow-up-flags")
     rows = client.get("/v1/admin/audit?action=follow_up_flags.list").json()
     assert rows, "follow-up-flags read must write an audit entry"
@@ -143,33 +147,33 @@ async def _seed_callback_async(async_database_url: str, *, notes: str | None = N
     Modeled on test_admin_callback_requests_api._seed_callback; the public tool
     endpoint path is exercised there — here we only need a row to transition.
     """
-    elder_id = str(uuid.uuid4())
+    contact_id = str(uuid.uuid4())
     call_id = str(uuid.uuid4())
     engine = create_async_engine(async_database_url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "INSERT INTO elders (id, name, phone_e164, timezone) "
+                    "INSERT INTO contacts (id, name, phone_e164, timezone) "
                     "VALUES (CAST(:id AS uuid), 'Ada', :p, 'UTC')"
                 ),
-                {"id": elder_id, "p": f"+1555{str(uuid.UUID(elder_id).int)[:7].zfill(7)}"},
+                {"id": contact_id, "p": f"+1555{str(uuid.UUID(contact_id).int)[:7].zfill(7)}"},
             )
             await conn.execute(
                 text(
-                    "INSERT INTO calls (id, elder_id, direction, status) "
+                    "INSERT INTO calls (id, contact_id, direction, status) "
                     "VALUES (CAST(:cid AS uuid), CAST(:eid AS uuid), 'outbound', 'completed')"
                 ),
-                {"cid": call_id, "eid": elder_id},
+                {"cid": call_id, "eid": contact_id},
             )
             result = await conn.execute(
                 text(
                     "INSERT INTO callback_requests "
-                    "(call_id, elder_id, requested_time_text, notes) "
+                    "(call_id, contact_id, requested_time_text, notes) "
                     "VALUES (CAST(:cid AS uuid), CAST(:eid AS uuid), 'tomorrow at 3', :n) "
                     "RETURNING id"
                 ),
-                {"cid": call_id, "eid": elder_id, "n": notes},
+                {"cid": call_id, "eid": contact_id, "n": notes},
             )
             return int(result.scalar_one())
     finally:
@@ -185,7 +189,7 @@ def _audit_count(client, action: str) -> int:
 
 
 def test_flag_transition_matrix(client, mock_dispatch, admin_session):
-    _elder_id, _call_id, flag_id = _seed_flag(client)
+    _contact_id, _call_id, flag_id = _seed_flag(client)
 
     r = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "acknowledged"})
     assert r.status_code == 200, r.text
@@ -205,7 +209,7 @@ def test_flag_transition_matrix(client, mock_dispatch, admin_session):
 
 
 def test_flag_transition_idempotent_noop(client, mock_dispatch, admin_session):
-    _elder_id, _call_id, flag_id = _seed_flag(client, reason="secret noop reason")
+    _contact_id, _call_id, flag_id = _seed_flag(client, reason="secret noop reason")
 
     first = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "acknowledged"})
     assert first.status_code == 200, first.text
@@ -215,7 +219,7 @@ def test_flag_transition_idempotent_noop(client, mock_dispatch, admin_session):
     assert _audit_count(client, "follow_up_flag.noop_read") == 0
 
     # (a) ack -> ack replay: 200, stamps byte-identical, no new .update audit row
-    # — but the body is still a PHI read (reason + elder_name), so a PHI-free
+    # — but the body is still a PHI read (reason + contact_name), so a PHI-free
     # noop_read audit row lands in the same request (spec §6.2).
     replay = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "acknowledged"})
     assert replay.status_code == 200, replay.text
@@ -248,7 +252,7 @@ def test_flag_transition_idempotent_noop(client, mock_dispatch, admin_session):
 
 
 def test_flag_transition_backward_409(client, mock_dispatch, admin_session):
-    _elder_id, _call_id, flag_id = _seed_flag(client)
+    _contact_id, _call_id, flag_id = _seed_flag(client)
     r = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "resolved"})
     assert r.status_code == 200, r.text
 
@@ -258,7 +262,7 @@ def test_flag_transition_backward_409(client, mock_dispatch, admin_session):
 
 
 def test_flag_transition_404_422_401_403(client, mock_dispatch, admin_session, async_database_url):
-    _elder_id, _call_id, flag_id = _seed_flag(client)
+    _contact_id, _call_id, flag_id = _seed_flag(client)
 
     r = client.patch("/v1/admin/follow-up-flags/999999", json={"status": "acknowledged"})
     assert r.status_code == 404
@@ -292,7 +296,7 @@ def test_flag_transition_404_422_401_403(client, mock_dispatch, admin_session, a
 
 
 def test_flag_transition_audit_from_to_only(client, mock_dispatch, admin_session):
-    _elder_id, _call_id, flag_id = _seed_flag(client, reason="secret transition reason")
+    _contact_id, _call_id, flag_id = _seed_flag(client, reason="secret transition reason")
     r = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "acknowledged"})
     assert r.status_code == 200, r.text
 
@@ -338,7 +342,7 @@ def test_callback_transition_idempotent_noop(client, admin_session, async_databa
     assert _audit_count(client, "callback_request.noop_read") == 0
 
     # ack -> ack replay: idempotent 200, no new .update audit row — but the body
-    # is still a PHI read (notes + elder_name), so a PHI-free noop_read audit row
+    # is still a PHI read (notes + contact_name), so a PHI-free noop_read audit row
     # lands in the same request (spec §6.2).
     replay = client.patch(f"/v1/admin/callback-requests/{cb_id}", json={"status": "acknowledged"})
     assert replay.status_code == 200, replay.text
@@ -433,7 +437,7 @@ def test_transition_metric_after_commit_not_noop(
     # still see the 405/404s on the missing PATCH routes (plan C2 step 2).
     from usan_api.observability.custom_metrics import ADMIN_QUEUE_TRANSITIONS_TOTAL
 
-    _elder_id, _call_id, flag_id = _seed_flag(client)
+    _contact_id, _call_id, flag_id = _seed_flag(client)
     before = counter_value(
         ADMIN_QUEUE_TRANSITIONS_TOTAL, queue="follow_up_flag", to_status="acknowledged"
     )
@@ -469,13 +473,13 @@ def test_transition_metric_after_commit_not_noop(
     )
 
 
-# --- C3: queue list enrichment — elder identity, severity, urgent-first, offset (spec §4.4) ---
+# --- C3: queue list enrichment — contact identity, severity, urgent-first, offset (spec §4.4) ---
 
 
-def _create_elder_with_phone(client) -> tuple[str, str]:
+def _create_contact_with_phone(client) -> tuple[str, str]:
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={"name": "Ada", "phone_e164": phone, "timezone": "UTC", "metadata": {}},
         headers=_OP,
     )
@@ -495,15 +499,15 @@ def _flag_call(
     return r.json()["id"]
 
 
-def test_flags_list_elder_identity_and_workflow_fields(client, mock_dispatch, admin_session):
-    elder_id, phone = _create_elder_with_phone(client)
-    call_id = _enqueue(client, elder_id)
+def test_flags_list_contact_identity_and_workflow_fields(client, mock_dispatch, admin_session):
+    contact_id, phone = _create_contact_with_phone(client)
+    call_id = _enqueue(client, contact_id)
     flag_id = _flag_call(client, call_id)
 
-    r = client.get(f"/v1/admin/follow-up-flags?elder_id={elder_id}")
+    r = client.get(f"/v1/admin/follow-up-flags?contact_id={contact_id}")
     assert r.status_code == 200, r.text
     me = next(f for f in r.json() if f["id"] == flag_id)
-    assert me["elder_name"] == "Ada"
+    assert me["contact_name"] == "Ada"
     assert me["masked_phone"] == "***" + phone[-4:]
     # Workflow stamps are NULL before any transition...
     assert me["status_updated_at"] is None
@@ -514,7 +518,7 @@ def test_flags_list_elder_identity_and_workflow_fields(client, mock_dispatch, ad
     # After a C2 PATCH transition the stamps are populated.
     patched = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "acknowledged"})
     assert patched.status_code == 200, patched.text
-    r = client.get(f"/v1/admin/follow-up-flags?elder_id={elder_id}")
+    r = client.get(f"/v1/admin/follow-up-flags?contact_id={contact_id}")
     me = next(f for f in r.json() if f["id"] == flag_id)
     assert me["status_updated_at"] is not None
     assert me["status_updated_by"] == "admin@example.com"
@@ -522,17 +526,17 @@ def test_flags_list_elder_identity_and_workflow_fields(client, mock_dispatch, ad
 
 
 def test_flags_list_severity_filter_and_urgent_first_http(client, mock_dispatch, admin_session):
-    elder_id, _phone = _create_elder_with_phone(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id, _phone = _create_contact_with_phone(client)
+    call_id = _enqueue(client, contact_id)
     # The urgent flag is seeded FIRST (oldest) yet must sort before the newer
     # routine flags: (severity='urgent') DESC, created_at DESC, id DESC.
     urgent_id = _flag_call(client, call_id, severity="urgent")
     routine_ids = [_flag_call(client, call_id, severity="routine") for _ in range(2)]
 
-    rows = client.get(f"/v1/admin/follow-up-flags?elder_id={elder_id}").json()
+    rows = client.get(f"/v1/admin/follow-up-flags?contact_id={contact_id}").json()
     assert [f["id"] for f in rows] == [urgent_id, *reversed(routine_ids)]
 
-    base = f"/v1/admin/follow-up-flags?elder_id={elder_id}"
+    base = f"/v1/admin/follow-up-flags?contact_id={contact_id}"
     urgent_only = client.get(f"{base}&severity=urgent").json()
     assert [f["id"] for f in urgent_only] == [urgent_id]
     routine_only = client.get(f"{base}&severity=routine").json()
@@ -546,30 +550,30 @@ def test_flags_list_status_junk_422(client, admin_session):
 
 
 def test_flags_list_offset_paging(client, mock_dispatch, admin_session):
-    elder_id, _phone = _create_elder_with_phone(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id, _phone = _create_contact_with_phone(client)
+    call_id = _enqueue(client, contact_id)
     ids = [_flag_call(client, call_id, severity="routine") for _ in range(3)]
     newest_first = list(reversed(ids))
 
-    base = f"/v1/admin/follow-up-flags?elder_id={elder_id}"
+    base = f"/v1/admin/follow-up-flags?contact_id={contact_id}"
     assert [f["id"] for f in client.get(base).json()] == newest_first
     assert [f["id"] for f in client.get(f"{base}&offset=1").json()] == newest_first[1:]
     assert client.get(f"{base}&offset=-1").status_code == 422
 
 
 def test_flags_audit_detail_gains_offset_and_severity(client, mock_dispatch, admin_session):
-    elder_id, phone = _create_elder_with_phone(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id, phone = _create_contact_with_phone(client)
+    call_id = _enqueue(client, contact_id)
     _flag_call(client, call_id, reason="secret audit reason")
 
-    r = client.get(f"/v1/admin/follow-up-flags?elder_id={elder_id}&severity=urgent&offset=0")
+    r = client.get(f"/v1/admin/follow-up-flags?contact_id={contact_id}&severity=urgent&offset=0")
     assert r.status_code == 200, r.text
     rows = client.get("/v1/admin/audit?action=follow_up_flags.list").json()
     assert rows, "follow-up-flags read must write an audit entry"
     entry = rows[0]
     assert entry["detail"]["offset"] == 0
     assert entry["detail"]["severity"] == "urgent"
-    # Still PHI-free: never the reason text or the elder's phone.
+    # Still PHI-free: never the reason text or the contact's phone.
     blob = str(entry).lower()
     assert "secret" not in blob
     assert phone not in blob
@@ -611,8 +615,8 @@ def test_queues_summary_counts_match_seeds(
 def test_queues_summary_viewer_readable_no_audit_no_phi(
     client, mock_dispatch, admin_session, async_database_url
 ):
-    elder_id, phone = _create_elder_with_phone(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id, phone = _create_contact_with_phone(client)
+    call_id = _enqueue(client, contact_id)
     _flag_call(client, call_id, reason="secret summary reason")
     _seed_callback(async_database_url, notes="secret summary callback note")
 

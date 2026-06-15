@@ -2,7 +2,7 @@
 // Nullability and value sets MUST match the server exactly:
 //   - schemas/agent_config.py (AgentConfig + 8 sub-configs)
 //   - schemas/agent_profile.py (Profile/Version summaries + details + requests)
-//   - schemas/admin.py (AuditEntryOut, ElderSummary, AssignProfileRequest)
+//   - schemas/admin.py (AuditEntryOut, ContactSummary, AssignProfileRequest)
 //   - schemas/auth.py (MeResponse, AdminUserOut, AdminUserCreate)
 //   - schemas/admin_calls.py (AdminCallSummary, AdminCallDetail + CallOrigin,
 //     TranscriptSegment from schemas/call.py)
@@ -112,7 +112,7 @@ export interface ProfileSummary {
   is_default_outbound: boolean;
   published_version: number | null;
   has_unpublished_draft: boolean;
-  assigned_elder_count: number;
+  assigned_contact_count: number;
   // Optimistic-concurrency token (FR-032); see ProfileDetail.draft_revision.
   draft_revision: number;
   updated_at: string;
@@ -257,7 +257,7 @@ export interface AuditEntry {
   created_at: string;
 }
 
-export interface ElderSummary {
+export interface ContactSummary {
   id: string;
   name: string;
   masked_phone: string;
@@ -312,8 +312,8 @@ export interface TranscriptSegment {
 
 export interface AdminCallSummary {
   id: string;
-  elder_id: string | null;
-  elder_name: string | null;
+  contact_id: string | null;
+  contact_name: string | null;
   masked_phone: string; // "***" + last 4 — the raw phone never reaches this plane
   direction: string;
   status: string;
@@ -347,8 +347,8 @@ export type QueueStatus = "open" | "acknowledged" | "resolved";
 export interface FollowupFlagSummary {
   id: number;
   call_id: string;
-  elder_id: string;
-  elder_name: string | null;
+  contact_id: string;
+  contact_name: string | null;
   masked_phone: string;
   severity: string;
   category: string;
@@ -362,8 +362,8 @@ export interface FollowupFlagSummary {
 export interface CallbackRequestSummary {
   id: number;
   call_id: string;
-  elder_id: string;
-  elder_name: string | null;
+  contact_id: string;
+  contact_name: string | null;
   masked_phone: string;
   requested_time_text: string;
   requested_at: string | null;

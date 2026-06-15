@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call, Elder
+from usan_api.db.models import Call, Contact
 from usan_api.repositories import agent_profiles as repo
 
 _SECRET = "s" * 32
@@ -55,35 +55,35 @@ async def _publish_profile(db, *, voice_id: str) -> uuid.UUID:
     return profile.id
 
 
-async def _seed_call_with_elder(
+async def _seed_call_with_contact(
     async_url: str,
     *,
-    elder_voice_id: str,
+    contact_voice_id: str,
     override_voice_id: str | None = None,
 ) -> tuple[str, str, str | None]:
-    """Seed a published elder profile P, an Elder pointing at P, and an outbound Call.
+    """Seed a published contact profile P, an Contact pointing at P, and an outbound Call.
 
-    Returns (call_id, elder_profile_id, override_profile_id). When override_voice_id is
+    Returns (call_id, contact_profile_id, override_profile_id). When override_voice_id is
     given, a second published profile is created and set as the Call.profile_override.
     """
     engine = create_async_engine(async_url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as db:
-            elder_pid = await _publish_profile(db, voice_id=elder_voice_id)
+            contact_pid = await _publish_profile(db, voice_id=contact_voice_id)
             override_pid: uuid.UUID | None = None
             if override_voice_id is not None:
                 override_pid = await _publish_profile(db, voice_id=override_voice_id)
-            elder = Elder(
+            contact = Contact(
                 name="Ada",
                 phone_e164=f"+1555{uuid.uuid4().int % 10**7:07d}",
                 timezone="America/New_York",
-                agent_profile_id=elder_pid,
+                agent_profile_id=contact_pid,
             )
-            db.add(elder)
+            db.add(contact)
             await db.flush()
             call = Call(
-                elder_id=elder.id,
+                contact_id=contact.id,
                 direction=CallDirection.OUTBOUND,
                 status=CallStatus.IN_PROGRESS,
                 profile_override=override_pid,
@@ -92,7 +92,7 @@ async def _seed_call_with_elder(
             await db.flush()
             call_id, eid, oid = (
                 str(call.id),
-                str(elder_pid),
+                str(contact_pid),
                 (str(override_pid) if override_pid else None),
             )
             await db.commit()
@@ -164,11 +164,11 @@ def test_agent_config_unknown_call_id_falls_back_to_default(client):
     assert r.json()["source"] == "default"
 
 
-def test_agent_config_resolves_from_call_elder_profile(client, async_database_url):
-    # A real outbound Call (no override) whose Elder points at published profile P must
-    # resolve to P — exercising runtime.get_agent_config's Call/Elder read path.
+def test_agent_config_resolves_from_call_contact_profile(client, async_database_url):
+    # A real outbound Call (no override) whose Contact points at published profile P must
+    # resolve to P — exercising runtime.get_agent_config's Call/Contact read path.
     call_id, pid, _ = asyncio.run(
-        _seed_call_with_elder(async_database_url, elder_voice_id="elder-voice")
+        _seed_call_with_contact(async_database_url, contact_voice_id="contact-voice")
     )
     r = client.get(
         "/v1/runtime/agent-config",
@@ -179,14 +179,14 @@ def test_agent_config_resolves_from_call_elder_profile(client, async_database_ur
     body = r.json()
     assert body["source"] == "resolved"
     assert body["profile_id"] == pid
-    assert body["config"]["voice"]["cartesia_voice_id"] == "elder-voice"
+    assert body["config"]["voice"]["cartesia_voice_id"] == "contact-voice"
 
 
-def test_agent_config_call_override_wins_over_elder(client, async_database_url):
-    # When the Call carries a profile_override, it wins over the elder's profile.
+def test_agent_config_call_override_wins_over_contact(client, async_database_url):
+    # When the Call carries a profile_override, it wins over the contact's profile.
     call_id, _, override_pid = asyncio.run(
-        _seed_call_with_elder(
-            async_database_url, elder_voice_id="elder-voice", override_voice_id="override-voice"
+        _seed_call_with_contact(
+            async_database_url, contact_voice_id="contact-voice", override_voice_id="override-voice"
         )
     )
     r = client.get(
@@ -201,14 +201,14 @@ def test_agent_config_call_override_wins_over_elder(client, async_database_url):
     assert body["config"]["voice"]["cartesia_voice_id"] == "override-voice"
 
 
-def test_inbound_resolves_direction_default_not_elder_profile(client, async_database_url):
+def test_inbound_resolves_direction_default_not_contact_profile(client, async_database_url):
     # Conscious contract (runtime.get_agent_config docstring): the agent fetches inbound
-    # config with call_id=None (dispatch-rule jobs carry no metadata), so an elder's
+    # config with call_id=None (dispatch-rule jobs carry no metadata), so an contact's
     # assigned profile is NOT applied on inbound — inbound always resolves to the
-    # per-direction default. An elder assigned a DIFFERENT profile exists here, but the
+    # per-direction default. An contact assigned a DIFFERENT profile exists here, but the
     # call_id-less inbound fetch must still return the inbound default's config.
     asyncio.run(_seed_default(async_database_url, direction="inbound", voice_id="inbound-default"))
-    asyncio.run(_seed_call_with_elder(async_database_url, elder_voice_id="elder-assigned"))
+    asyncio.run(_seed_call_with_contact(async_database_url, contact_voice_id="contact-assigned"))
     r = client.get("/v1/runtime/agent-config", params={"direction": "inbound"}, headers=_wauth())
     assert r.status_code == 200
     body = r.json()

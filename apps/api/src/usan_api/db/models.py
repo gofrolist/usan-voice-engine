@@ -30,8 +30,8 @@ def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     return [member.value for member in enum_cls]
 
 
-class Elder(Base):
-    __tablename__ = "elders"
+class Contact(Base):
+    __tablename__ = "contacts"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -76,8 +76,8 @@ class Call(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    elder_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id", ondelete="SET NULL")
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="SET NULL")
     )
     direction: Mapped[CallDirection] = mapped_column(
         SAEnum(
@@ -157,8 +157,8 @@ class WellnessLog(Base):
     call_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("calls.id", ondelete="CASCADE"), nullable=False
     )
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     mood: Mapped[int | None] = mapped_column(SmallInteger)
     pain_level: Mapped[int | None] = mapped_column(SmallInteger)
@@ -176,8 +176,8 @@ class MedicationLog(Base):
     call_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("calls.id", ondelete="CASCADE"), nullable=False
     )
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     medication_name: Mapped[str] = mapped_column(Text, nullable=False)
     taken: Mapped[bool] = mapped_column(Boolean, nullable=False)
@@ -194,14 +194,14 @@ class MedicationReminder(Base):
     increments; confirmation → ``cleared``; reaching the re-ask cap → ``capped`` plus a
     routine ``follow_up_flags`` row. Only ``pending`` rows are surfaced as the
     ``pending_med_reasks`` builtin; a partial unique index keeps one pending row per
-    ``(elder_id, medication_name)``.
+    ``(contact_id, medication_name)``.
     """
 
     __tablename__ = "medication_reminders"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     medication_name: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
@@ -224,9 +224,9 @@ class MedicationReminder(Base):
 
 
 class PersonalFact(Base):
-    """A durable, categorized fact about an elder (0021, US4).
+    """A durable, categorized fact about an contact (0021, US4).
 
-    Captured by the ``record_personal_fact`` tool (``source='elder_stated'``) or the
+    Captured by the ``record_personal_fact`` tool (``source='contact_stated'``) or the
     post-call summarizer (``source='extracted'``); operators may also seed them
     (``source='operator'``). Only ``active`` rows feed the ``personal_facts`` /
     ``important_dates`` built-ins; a superseded fact is set ``active=false`` rather than
@@ -238,15 +238,17 @@ class PersonalFact(Base):
     __tablename__ = "personal_facts"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     category: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     structured: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
     )
-    source: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'elder_stated'"))
+    source: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'contact_stated'")
+    )
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     phi: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(
@@ -262,7 +264,7 @@ class ConversationSummary(Base):
 
     One row per completed call (``call_id`` is unique → the summarization trigger is
     idempotent). ``summary`` and ``open_plans`` feed the ``last_call_summary`` /
-    ``open_plans`` built-ins on the elder's next call. Vertex-generated; the recap text
+    ``open_plans`` built-ins on the contact's next call. Vertex-generated; the recap text
     is PHI and stays on BAA infra (Postgres). ``model_version`` records the summarizing
     model for audit.
     """
@@ -276,8 +278,8 @@ class ConversationSummary(Base):
         nullable=False,
         unique=True,
     )
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     open_plans: Mapped[list[Any]] = mapped_column(
@@ -292,10 +294,10 @@ class ConversationSummary(Base):
 class WellbeingSurveyResult(Base):
     """A structured monthly wellbeing survey outcome (0023, US6).
 
-    One row per elder per calendar month — a unique ``(elder_id, period_month)`` (migration
+    One row per contact per calendar month — a unique ``(contact_id, period_month)`` (migration
     -owned) enforces once-per-month (FR-032 / SC-008), so ``record_survey`` is idempotent.
-    ``period_month`` is the first-of-month anchor in the elder's local month. The three
-    scores are 1-5 ratings (nullable: the elder may answer only some); ``raw`` carries any
+    ``period_month`` is the first-of-month anchor in the contact's local month. The three
+    scores are 1-5 ratings (nullable: the contact may answer only some); ``raw`` carries any
     extra structured detail. PHI — stays on BAA infra. ``call_id`` is SET NULL on call
     delete so a retention purge of a call keeps the aggregate but drops the back-link.
     """
@@ -306,8 +308,8 @@ class WellbeingSurveyResult(Base):
     call_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("calls.id", ondelete="SET NULL")
     )
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     period_month: Mapped[date] = mapped_column(Date, nullable=False)
     loneliness: Mapped[int | None] = mapped_column(SmallInteger)
@@ -320,11 +322,11 @@ class WellbeingSurveyResult(Base):
 
 
 class ActivityHistory(Base):
-    """Per-elder record of mood-boosting activities used (0023, US6).
+    """Per-contact record of mood-boosting activities used (0023, US6).
 
     The activity catalog itself is CODE (``activities_catalog.py``); this table only tracks
-    *which* activity (``activity_key``) was used *when* per elder, so ``get_activity`` can
-    pick a non-recently-used one (FR-034 / SC-009). Indexed ``(elder_id, used_at desc)``
+    *which* activity (``activity_key``) was used *when* per contact, so ``get_activity`` can
+    pick a non-recently-used one (FR-034 / SC-009). Indexed ``(contact_id, used_at desc)``
     (migration-owned) for the least-recently-used scan. ``call_id`` is SET NULL on call
     delete so a retention purge keeps the recency signal but drops the back-link.
     """
@@ -332,8 +334,8 @@ class ActivityHistory(Base):
     __tablename__ = "activity_history"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     activity_key: Mapped[str] = mapped_column(Text, nullable=False)
     call_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -527,10 +529,10 @@ class FollowUpFlag(Base):
     call_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("calls.id", ondelete="CASCADE"), nullable=False
     )
-    # No ondelete on elders: a follow-up flag's clinical context must outlive an
-    # elder row removal (it stays referenced for audit), unlike call-scoped data.
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    # No ondelete on contacts: a follow-up flag's clinical context must outlive an
+    # contact row removal (it stays referenced for audit), unlike call-scoped data.
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     severity: Mapped[str] = mapped_column(Text, nullable=False)
     category: Mapped[str] = mapped_column(Text, nullable=False)
@@ -559,8 +561,8 @@ class CallbackRequest(Base):
     call_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("calls.id", ondelete="CASCADE"), nullable=False
     )
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     requested_time_text: Mapped[str] = mapped_column(Text, nullable=False)
     requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -592,8 +594,8 @@ class SmsMessage(Base):
     call_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("calls.id", ondelete="CASCADE")
     )
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     to_number: Mapped[str] = mapped_column(Text, nullable=False)
     # Discriminator (0017): 'in_call' = an LLM-selected template SMS; the others are
@@ -626,20 +628,20 @@ class CallSchedule(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    # CASCADE: a schedule is meaningless without its elder; calls.elder_id SET NULLs
+    # CASCADE: a schedule is meaningless without its contact; calls.contact_id SET NULLs
     # independently, so call history survives (spec §3.1). One schedule per
-    # (elder, slot) — the composite UNIQUE(elder_id, slot) is owned by migration 0022
+    # (contact, slot) — the composite UNIQUE(contact_id, slot) is owned by migration 0022
     # (this module keeps constraints in migrations, like the ck_* CHECKs).
-    elder_id: Mapped[uuid.UUID] = mapped_column(
+    contact_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("elders.id", ondelete="CASCADE"),
+        ForeignKey("contacts.id", ondelete="CASCADE"),
         nullable=False,
     )
-    # US5: morning|evening daily-call slot; an elder may have one schedule per slot.
+    # US5: morning|evening daily-call slot; an contact may have one schedule per slot.
     # The morning|evening CHECK lives in migration 0022.
     slot: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'morning'"))
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
-    # Elder-local wall clock; the elder's timezone column is the single source of truth.
+    # Contact-local wall clock; the contact's timezone column is the single source of truth.
     window_start_local: Mapped[time] = mapped_column(Time, nullable=False)
     window_end_local: Mapped[time] = mapped_column(Time, nullable=False)
     # Bitmask, bit 0=Mon … bit 6=Sun; 127 = all seven days.
@@ -681,7 +683,7 @@ class CallBatch(Base):
     payload_digest: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'scheduled'"))
     trigger_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Optional per-elder-local dial window (both NULL or both set, CHECK-enforced).
+    # Optional per-contact-local dial window (both NULL or both set, CHECK-enforced).
     window_start_local: Mapped[time | None] = mapped_column(Time)
     window_end_local: Mapped[time | None] = mapped_column(Time)
     days_of_week: Mapped[int | None] = mapped_column(SmallInteger)
@@ -714,10 +716,10 @@ class CallBatchTarget(Base):
     )
     # Position in the submitted array (UNIQUE (batch_id, target_index) in 0012).
     target_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    # SET NULL (not CASCADE): a deleted elder must not silently shrink the batch;
-    # the poller marks the orphan target skipped/elder_deleted instead (spec §3.3).
-    elder_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id", ondelete="SET NULL")
+    # SET NULL (not CASCADE): a deleted contact must not silently shrink the batch;
+    # the poller marks the orphan target skipped/contact_deleted instead (spec §3.3).
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="SET NULL")
     )
     dynamic_vars: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
@@ -726,7 +728,7 @@ class CallBatchTarget(Base):
         UUID(as_uuid=True), ForeignKey("agent_profiles.id", ondelete="SET NULL")
     )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
-    # elder_deleted | invalid_timezone | key_conflict | daily_cap
+    # contact_deleted | invalid_timezone | key_conflict | daily_cap
     skip_reason: Mapped[str | None] = mapped_column(Text)
     # Root attempt; SET NULL keeps the target's audit row if the call is purged.
     call_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -844,11 +846,11 @@ class CustomVariable(Base):
 
 
 class FamilyContact(Base):
-    """A person linked to an elder who can send tasks and receive alerts/reports (0019, US2).
+    """A person linked to an contact who can send tasks and receive alerts/reports (0019, US2).
 
-    No ondelete on elder_id (a contact's context outlives an elder row change, like
+    No ondelete on contact_id (a contact's context outlives an contact row change, like
     follow_up_flags). phone_e164 is the inbound-SMS routing key and is NOT globally
-    unique — one number may relate to more than one elder.
+    unique — one number may relate to more than one contact.
     """
 
     __tablename__ = "family_contacts"
@@ -856,8 +858,8 @@ class FamilyContact(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     phone_e164: Mapped[str] = mapped_column(Text, nullable=False, index=True)
@@ -879,7 +881,7 @@ class FamilyContact(Base):
 
 
 class FamilyTask(Base):
-    """A short instruction from a family contact to convey to the elder then close (0019, US2).
+    """A short instruction from a family contact to convey to the contact then close (0019, US2).
 
     State machine: open → delivered → closed; open → needs_review (operator) → open/closed.
     Only ``open`` tasks that are not ``needs_safety_review`` are injected as the
@@ -889,8 +891,8 @@ class FamilyTask(Base):
     __tablename__ = "family_tasks"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     # Null when an operator entered the task directly (no inbound contact source).
     family_contact_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -915,9 +917,9 @@ class FamilyTask(Base):
 
 
 class FamilyReport(Base):
-    """A generated monthly per-elder status-and-trends report (0025, US8).
+    """A generated monthly per-contact status-and-trends report (0025, US8).
 
-    One row per elder per calendar month — unique ``(elder_id, period_month)`` makes the
+    One row per contact per calendar month — unique ``(contact_id, period_month)`` makes the
     monthly job idempotent (FR-012 / SC-012). ``metrics`` (mood/adherence/survey aggregates)
     and ``narrative`` are PHI and stay on BAA infra; the PHI-minimized family SMS that is
     actually sent is linked via ``sms_message_id``. ``status`` is 'sent' (a family contact
@@ -927,8 +929,8 @@ class FamilyReport(Base):
     __tablename__ = "family_reports"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    elder_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("elders.id"), nullable=False
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
     )
     period_month: Mapped[date] = mapped_column(Date, nullable=False)
     calls_completed: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))

@@ -3,7 +3,7 @@
 Allowlist by construction (spec §6.1): each event's ``data`` is a frozen Pydantic
 model, so a field that is not on the model cannot leak. Excluded everywhere,
 deliberately (spec §6.1): ``end_reason`` (conditionally free text), flag
-``reason``/``category``/``elder_id`` (§6.4 — the health-domain pairing), callback
+``reason``/``category``/``contact_id`` (§6.4 — the health-domain pairing), callback
 ``requested_time_text``/``notes``, ``dynamic_vars``, the ``error`` JSONB, names,
 phone numbers, ``livekit_room``/``sip_call_id``/``recording_uri``/``egress_id``,
 batch ``name`` (PHI-free only by convention), and the raw ``idempotency_key``
@@ -59,7 +59,7 @@ class _CallStartedData(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     call_id: uuid.UUID
-    elder_id: uuid.UUID | None
+    contact_id: uuid.UUID | None
     direction: str
     attempt: int
     parent_call_id: uuid.UUID | None
@@ -74,7 +74,7 @@ class _CallCompletedData(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     call_id: uuid.UUID
-    elder_id: uuid.UUID | None
+    contact_id: uuid.UUID | None
     direction: str
     status: str
     attempt: int
@@ -87,7 +87,7 @@ class _CallCompletedData(BaseModel):
 
 
 class _FlagCreatedData(BaseModel):
-    """Spec §6.4 — deliberately reduced: NO ``elder_id``, NO ``category``, NO
+    """Spec §6.4 — deliberately reduced: NO ``contact_id``, NO ``category``, NO
     ``reason``. The care system pages on ``severity`` and resolves who/what via
     the authenticated API."""
 
@@ -101,14 +101,14 @@ class _FlagCreatedData(BaseModel):
 
 class _CallbackCreatedData(BaseModel):
     """Spec §6.5 — ``requested_at`` is the parsed timestamp only;
-    ``requested_time_text``/``notes`` excluded. ``elder_id`` stays: a callback
+    ``requested_time_text``/``notes`` excluded. ``contact_id`` stays: a callback
     carries no health content (the §6.4 line is health-info x person-identifier)."""
 
     model_config = ConfigDict(frozen=True)
 
     callback_id: int
     call_id: uuid.UUID
-    elder_id: uuid.UUID
+    contact_id: uuid.UUID
     requested_at: datetime | None
     created_at: datetime
 
@@ -163,7 +163,7 @@ async def chain_root_origin(db: AsyncSession, call: Call) -> CallOrigin | None:
 async def call_started_payload(db: AsyncSession, call: Call) -> dict[str, Any]:
     data = _CallStartedData(
         call_id=call.id,
-        elder_id=call.elder_id,
+        contact_id=call.contact_id,
         direction=call.direction.value,
         attempt=call.attempt,
         parent_call_id=call.parent_call_id,
@@ -176,7 +176,7 @@ async def call_started_payload(db: AsyncSession, call: Call) -> dict[str, Any]:
 async def call_completed_payload(db: AsyncSession, call: Call) -> dict[str, Any]:
     data = _CallCompletedData(
         call_id=call.id,
-        elder_id=call.elder_id,
+        contact_id=call.contact_id,
         direction=call.direction.value,
         status=call.status.value,
         attempt=call.attempt,
@@ -191,7 +191,7 @@ async def call_completed_payload(db: AsyncSession, call: Call) -> dict[str, Any]
 
 
 def flag_created_payload(flag: FollowUpFlag) -> dict[str, Any]:
-    # NO elder_id, NO category, NO reason (§6.4 deliberate reduction).
+    # NO contact_id, NO category, NO reason (§6.4 deliberate reduction).
     data = _FlagCreatedData(
         flag_id=flag.id,
         call_id=flag.call_id,
@@ -205,7 +205,7 @@ def callback_created_payload(row: CallbackRequest) -> dict[str, Any]:
     data = _CallbackCreatedData(
         callback_id=row.id,
         call_id=row.call_id,
-        elder_id=row.elder_id,
+        contact_id=row.contact_id,
         requested_at=row.requested_at,
         created_at=row.created_at,
     )

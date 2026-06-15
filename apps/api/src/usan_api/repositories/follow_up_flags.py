@@ -6,10 +6,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import webhook_events
-from usan_api.db.models import Elder, FollowUpFlag
+from usan_api.db.models import Contact, FollowUpFlag
 from usan_api.repositories import webhook_outbox
 
-# Bound the list read: flags accumulate per call/elder over time. Default cap
+# Bound the list read: flags accumulate per call/contact over time. Default cap
 # mirrors the audit/agent-profiles repos (_MAX_LIST_LIMIT=500); newest-first so
 # the cap keeps the most recent.
 MAX_FLAGS_LIMIT = 500
@@ -27,14 +27,14 @@ async def create_follow_up_flag(
     db: AsyncSession,
     *,
     call_id: uuid.UUID,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     severity: str,
     category: str,
     reason: str | None,
 ) -> FollowUpFlag:
     row = FollowUpFlag(
         call_id=call_id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         severity=severity,
         category=category,
         reason=reason,
@@ -44,7 +44,7 @@ async def create_follow_up_flag(
     await db.refresh(row)
     # flag.created joins this same transaction (transactional outbox, spec
     # §2.1): the caller's existing commit makes flag and event durable
-    # together. Payload deliberately reduced per spec §6.4 — NO elder_id, NO
+    # together. Payload deliberately reduced per spec §6.4 — NO contact_id, NO
     # category, NO reason — even though this row carries all three.
     await webhook_outbox.enqueue_event(
         db, event="flag.created", payload=webhook_events.flag_created_payload(row)
@@ -56,12 +56,12 @@ async def list_flags(
     db: AsyncSession,
     *,
     status: str | None = None,
-    elder_id: uuid.UUID | None = None,
+    contact_id: uuid.UUID | None = None,
     severity: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[tuple[FollowUpFlag, str | None, str | None]]:
-    """Flags + elder name/phone via outerjoin (admin read model, spec §4.4).
+    """Flags + contact name/phone via outerjoin (admin read model, spec §4.4).
 
     Urgent-first ordering — `(severity='urgent') DESC, created_at DESC, id DESC`
     — so an urgent flag older than a page of routine flags is never invisible.
@@ -70,13 +70,13 @@ async def list_flags(
     """
     limit = max(1, min(limit, MAX_FLAGS_LIMIT))
     offset = max(0, offset)
-    stmt = select(FollowUpFlag, Elder.name, Elder.phone_e164).outerjoin(
-        Elder, FollowUpFlag.elder_id == Elder.id
+    stmt = select(FollowUpFlag, Contact.name, Contact.phone_e164).outerjoin(
+        Contact, FollowUpFlag.contact_id == Contact.id
     )
     if status is not None:
         stmt = stmt.where(FollowUpFlag.status == status)
-    if elder_id is not None:
-        stmt = stmt.where(FollowUpFlag.elder_id == elder_id)
+    if contact_id is not None:
+        stmt = stmt.where(FollowUpFlag.contact_id == contact_id)
     if severity is not None:
         stmt = stmt.where(FollowUpFlag.severity == severity)
     stmt = (
@@ -160,7 +160,7 @@ async def upsert_crisis_flag(
     db: AsyncSession,
     *,
     call_id: uuid.UUID,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     crisis_category: str,
     detection_source: str,
     resource_offered: str,
@@ -178,7 +178,7 @@ async def upsert_crisis_flag(
     """
     insert_stmt = pg_insert(FollowUpFlag).values(
         call_id=call_id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         severity="urgent",
         category="safety",
         status="open",
@@ -219,7 +219,7 @@ async def upsert_crisis_flag(
     ).scalar_one()
     if created:
         # Mirror create_follow_up_flag: the PHI-safe flag.created event joins this txn.
-        # Payload deliberately omits elder_id/category/reason (spec §6.4).
+        # Payload deliberately omits contact_id/category/reason (spec §6.4).
         await webhook_outbox.enqueue_event(
             db, event="flag.created", payload=webhook_events.flag_created_payload(row)
         )
@@ -242,7 +242,7 @@ _NO_FAMILY_CRISIS_REASON = "No family contact registered — operator action req
 _MISSED_NO_FAMILY_REASON = (
     "Missed wellness call and no family contact registered to alert (FR-010 / FR-013)."
 )
-_OPT_OUT_REASON = "Elder opted out of calls during a conversation (US7 / FR-039)."
+_OPT_OUT_REASON = "Contact opted out of calls during a conversation (US7 / FR-039)."
 
 
 async def set_no_family_contact_reason(db: AsyncSession, flag_id: int) -> None:
@@ -259,7 +259,7 @@ async def set_no_family_contact_reason(db: AsyncSession, flag_id: int) -> None:
 
 
 async def ensure_operator_missed_flag(
-    db: AsyncSession, *, call_id: uuid.UUID, elder_id: uuid.UUID
+    db: AsyncSession, *, call_id: uuid.UUID, contact_id: uuid.UUID
 ) -> FollowUpFlag:
     """Idempotent operator-queue entry for a missed call with no family contact (FR-013).
 
@@ -279,7 +279,7 @@ async def ensure_operator_missed_flag(
     return await create_follow_up_flag(
         db,
         call_id=call_id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         severity="routine",
         category="operator_alert",
         reason=_MISSED_NO_FAMILY_REASON,
@@ -287,7 +287,7 @@ async def ensure_operator_missed_flag(
 
 
 async def ensure_opt_out_flag(
-    db: AsyncSession, *, call_id: uuid.UUID, elder_id: uuid.UUID
+    db: AsyncSession, *, call_id: uuid.UUID, contact_id: uuid.UUID
 ) -> FollowUpFlag:
     """Idempotent operator-queue entry recording a spoken opt-out (US7 / FR-039).
 
@@ -309,7 +309,7 @@ async def ensure_opt_out_flag(
     return await create_follow_up_flag(
         db,
         call_id=call_id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         severity="routine",
         category="operator_alert",
         reason=_OPT_OUT_REASON,

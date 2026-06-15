@@ -56,9 +56,9 @@ def mock_dispatch(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     return agent
 
 
-def _create_elder(client: TestClient) -> str:
+def _create_contact(client: TestClient) -> str:
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={"name": "Ada", "phone_e164": "+15551234567", "timezone": "UTC"},
         headers=_OP,
     )
@@ -66,7 +66,7 @@ def _create_elder(client: TestClient) -> str:
     return str(r.json()["id"])
 
 
-def _seed_batch_chain(async_database_url: str, elder_id: str, batch_key: str) -> tuple[str, str]:
+def _seed_batch_chain(async_database_url: str, contact_id: str, batch_key: str) -> tuple[str, str]:
     """Insert a materializer-style root (`batch:` key) and a keyless retry child.
 
     Direct repo/model writes on a local NullPool engine: `CreateCallRequest`
@@ -81,13 +81,13 @@ def _seed_batch_chain(async_database_url: str, elder_id: str, batch_key: str) ->
             async with factory() as db:
                 root = await calls_repo.create_call(
                     db,
-                    elder_id=uuid.UUID(elder_id),
+                    contact_id=uuid.UUID(contact_id),
                     direction=CallDirection.OUTBOUND,
                     status=CallStatus.QUEUED,
                     idempotency_key=batch_key,
                 )
                 child = Call(
-                    elder_id=uuid.UUID(elder_id),
+                    contact_id=uuid.UUID(contact_id),
                     direction=CallDirection.OUTBOUND,
                     status=CallStatus.QUEUED,
                     parent_call_id=root.id,
@@ -105,9 +105,9 @@ def _seed_batch_chain(async_database_url: str, elder_id: str, batch_key: str) ->
 def test_get_call_response_includes_origin(
     client: TestClient, mock_dispatch: AsyncMock, async_database_url: str
 ) -> None:
-    elder_id = _create_elder(client)
+    contact_id = _create_contact(client)
     batch_id = str(uuid.uuid4())
-    root_id, child_id = _seed_batch_chain(async_database_url, elder_id, f"batch:{batch_id}:0")
+    root_id, child_id = _seed_batch_chain(async_database_url, contact_id, f"batch:{batch_id}:0")
 
     # Materialized batch root: origin is parsed from its own key.
     r = client.get(f"/v1/calls/{root_id}", headers=_OP)
@@ -117,7 +117,7 @@ def test_get_call_response_includes_origin(
     # Operator enqueue: a non-reserved key carries no provenance.
     created = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": "op-key-1", "dynamic_vars": {}},
+        json={"contact_id": contact_id, "idempotency_key": "op-key-1", "dynamic_vars": {}},
         headers=_OP,
     )
     assert created.status_code == 202

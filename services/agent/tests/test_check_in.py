@@ -209,7 +209,7 @@ def test_default_config_exposes_record_personal_fact_referenced_in_prompt():
 
 async def test_do_record_personal_fact_forwards_structured(monkeypatch):
     # The important_date date must reach the API: _do_record_personal_fact forwards the
-    # structured payload to api_client verbatim (US4 FR-024 elder-stated dates).
+    # structured payload to api_client verbatim (US4 FR-024 contact-stated dates).
     from unittest.mock import AsyncMock
 
     spy = AsyncMock()
@@ -225,7 +225,7 @@ async def test_do_record_personal_fact_forwards_structured(monkeypatch):
 
 
 def test_build_inbound_agent_attaches_same_registry_tools():
-    agent = check_in.build_inbound_agent(None, resolved_vars={"elder_name": "Ada"}, now=_NOW)
+    agent = check_in.build_inbound_agent(None, resolved_vars={"contact_name": "Ada"}, now=_NOW)
     expected = {
         n
         for n in DEFAULT_AGENT_CONFIG.tools.enabled
@@ -372,11 +372,11 @@ def test_build_inbound_agent_uses_configured_template():
             **DEFAULT_AGENT_CONFIG.model_dump(),
             "prompts": {
                 **DEFAULT_AGENT_CONFIG.prompts.model_dump(),
-                "inbound_personalization_template": "Hi {elder_name}! {last_check_in_line}",
+                "inbound_personalization_template": "Hi {contact_name}! {last_check_in_line}",
             },
         }
     )
-    agent = check_in.build_inbound_agent(cfg, resolved_vars={"elder_name": "Ada"}, now=_NOW)
+    agent = check_in.build_inbound_agent(cfg, resolved_vars={"contact_name": "Ada"}, now=_NOW)
     assert "Ada" in agent.instructions
     assert "{" not in agent.instructions  # both slots consumed
 
@@ -440,12 +440,12 @@ def test_build_inbound_agent_substitutes_double_brace_first_name() -> None:
 
 
 def test_build_inbound_agent_legacy_single_brace_still_renders() -> None:
-    # An already-published template using {elder_name} must still render.
+    # An already-published template using {contact_name} must still render.
     agent = check_in.build_inbound_agent(
-        None, resolved_vars={"elder_name": "Ada"}, custom_vars={}, timezone="", now=_NOW
+        None, resolved_vars={"contact_name": "Ada"}, custom_vars={}, timezone="", now=_NOW
     )
     assert "Ada" in agent.instructions
-    assert "{elder_name}" not in agent.instructions
+    assert "{contact_name}" not in agent.instructions
 
 
 def test_build_inbound_agent_unknown_token_renders_empty() -> None:
@@ -462,7 +462,7 @@ def test_build_inbound_agent_last_check_in_appears_in_instructions() -> None:
     # instructions (build_vars derives last_check_in_line from it).
     agent = check_in.build_inbound_agent(
         None,
-        resolved_vars={"elder_name": "Ada", "last_check_in": "on 2026-05-30, mood 4/5"},
+        resolved_vars={"contact_name": "Ada", "last_check_in": "on 2026-05-30, mood 4/5"},
         custom_vars={},
         timezone="",
         now=_NOW,
@@ -477,7 +477,7 @@ def test_build_inbound_agent_caps_injected_value_length() -> None:
     # (300), so a 500-char name is truncated before reaching the LLM instructions.
     agent = check_in.build_inbound_agent(
         None,
-        resolved_vars={"elder_name": "A" * 500},
+        resolved_vars={"contact_name": "A" * 500},
         custom_vars={},
         timezone="",
         now=_NOW,
@@ -670,7 +670,7 @@ async def test_do_close_family_task_handles_api_failure(monkeypatch):
 
 async def test_do_raise_crisis_calls_api_with_llm_source_and_returns_script(monkeypatch):
     # The LLM crisis path posts detection_source="llm" and relays the server's
-    # spoken_script so the elder hears the emergency resource immediately.
+    # spoken_script so the contact hears the emergency resource immediately.
     seen: dict[str, object] = {}
 
     async def _capture(call_id, settings, *, category, detection_source, evidence=None):
@@ -695,7 +695,7 @@ async def test_do_raise_crisis_calls_api_with_llm_source_and_returns_script(monk
 
 
 async def test_do_raise_crisis_handles_api_failure_with_safe_fallback(monkeypatch):
-    # Even if the escalation POST fails, the elder must never be left without a
+    # Even if the escalation POST fails, the contact must never be left without a
     # spoken safety directive (911/988).
     async def _boom(*a, **k):
         raise RuntimeError("api down")
@@ -771,7 +771,7 @@ def test_build_check_in_agent_lists_sms_template_keys_when_offered():
 
 def test_build_inbound_agent_lists_sms_template_keys_when_offered():
     agent = check_in.build_inbound_agent(
-        _cfg_with_sms_templates(_TWO_TEMPLATES), resolved_vars={"elder_name": "Ada"}, now=_NOW
+        _cfg_with_sms_templates(_TWO_TEMPLATES), resolved_vars={"contact_name": "Ada"}, now=_NOW
     )
     assert "send_sms" in {t.id for t in agent.tools}
     assert "med_reminder" in agent.instructions

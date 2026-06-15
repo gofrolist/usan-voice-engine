@@ -17,7 +17,7 @@ from usan_api.activities_catalog import ActivityKindFilter
 
 class RecordSurveyRequest(BaseModel):
     call_id: uuid.UUID
-    # 1-5 ratings (FR-032). All optional: the agent records whatever the elder answered;
+    # 1-5 ratings (FR-032). All optional: the agent records whatever the contact answered;
     # an omitted score is NULL, not a forced value. ``raw`` carries any extra structured
     # detail for forward-compatibility without a schema change.
     loneliness: int | None = Field(default=None, ge=1, le=5)

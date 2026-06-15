@@ -5,7 +5,7 @@ The end-to-end loop: a family contact texts a task (signed inbound webhook → a
 ``list_open_family_tasks``, the source of the ``open_family_tasks`` builtin), the agent
 marks it delivered via ``POST /v1/tools/close_family_task`` (open → delivered, stamping
 ``delivered_call_id``), and a following call never repeats it. Also covers the tool's
-explicit-task_id path, its cross-elder scope guard, and the empty no-op.
+explicit-task_id path, its cross-contact scope guard, and the empty no-op.
 """
 
 import base64
@@ -107,12 +107,12 @@ def _intake(client, signer, message_id: str, text_body: str, sender: str = _SEND
     assert r.status_code == 200, r.text
 
 
-async def _make_elder_and_contact(session_factory, *, phone: str = _SENDER) -> str:
+async def _make_contact_and_contact(session_factory, *, phone: str = _SENDER) -> str:
     async with session_factory() as db:
-        elder_id = (
+        contact_id = (
             await db.execute(
                 text(
-                    "INSERT INTO elders (name, phone_e164, timezone) "
+                    "INSERT INTO contacts (name, phone_e164, timezone) "
                     "VALUES ('Ada', :p, 'UTC') RETURNING id"
                 ),
                 {"p": f"+1555{str(uuid.uuid4().int)[:7]}"},
@@ -120,23 +120,23 @@ async def _make_elder_and_contact(session_factory, *, phone: str = _SENDER) -> s
         ).scalar_one()
         await db.execute(
             text(
-                "INSERT INTO family_contacts (elder_id, name, phone_e164) VALUES (:e, 'Dana', :p)"
+                "INSERT INTO family_contacts (contact_id, name, phone_e164) VALUES (:e, 'Dana', :p)"
             ),
-            {"e": str(elder_id), "p": phone},
+            {"e": str(contact_id), "p": phone},
         )
         await db.commit()
-        return str(elder_id)
+        return str(contact_id)
 
 
-async def _open_tasks(session_factory, elder_id: str):
+async def _open_tasks(session_factory, contact_id: str):
     async with session_factory() as db:
         rows = await db.execute(
             text(
                 "SELECT id, message, status, delivered_call_id FROM family_tasks "
-                "WHERE elder_id = :e AND status = 'open' AND needs_safety_review IS FALSE "
+                "WHERE contact_id = :e AND status = 'open' AND needs_safety_review IS FALSE "
                 "ORDER BY created_at, id"
             ),
-            {"e": elder_id},
+            {"e": contact_id},
         )
         return rows.all()
 
@@ -151,10 +151,14 @@ async def _task_row(session_factory, task_id: int):
         ).one()
 
 
-def _enqueue_call(client, elder_id: str) -> str:
+def _enqueue_call(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"ft-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"ft-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202, r.text
@@ -165,16 +169,16 @@ async def test_family_task_loop_intake_convey_close_no_repeat(
     client, mock_dispatch, signer, session_factory
 ):
     # 1. Intake: family contact texts a task -> one open family_task.
-    elder_id = await _make_elder_and_contact(session_factory)
+    contact_id = await _make_contact_and_contact(session_factory)
     _intake(client, signer, "m1", "remind mom to drink water")
 
     # 2. Convey: the open task is what the next call injects (open_family_tasks builtin).
-    conveyed = await _open_tasks(session_factory, elder_id)
+    conveyed = await _open_tasks(session_factory, contact_id)
     assert [r.message for r in conveyed] == ["remind mom to drink water"]
     task_id = conveyed[0].id
 
     # 3. Close: the agent marks it delivered after conveying (no task_id -> close all).
-    call_id = _enqueue_call(client, elder_id)
+    call_id = _enqueue_call(client, contact_id)
     r = client.post(
         "/v1/tools/close_family_task", json={"call_id": call_id}, headers=_auth(call_id)
     )
@@ -186,15 +190,15 @@ async def test_family_task_loop_intake_convey_close_no_repeat(
     assert str(delivered.delivered_call_id) == call_id
 
     # 4. No repeat: a following call sees no open tasks.
-    assert await _open_tasks(session_factory, elder_id) == []
+    assert await _open_tasks(session_factory, contact_id) == []
 
 
 async def test_close_family_task_explicit_task_id(client, mock_dispatch, signer, session_factory):
-    elder_id = await _make_elder_and_contact(session_factory)
+    contact_id = await _make_contact_and_contact(session_factory)
     _intake(client, signer, "m2", "ask about her doctor visit")
-    task_id = (await _open_tasks(session_factory, elder_id))[0].id
+    task_id = (await _open_tasks(session_factory, contact_id))[0].id
 
-    call_id = _enqueue_call(client, elder_id)
+    call_id = _enqueue_call(client, contact_id)
     r = client.post(
         "/v1/tools/close_family_task",
         json={"call_id": call_id, "task_id": task_id},
@@ -205,17 +209,17 @@ async def test_close_family_task_explicit_task_id(client, mock_dispatch, signer,
     assert (await _task_row(session_factory, task_id)).status == "delivered"
 
 
-async def test_close_family_task_cross_elder_task_returns_404(
+async def test_close_family_task_cross_contact_task_returns_404(
     client, mock_dispatch, signer, session_factory
 ):
-    # A call may only deliver ITS OWN elder's tasks. Elder A owns the task; elder B's call
+    # A call may only deliver ITS OWN contact's tasks. Contact A owns the task; contact B's call
     # must not be able to close it (scope guard -> 404, task untouched).
-    elder_a = await _make_elder_and_contact(session_factory, phone="+15550000001")
+    contact_a = await _make_contact_and_contact(session_factory, phone="+15550000001")
     _intake(client, signer, "m3", "water the plants", sender="+15550000001")
-    task_id = (await _open_tasks(session_factory, elder_a))[0].id
+    task_id = (await _open_tasks(session_factory, contact_a))[0].id
 
-    elder_b = await _make_elder_and_contact(session_factory, phone="+15550000002")
-    call_b = _enqueue_call(client, elder_b)
+    contact_b = await _make_contact_and_contact(session_factory, phone="+15550000002")
+    call_b = _enqueue_call(client, contact_b)
     r = client.post(
         "/v1/tools/close_family_task",
         json={"call_id": call_b, "task_id": task_id},
@@ -226,8 +230,8 @@ async def test_close_family_task_cross_elder_task_returns_404(
 
 
 async def test_close_family_task_noop_when_no_open_tasks(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder_and_contact(session_factory)  # contact, but no task texted
-    call_id = _enqueue_call(client, elder_id)
+    contact_id = await _make_contact_and_contact(session_factory)  # contact, but no task texted
+    call_id = _enqueue_call(client, contact_id)
     r = client.post(
         "/v1/tools/close_family_task", json={"call_id": call_id}, headers=_auth(call_id)
     )

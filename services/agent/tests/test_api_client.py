@@ -131,8 +131,8 @@ async def test_start_inbound_call_posts_worker_token_and_returns_json(monkeypatc
         def json(self):
             return {
                 "call_id": "inb-1",
-                "elder_known": True,
-                "dynamic_vars": {"elder_name": "Ada"},
+                "contact_known": True,
+                "dynamic_vars": {"contact_name": "Ada"},
             }
 
     class _FakeClient:
@@ -157,8 +157,8 @@ async def test_start_inbound_call_posts_worker_token_and_returns_json(monkeypatc
 
     assert result == {
         "call_id": "inb-1",
-        "elder_known": True,
-        "dynamic_vars": {"elder_name": "Ada"},
+        "contact_known": True,
+        "dynamic_vars": {"contact_name": "Ada"},
     }
     assert captured["url"] == "http://api:8000/v1/calls/inbound"
     assert captured["json"] == {

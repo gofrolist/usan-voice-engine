@@ -30,9 +30,9 @@ def _service_token(call_id: str, secret: str = "s" * 32) -> str:
     )
 
 
-def _create_elder(client, *, metadata: dict | None = None) -> str:
+def _create_contact(client, *, metadata: dict | None = None) -> str:
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={
             "name": "Ada",
             "phone_e164": f"+1555{str(uuid.uuid4().int)[:7]}",
@@ -45,10 +45,14 @@ def _create_elder(client, *, metadata: dict | None = None) -> str:
     return r.json()["id"]
 
 
-def _enqueue(client, elder_id: str) -> str:
+def _enqueue(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"tool-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"tool-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202
@@ -60,8 +64,8 @@ def _auth(call_id: str) -> dict:
 
 
 def test_log_wellness_ok(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/log_wellness",
         json={"call_id": call_id, "mood": 4, "pain_level": 2, "notes": "feeling good"},
@@ -72,8 +76,8 @@ def test_log_wellness_ok(client, mock_dispatch):
 
 
 def test_log_wellness_requires_token(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/log_wellness",
         json={"call_id": call_id, "mood": 3},
@@ -82,8 +86,8 @@ def test_log_wellness_requires_token(client, mock_dispatch):
 
 
 def test_log_wellness_token_call_id_mismatch_403(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     wrong = str(uuid.uuid4())
     r = client.post(
         "/v1/tools/log_wellness",
@@ -104,8 +108,8 @@ def test_log_wellness_unknown_call_404(client, mock_dispatch):
 
 
 def test_log_wellness_out_of_range_422(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/log_wellness",
         json={"call_id": call_id, "mood": 9},  # mood is 1..5
@@ -115,8 +119,8 @@ def test_log_wellness_out_of_range_422(client, mock_dispatch):
 
 
 def test_log_medication_ok(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/log_medication",
         json={"call_id": call_id, "medication_name": "Aspirin", "taken": True},
@@ -127,8 +131,8 @@ def test_log_medication_ok(client, mock_dispatch):
 
 
 def test_log_medication_requires_token(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/log_medication",
         json={"call_id": call_id, "medication_name": "Aspirin", "taken": False},
@@ -137,8 +141,8 @@ def test_log_medication_requires_token(client, mock_dispatch):
 
 
 def test_log_medication_mismatch_403(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     wrong = str(uuid.uuid4())
     r = client.post(
         "/v1/tools/log_medication",
@@ -155,8 +159,8 @@ _SCHEDULE = [
 
 
 def test_get_today_meds_returns_schedule(client, mock_dispatch):
-    elder_id = _create_elder(client, metadata={"medication_schedule": _SCHEDULE})
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client, metadata={"medication_schedule": _SCHEDULE})
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/get_today_meds",
         json={"call_id": call_id},
@@ -170,8 +174,8 @@ def test_get_today_meds_returns_schedule(client, mock_dispatch):
 
 
 def test_get_today_meds_empty_when_no_schedule(client, mock_dispatch):
-    elder_id = _create_elder(client)  # no medication_schedule in meta
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)  # no medication_schedule in meta
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/get_today_meds",
         json={"call_id": call_id},
@@ -183,8 +187,8 @@ def test_get_today_meds_empty_when_no_schedule(client, mock_dispatch):
 
 def test_get_today_meds_skips_malformed_entries(client, mock_dispatch):
     bad = [{"name": "Good", "times": ["09:00"]}, {"dosage": "x"}, "nonsense"]
-    elder_id = _create_elder(client, metadata={"medication_schedule": bad})
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client, metadata={"medication_schedule": bad})
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/get_today_meds",
         json={"call_id": call_id},
@@ -197,8 +201,8 @@ def test_get_today_meds_skips_malformed_entries(client, mock_dispatch):
 
 
 def test_get_today_meds_mismatch_403(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/get_today_meds",
         json={"call_id": call_id},
@@ -217,8 +221,8 @@ def _answered_call(client, async_database_url) -> str:
 
     from usan_api.repositories import calls as calls_repo
 
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
 
     async def _answer() -> None:
         engine = create_async_engine(async_database_url, poolclass=NullPool)
@@ -285,8 +289,8 @@ def test_end_call_unknown_call_404(client, mock_dispatch):
 def test_end_call_noop_when_not_in_progress(client, mock_dispatch):
     # A call that hasn't been answered (status "dialing") is not completed by end_call;
     # the handler returns the call's current status unchanged.
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/end_call",
         json={"call_id": call_id, "reason": "x"},
@@ -297,8 +301,8 @@ def test_end_call_noop_when_not_in_progress(client, mock_dispatch):
 
 
 def test_log_transcript_inserts_segments(client, mock_dispatch, async_database_url):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/log_transcript",
         json={
@@ -322,8 +326,8 @@ def test_log_transcript_inserts_segments(client, mock_dispatch, async_database_u
 
 
 def test_log_transcript_requires_token(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/log_transcript",
         json={
@@ -335,8 +339,8 @@ def test_log_transcript_requires_token(client, mock_dispatch):
 
 
 def test_log_transcript_mismatch_403(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/log_transcript",
         json={
@@ -349,8 +353,8 @@ def test_log_transcript_mismatch_403(client, mock_dispatch):
 
 
 def test_log_transcript_empty_segments_422(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/log_transcript",
         json={"call_id": call_id, "segments": []},
@@ -360,8 +364,8 @@ def test_log_transcript_empty_segments_422(client, mock_dispatch):
 
 
 def test_flag_for_followup_ok(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/flag_for_followup",
         json={
@@ -377,8 +381,8 @@ def test_flag_for_followup_ok(client, mock_dispatch):
 
 
 def test_flag_for_followup_requires_token(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/flag_for_followup",
         json={"call_id": call_id, "severity": "routine", "category": "other", "reason": "x"},
@@ -387,8 +391,8 @@ def test_flag_for_followup_requires_token(client, mock_dispatch):
 
 
 def test_flag_for_followup_call_id_mismatch_403(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     wrong = str(uuid.uuid4())
     r = client.post(
         "/v1/tools/flag_for_followup",
@@ -409,8 +413,8 @@ def test_flag_for_followup_unknown_call_404(client, mock_dispatch):
 
 
 def test_flag_for_followup_bad_enum_422(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/flag_for_followup",
         json={"call_id": call_id, "severity": "panic", "category": "medical", "reason": "x"},
@@ -423,8 +427,8 @@ def test_flag_for_followup_increments_metric(client, mock_dispatch):
     from usan_api.observability.custom_metrics import FOLLOWUP_FLAGS_TOTAL
 
     before = _counter_value(FOLLOWUP_FLAGS_TOTAL, severity="urgent", category="safety")
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/flag_for_followup",
         json={"call_id": call_id, "severity": "urgent", "category": "safety", "reason": "fell"},
@@ -484,10 +488,10 @@ def _publish_sms_profile(async_database_url, *, body="Hello {{first_name}} from 
 
 def test_send_sms_enqueues_pending_row(client, mock_dispatch, async_database_url):
     _publish_sms_profile(async_database_url)
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     # mark the call answered/in_progress is not required for enqueue; the endpoint
-    # only needs the call + elder to exist (mirrors log_wellness, which works at QUEUED).
+    # only needs the call + contact to exist (mirrors log_wellness, which works at QUEUED).
     r = client.post(
         "/v1/tools/send_sms",
         json={"call_id": call_id, "template_key": "greet"},
@@ -501,8 +505,8 @@ def test_send_sms_enqueues_pending_row(client, mock_dispatch, async_database_url
 
 def test_send_sms_unknown_template_404(client, mock_dispatch, async_database_url):
     _publish_sms_profile(async_database_url)
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/send_sms",
         json={"call_id": call_id, "template_key": "nope"},
@@ -514,8 +518,8 @@ def test_send_sms_unknown_template_404(client, mock_dispatch, async_database_url
 def test_send_sms_no_sms_config_404(client, mock_dispatch):
     # Fresh-deployment path: no default-outbound profile configures send_sms, so
     # resolution falls back to DEFAULT_AGENT_CONFIG where tools.sms is None.
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/send_sms",
         json={"call_id": call_id, "template_key": "greet"},
@@ -525,8 +529,8 @@ def test_send_sms_no_sms_config_404(client, mock_dispatch):
 
 
 def test_send_sms_requires_token(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post("/v1/tools/send_sms", json={"call_id": call_id, "template_key": "greet"})
     assert r.status_code == 401
 
@@ -534,8 +538,8 @@ def test_send_sms_requires_token(client, mock_dispatch):
 def test_send_sms_mismatch_403(client, mock_dispatch, async_database_url):
     # Service token bound to a different call_id must be rejected by _authorize_call.
     _publish_sms_profile(async_database_url)
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/send_sms",
         json={"call_id": call_id, "template_key": "greet"},
@@ -612,14 +616,14 @@ def _set_call_override(async_database_url, call_id, profile_id):
 
 
 @pytest.mark.skip(
-    reason="Elder.phone_e164 is NOT NULL (and the elder-create API requires it), so a "
+    reason="Contact.phone_e164 is NOT NULL (and the contact-create API requires it), so a "
     "null/empty phone cannot be seeded through the helpers. The 409 guard in send_sms is "
     "cheap defense for any future path that could persist a blank number."
 )
 def test_send_sms_missing_phone_409(client, mock_dispatch, async_database_url):
     _publish_sms_profile(async_database_url)
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/send_sms",
         json={"call_id": call_id, "template_key": "greet"},
@@ -636,8 +640,8 @@ def test_send_sms_resolves_profile_override_over_direction_default(
     # override's template resolves and the direction-default's "greet" does NOT.
     _publish_sms_profile(async_database_url)  # default-outbound, template "greet"
     override_id = _publish_override_profile(async_database_url, template_key="ovr_greet")
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     _set_call_override(async_database_url, call_id, override_id)
 
     # Override-only template succeeds (override tier won).
@@ -662,16 +666,16 @@ def test_send_sms_per_call_cap_409(client, mock_dispatch, async_database_url):
     # A confused/hijacked LLM must not queue unbounded carrier traffic: send_sms is
     # exempt from the global rate limiter (in-call tool path), so the endpoint
     # itself refuses once MAX_SMS_PER_CALL rows exist for the call — any status,
-    # since already-sent texts count toward the elder's per-call budget too.
+    # since already-sent texts count toward the contact's per-call budget too.
     from usan_api.routers import tools as tools_router
 
     # Pin the literal value: raising the per-call budget must be a deliberate,
-    # reviewed decision (carrier traffic to an elder's phone), not a constant tweak.
+    # reviewed decision (carrier traffic to an contact's phone), not a constant tweak.
     assert tools_router.MAX_SMS_PER_CALL == 3
 
     _publish_sms_profile(async_database_url)
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     for _ in range(tools_router.MAX_SMS_PER_CALL):
         r = client.post(
             "/v1/tools/send_sms",

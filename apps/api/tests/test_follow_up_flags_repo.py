@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import follow_up_flags as repo
 
 
@@ -25,33 +25,35 @@ async def _truncate(session_factory):
     # GROUP-BY count assertions would otherwise be flaky — earlier tests in this
     # module (and siblings sharing the session container) accumulate open rows.
     async with session_factory() as db:
-        await db.execute(text("TRUNCATE follow_up_flags, callback_requests, calls, elders CASCADE"))
+        await db.execute(
+            text("TRUNCATE follow_up_flags, callback_requests, calls, contacts CASCADE")
+        )
         await db.commit()
 
 
-async def _seed_call_and_elder(factory) -> tuple[uuid.UUID, uuid.UUID]:
+async def _seed_call_and_contact(factory) -> tuple[uuid.UUID, uuid.UUID]:
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(
-            db, name="Flag Elder", phone_e164=phone, timezone="UTC"
+        contact = await contacts_repo.create_contact(
+            db, name="Flag Contact", phone_e164=phone, timezone="UTC"
         )
         call = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.COMPLETED,
         )
         await db.commit()
-        return call.id, elder.id
+        return call.id, contact.id
 
 
 async def test_create_and_list_follow_up_flag(session_factory):
-    cid, eid = await _seed_call_and_elder(session_factory)
+    cid, eid = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         row = await repo.create_follow_up_flag(
             db,
             call_id=cid,
-            elder_id=eid,
+            contact_id=eid,
             severity="urgent",
             category="medical",
             reason="chest pain reported",
@@ -64,8 +66,8 @@ async def test_create_and_list_follow_up_flag(session_factory):
         all_flags = await repo.list_flags(db)
         assert any(f.id == row.id for (f, _, _) in all_flags)
 
-        by_elder = await repo.list_flags(db, elder_id=eid)
-        assert [f.id for (f, _, _) in by_elder] == [row.id]
+        by_contact = await repo.list_flags(db, contact_id=eid)
+        assert [f.id for (f, _, _) in by_contact] == [row.id]
 
         open_only = await repo.list_flags(db, status="open")
         assert any(f.id == row.id for (f, _, _) in open_only)
@@ -76,31 +78,31 @@ async def test_create_and_list_follow_up_flag(session_factory):
 
 
 async def test_list_flags_respects_limit(session_factory):
-    cid, eid = await _seed_call_and_elder(session_factory)
+    cid, eid = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         for _ in range(2):
             await repo.create_follow_up_flag(
                 db,
                 call_id=cid,
-                elder_id=eid,
+                contact_id=eid,
                 severity="routine",
                 category="other",
                 reason=None,
             )
         await db.commit()
 
-        limited = await repo.list_flags(db, elder_id=eid, limit=1)
+        limited = await repo.list_flags(db, contact_id=eid, limit=1)
         assert len(limited) == 1
 
 
 async def _create_flag(db, cid, eid, *, severity="routine"):
     return await repo.create_follow_up_flag(
-        db, call_id=cid, elder_id=eid, severity=severity, category="other", reason=None
+        db, call_id=cid, contact_id=eid, severity=severity, category="other", reason=None
     )
 
 
 async def test_get_flag_returns_row_or_none(session_factory):
-    cid, eid = await _seed_call_and_elder(session_factory)
+    cid, eid = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         row = await _create_flag(db, cid, eid)
         await db.commit()
@@ -114,7 +116,7 @@ async def test_get_flag_returns_row_or_none(session_factory):
 
 
 async def test_update_status_guarded_state_machine(session_factory):
-    cid, eid = await _seed_call_and_elder(session_factory)
+    cid, eid = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         flag = await _create_flag(db, cid, eid, severity="urgent")
         fresh = await _create_flag(db, cid, eid)
@@ -174,23 +176,23 @@ async def test_update_status_guarded_state_machine(session_factory):
         await db.commit()
 
 
-async def test_list_flags_returns_elder_join_tuples(session_factory):
-    cid, eid = await _seed_call_and_elder(session_factory)
+async def test_list_flags_returns_contact_join_tuples(session_factory):
+    cid, eid = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         row = await _create_flag(db, cid, eid)
         await db.commit()
 
-        elder = await elders_repo.get_elder(db, eid)
-        assert elder is not None
+        contact = await contacts_repo.get_contact(db, eid)
+        assert contact is not None
 
-        [(flag, elder_name, phone)] = await repo.list_flags(db, elder_id=eid)
+        [(flag, contact_name, phone)] = await repo.list_flags(db, contact_id=eid)
         assert flag.id == row.id
-        assert elder_name == "Flag Elder"
-        assert phone == elder.phone_e164
+        assert contact_name == "Flag Contact"
+        assert phone == contact.phone_e164
 
 
 async def test_list_flags_severity_filter_and_urgent_first(session_factory):
-    cid, eid = await _seed_call_and_elder(session_factory)
+    cid, eid = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         urgent = await _create_flag(db, cid, eid, severity="urgent")
         routine = [await _create_flag(db, cid, eid) for _ in range(5)]
@@ -209,20 +211,20 @@ async def test_list_flags_severity_filter_and_urgent_first(session_factory):
 
 
 async def test_list_flags_offset(session_factory):
-    cid, eid = await _seed_call_and_elder(session_factory)
+    cid, eid = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         flags = [await _create_flag(db, cid, eid) for _ in range(3)]
         await db.commit()
         newest_first = [f.id for f in reversed(flags)]
 
-        page0 = await repo.list_flags(db, elder_id=eid)
+        page0 = await repo.list_flags(db, contact_id=eid)
         assert [f.id for (f, _, _) in page0] == newest_first
-        page1 = await repo.list_flags(db, elder_id=eid, offset=1)
+        page1 = await repo.list_flags(db, contact_id=eid, offset=1)
         assert [f.id for (f, _, _) in page1] == newest_first[1:]
 
 
 async def test_count_by_status_groups(session_factory):
-    cid, eid = await _seed_call_and_elder(session_factory)
+    cid, eid = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         flags = [await _create_flag(db, cid, eid) for _ in range(4)]
         await db.commit()
@@ -248,7 +250,7 @@ async def test_count_by_status_groups(session_factory):
 
 
 async def test_count_open_urgent(session_factory):
-    cid, eid = await _seed_call_and_elder(session_factory)
+    cid, eid = await _seed_call_and_contact(session_factory)
     async with session_factory() as db:
         await _create_flag(db, cid, eid, severity="urgent")
         urgent2 = await _create_flag(db, cid, eid, severity="urgent")

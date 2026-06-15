@@ -10,7 +10,7 @@ from usan_api import background, retry_orchestrator
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.settings import Settings
 
 NOW = datetime(2026, 5, 31, 12, 0, tzinfo=UTC)
@@ -36,9 +36,9 @@ async def _seed(factory, *, status, scheduled_at):
     """Insert one call."""
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(db, name="A", phone_e164=phone, timezone="UTC")
         call = Call(
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=status,
             scheduled_at=scheduled_at,

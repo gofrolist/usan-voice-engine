@@ -1,7 +1,7 @@
 """Pre-auth, per-client rate limiting for the operator/management plane.
 
 A small ASGI middleware throttles only the externally reachable operator routes
-(elders, DNC, outbound call enqueue/lookup, and the /v1/admin/* management plane)
+(contacts, DNC, outbound call enqueue/lookup, and the /v1/admin/* management plane)
 — BEFORE authentication, so an unauthenticated flood is bounded too. Internal
 service routes (agent /v1/tools/*,
 the inbound/outcome call hooks, LiveKit webhooks, and /health) are never matched,
@@ -31,7 +31,7 @@ from usan_api.client_ip import client_ip
 def _is_operator_route(method: str, path: str) -> bool:
     """True for the externally reachable operator/management endpoints.
 
-    Covers the operator data-plane routes (elders, DNC, outbound call
+    Covers the operator data-plane routes (contacts, DNC, outbound call
     enqueue/lookup, call schedules, call batches, webhook endpoints/deliveries)
     plus the entire /v1/admin/* management plane (the operator-token-guarded
     admin UI backend).
@@ -41,7 +41,7 @@ def _is_operator_route(method: str, path: str) -> bool:
     """
     if path.startswith("/v1/admin/") or path.startswith("/v1/auth/"):
         return True
-    if path.startswith("/v1/elders") or path.startswith("/v1/dnc"):
+    if path.startswith("/v1/contacts") or path.startswith("/v1/dnc"):
         return True
     if path.startswith("/v1/schedules") or path.startswith("/v1/batches"):
         return True

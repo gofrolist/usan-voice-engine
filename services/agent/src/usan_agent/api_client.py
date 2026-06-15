@@ -152,12 +152,12 @@ async def send_sms(call_id: str, settings: Settings, *, template_key: str) -> No
 
 
 async def send_info_sms(call_id: str, settings: Settings) -> dict[str, Any]:
-    """Text the elder the PHI-free helpful-numbers SMS (US7 / FR-041)."""
+    """Text the contact the PHI-free helpful-numbers SMS (US7 / FR-041)."""
     return await _post_tool("send_info_sms", call_id, settings, {})
 
 
 async def register_opt_out(call_id: str, settings: Settings) -> dict[str, Any]:
-    """Record a spoken opt-out: DNC the elder's number, ack, alert ops (US7 / FR-037)."""
+    """Record a spoken opt-out: DNC the contact's number, ack, alert ops (US7 / FR-037)."""
     return await _post_tool("register_opt_out", call_id, settings, {})
 
 
@@ -299,9 +299,9 @@ async def start_inbound_call(
     settings: Settings,
     sip_call_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Best-effort: register an inbound call and fetch elder dynamic vars.
+    """Best-effort: register an inbound call and fetch contact dynamic vars.
 
-    Returns parsed {call_id, elder_known, dynamic_vars} on success, or None on any
+    Returns parsed {call_id, contact_known, dynamic_vars} on success, or None on any
     failure so the worker can fall back to a greet-only inbound conversation.
     """
     url = f"{settings.api_base_url}/v1/calls/inbound"

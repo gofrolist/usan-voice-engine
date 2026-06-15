@@ -6,13 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import webhook_events
 from usan_api.db.base import CallStatus
-from usan_api.db.models import Call, CallbackRequest, Elder
+from usan_api.db.models import Call, CallbackRequest, Contact
 from usan_api.repositories import webhook_outbox
 
 # The callback dialer (US8) records who advanced the row; admin actors use their email.
 _DIALER_ACTOR = "system:callback_dialer"
 
-# Bound the list read: callback requests accumulate per call/elder over time.
+# Bound the list read: callback requests accumulate per call/contact over time.
 # Default cap mirrors the sibling follow_up_flags repo (MAX_FLAGS_LIMIT=500);
 # newest-first so the cap keeps the most recent.
 MAX_CALLBACKS_LIMIT = 500
@@ -30,7 +30,7 @@ async def create_callback_request(
     db: AsyncSession,
     *,
     call_id: uuid.UUID,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     requested_time_text: str,
     requested_at: datetime | None,
     notes: str | None,
@@ -38,7 +38,7 @@ async def create_callback_request(
 ) -> CallbackRequest:
     row = CallbackRequest(
         call_id=call_id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         requested_time_text=requested_time_text,
         requested_at=requested_at,
         notes=notes,
@@ -49,7 +49,7 @@ async def create_callback_request(
     await db.refresh(row)
     # callback.created joins this same transaction (transactional outbox, spec
     # §2.1). Payload carries the parsed requested_at only — never
-    # requested_time_text/notes (spec §6.5); elder_id stays (no health content,
+    # requested_time_text/notes (spec §6.5); contact_id stays (no health content,
     # the §6.4 line is the health-information x person-identifier pairing).
     await webhook_outbox.enqueue_event(
         db, event="callback.created", payload=webhook_events.callback_created_payload(row)
@@ -61,23 +61,23 @@ async def list_callback_requests(
     db: AsyncSession,
     *,
     status: str | None = None,
-    elder_id: uuid.UUID | None = None,
+    contact_id: uuid.UUID | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[tuple[CallbackRequest, str | None, str | None]]:
-    """Callback requests + elder name/phone via outerjoin (admin read model, §4.4).
+    """Callback requests + contact name/phone via outerjoin (admin read model, §4.4).
 
     Newest first (ordering unchanged by C3 — no urgent-first here).
     """
     limit = max(1, min(limit, MAX_CALLBACKS_LIMIT))
     offset = max(0, offset)
-    stmt = select(CallbackRequest, Elder.name, Elder.phone_e164).outerjoin(
-        Elder, CallbackRequest.elder_id == Elder.id
+    stmt = select(CallbackRequest, Contact.name, Contact.phone_e164).outerjoin(
+        Contact, CallbackRequest.contact_id == Contact.id
     )
     if status is not None:
         stmt = stmt.where(CallbackRequest.status == status)
-    if elder_id is not None:
-        stmt = stmt.where(CallbackRequest.elder_id == elder_id)
+    if contact_id is not None:
+        stmt = stmt.where(CallbackRequest.contact_id == contact_id)
     stmt = (
         stmt.order_by(CallbackRequest.created_at.desc(), CallbackRequest.id.desc())
         .limit(limit)

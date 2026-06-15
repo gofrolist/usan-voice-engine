@@ -19,8 +19,8 @@ from usan_api import notification_outbox, notifications, telnyx_messaging
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import SmsMessage
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import dnc as dnc_repo
-from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import sms_messages as sms_repo
 
 _FAMILY_NUMBER = "+15557654321"
@@ -58,12 +58,12 @@ async def _seed_notification(url: str, *, dedupe_key: str | None = None) -> uuid
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as db:
-            elder = await elders_repo.create_elder(
+            contact = await contacts_repo.create_contact(
                 db, name="Ada", phone_e164=f"+1555{str(uuid.uuid4().int)[:7]}", timezone="UTC"
             )
             row = await notifications.enqueue_family_alert(
                 db,
-                elder_id=elder.id,
+                contact_id=contact.id,
                 to_number=_FAMILY_NUMBER,
                 reason="crisis",
                 dedupe_key=dedupe_key or f"crisis:{uuid.uuid4()}",
@@ -80,20 +80,20 @@ async def _seed_in_call_sms(url: str) -> uuid.UUID:
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as db:
-            elder = await elders_repo.create_elder(
+            contact = await contacts_repo.create_contact(
                 db, name="Bo", phone_e164=f"+1555{str(uuid.uuid4().int)[:7]}", timezone="UTC"
             )
             call = await calls_repo.create_call(
                 db,
-                elder_id=elder.id,
+                contact_id=contact.id,
                 direction=CallDirection.OUTBOUND,
                 status=CallStatus.IN_PROGRESS,
             )
             row = await sms_repo.create_sms_message(
                 db,
                 call_id=call.id,
-                elder_id=elder.id,
-                to_number=elder.phone_e164,
+                contact_id=contact.id,
+                to_number=contact.phone_e164,
                 template_key="greet",
                 body="hi",
             )
@@ -280,14 +280,14 @@ async def _seed_notification_to(url: str, *, to_number: str, kind: str, on_dnc: 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as db:
-            elder = await elders_repo.create_elder(
+            contact = await contacts_repo.create_contact(
                 db, name="Ada", phone_e164=f"+1555{str(uuid.uuid4().int)[:7]}", timezone="UTC"
             )
             if on_dnc:
                 await dnc_repo.add_entry(db, to_number, "test opt-out")
             row = await sms_repo.create_notification(
                 db,
-                elder_id=elder.id,
+                contact_id=contact.id,
                 to_number=to_number,
                 kind=kind,
                 body="USAN update.",
@@ -367,12 +367,12 @@ async def test_claim_pending_notification_skips_locked_row(async_database_url):
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as db:
-            elder = await elders_repo.create_elder(
+            contact = await contacts_repo.create_contact(
                 db, name="Lock", phone_e164=f"+1555{str(uuid.uuid4().int)[:7]}", timezone="UTC"
             )
             await sms_repo.create_notification(
                 db,
-                elder_id=elder.id,
+                contact_id=contact.id,
                 to_number=f"+1555{str(uuid.uuid4().int)[:7]}",
                 kind="family_alert",
                 body="x",

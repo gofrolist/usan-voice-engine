@@ -61,12 +61,12 @@ def _envelope(message_id: str, text_body: str, sender: str = _SENDER) -> bytes:
     ).encode()
 
 
-async def _make_elder_and_contact(session_factory, *, phone: str = _SENDER):
+async def _make_contact_and_contact(session_factory, *, phone: str = _SENDER):
     async with session_factory() as db:
-        elder_id = (
+        contact_id = (
             await db.execute(
                 text(
-                    "INSERT INTO elders (name, phone_e164, timezone) "
+                    "INSERT INTO contacts (name, phone_e164, timezone) "
                     "VALUES ('Ada', :p, 'UTC') RETURNING id"
                 ),
                 {"p": f"+1555{str(uuid.uuid4().int)[:7]}"},
@@ -74,12 +74,12 @@ async def _make_elder_and_contact(session_factory, *, phone: str = _SENDER):
         ).scalar_one()
         await db.execute(
             text(
-                "INSERT INTO family_contacts (elder_id, name, phone_e164) VALUES (:e, 'Dana', :p)"
+                "INSERT INTO family_contacts (contact_id, name, phone_e164) VALUES (:e, 'Dana', :p)"
             ),
-            {"e": elder_id, "p": phone},
+            {"e": contact_id, "p": phone},
         )
         await db.commit()
-        return elder_id
+        return contact_id
 
 
 def _post(client, signer, raw: bytes, *, ts: str | None = None):
@@ -95,25 +95,25 @@ def _post(client, signer, raw: bytes, *, ts: str | None = None):
     )
 
 
-async def _open_tasks(session_factory, elder_id):
+async def _open_tasks(session_factory, contact_id):
     async with session_factory() as db:
         rows = await db.execute(
             text(
                 "SELECT message, status, needs_safety_review FROM family_tasks "
-                "WHERE elder_id = :e ORDER BY id"
+                "WHERE contact_id = :e ORDER BY id"
             ),
-            {"e": elder_id},
+            {"e": contact_id},
         )
         return rows.all()
 
 
 async def test_known_contact_creates_open_task(client, signer, session_factory):
-    elder_id = await _make_elder_and_contact(session_factory)
+    contact_id = await _make_contact_and_contact(session_factory)
     raw = _envelope("msg_1", "remind mom to drink water")
     r = _post(client, signer, raw)
     assert r.status_code == 200, r.text
 
-    rows = await _open_tasks(session_factory, elder_id)
+    rows = await _open_tasks(session_factory, contact_id)
     assert len(rows) == 1
     assert rows[0].message == "remind mom to drink water"
     assert rows[0].status == "open"
@@ -121,16 +121,16 @@ async def test_known_contact_creates_open_task(client, signer, session_factory):
 
 
 async def test_idempotent_on_message_id(client, signer, session_factory):
-    elder_id = await _make_elder_and_contact(session_factory)
+    contact_id = await _make_contact_and_contact(session_factory)
     raw = _envelope("msg_dup", "remind mom to drink water")
     assert _post(client, signer, raw).status_code == 200
     assert _post(client, signer, raw).status_code == 200  # redelivery
-    rows = await _open_tasks(session_factory, elder_id)
+    rows = await _open_tasks(session_factory, contact_id)
     assert len(rows) == 1  # not duplicated
 
 
 async def test_forged_signature_rejected_401(client, signer, session_factory):
-    await _make_elder_and_contact(session_factory)
+    await _make_contact_and_contact(session_factory)
     raw = _envelope("msg_forge", "hello")
     ts = str(int(time.time()))
     r = client.post(
@@ -145,7 +145,7 @@ async def test_forged_signature_rejected_401(client, signer, session_factory):
 
 
 async def test_stale_timestamp_rejected_401(client, signer, session_factory):
-    await _make_elder_and_contact(session_factory)
+    await _make_contact_and_contact(session_factory)
     raw = _envelope("msg_old", "hello")
     old_ts = str(int(time.time()) - 4000)  # beyond webhook_max_age_s (300)
     r = _post(client, signer, raw, ts=old_ts)  # validly signed over the old ts
@@ -153,17 +153,17 @@ async def test_stale_timestamp_rejected_401(client, signer, session_factory):
 
 
 async def test_unmatched_sender_creates_no_task(client, signer, session_factory):
-    elder_id = await _make_elder_and_contact(session_factory)
+    contact_id = await _make_contact_and_contact(session_factory)
     raw = _envelope("msg_unknown", "remind mom", sender="+15559999999")
     assert _post(client, signer, raw).status_code == 200
-    assert await _open_tasks(session_factory, elder_id) == []  # FR-014
+    assert await _open_tasks(session_factory, contact_id) == []  # FR-014
 
 
 async def test_unsafe_task_flagged_for_review(client, signer, session_factory):
-    elder_id = await _make_elder_and_contact(session_factory)
+    contact_id = await _make_contact_and_contact(session_factory)
     raw = _envelope("msg_unsafe", "tell mom to stop taking her heart pills")
     assert _post(client, signer, raw).status_code == 200
-    rows = await _open_tasks(session_factory, elder_id)
+    rows = await _open_tasks(session_factory, contact_id)
     assert len(rows) == 1
     assert rows[0].needs_safety_review is True  # FR-015 — not relayed verbatim
 
@@ -172,11 +172,11 @@ async def test_national_format_sender_matches_e164_contact(client, signer, sessi
     # Telnyx may deliver a bare 10-digit national number; the contact is stored E.164.
     # The intake must normalize before lookup, else a known contact silently matches
     # nothing (FR-008/014). Contact is +15550009001; sender arrives as 5550009001.
-    elder_id = await _make_elder_and_contact(session_factory, phone=_SENDER)
+    contact_id = await _make_contact_and_contact(session_factory, phone=_SENDER)
     national = _SENDER.removeprefix("+1")  # "5550009001"
     raw = _envelope("msg_natl", "remind mom about lunch", sender=national)
     assert _post(client, signer, raw).status_code == 200
-    rows = await _open_tasks(session_factory, elder_id)
+    rows = await _open_tasks(session_factory, contact_id)
     assert len(rows) == 1
     assert rows[0].message == "remind mom about lunch"
 

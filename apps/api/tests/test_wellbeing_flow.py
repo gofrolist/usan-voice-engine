@@ -2,14 +2,14 @@
 
 Two threads of US6 wired end-to-end:
 
-1. ``survey_due`` builtin — an elder with no ``wellbeing_survey_results`` this month is
+1. ``survey_due`` builtin — an contact with no ``wellbeing_survey_results`` this month is
    dispatched with ``survey_due == "true"``; once ``record_survey`` lands the row, the
    next dispatch resolves it to ``""`` (FR-032). This exercises the real
    ``routers/calls`` -> ``survey_results`` repo -> ``resolve_builtin_vars`` -> dispatch path
    by capturing the ``resolved_vars`` handed to the (mocked) LiveKit dispatch.
 
 2. Non-repeating activity sequence — driving ``get_activity`` across many calls yields a
-   full non-repeating cycle (FR-034 / SC-009), proving the per-elder ``activity_history``
+   full non-repeating cycle (FR-034 / SC-009), proving the per-contact ``activity_history``
    selection holds across separate calls/sessions.
 
 Written FIRST (Constitution IV) — fails until the builtin + repos + endpoints + wiring land.
@@ -61,12 +61,12 @@ def _auth(call_id: str) -> dict:
     return {"Authorization": f"Bearer {_service_token(call_id)}"}
 
 
-async def _make_elder(session_factory) -> str:
+async def _make_contact(session_factory) -> str:
     async with session_factory() as db:
         eid = (
             await db.execute(
                 text(
-                    "INSERT INTO elders (name, phone_e164, timezone) "
+                    "INSERT INTO contacts (name, phone_e164, timezone) "
                     "VALUES ('Bea', :p, 'America/New_York') RETURNING id"
                 ),
                 {"p": f"+1555{str(uuid.uuid4().int)[:7]}"},
@@ -76,10 +76,14 @@ async def _make_elder(session_factory) -> str:
         return str(eid)
 
 
-def _enqueue_call(client, elder_id: str) -> str:
+def _enqueue_call(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"wf-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"wf-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202, r.text
@@ -92,14 +96,14 @@ def _last_resolved_vars(mock_dispatch) -> dict:
 
 
 async def test_survey_due_true_until_recorded_then_false(client, mock_dispatch, session_factory):
-    elder_id = await _make_elder(session_factory)
+    contact_id = await _make_contact(session_factory)
 
     # No survey this month -> the dispatched call carries survey_due="true".
-    _enqueue_call(client, elder_id)
+    _enqueue_call(client, contact_id)
     assert _last_resolved_vars(mock_dispatch)["survey_due"] == "true"
 
     # Record this month's survey via the tool.
-    call_id = _enqueue_call(client, elder_id)
+    call_id = _enqueue_call(client, contact_id)
     r = client.post(
         "/v1/tools/record_survey",
         json={"call_id": call_id, "loneliness": 2, "mood": 3, "satisfaction": 4},
@@ -108,7 +112,7 @@ async def test_survey_due_true_until_recorded_then_false(client, mock_dispatch, 
     assert r.status_code == 200, r.text
 
     # A subsequent dispatch this month no longer flags the survey as due.
-    _enqueue_call(client, elder_id)
+    _enqueue_call(client, contact_id)
     assert _last_resolved_vars(mock_dispatch)["survey_due"] == ""
 
 
@@ -116,11 +120,11 @@ async def test_non_repeating_activity_sequence_across_calls(client, mock_dispatc
     from usan_api import activities_catalog
 
     total = len(activities_catalog.list_activities("any"))
-    elder_id = await _make_elder(session_factory)
+    contact_id = await _make_contact(session_factory)
 
     keys: list[str] = []
     for _ in range(total):
-        call_id = _enqueue_call(client, elder_id)
+        call_id = _enqueue_call(client, contact_id)
         r = client.post(
             "/v1/tools/get_activity",
             json={"call_id": call_id},

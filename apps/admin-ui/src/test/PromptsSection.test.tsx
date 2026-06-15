@@ -18,7 +18,7 @@ const CATALOG = {
     {
       name: "first_name",
       tier: "builtin",
-      description: "The elder's first name.",
+      description: "The contact's first name.",
       default: "there",
       example: "Margaret",
       phi: false,
@@ -58,7 +58,7 @@ function Harness({
         checkin_flow_instructions: "f",
         goodbye_message: "g",
         inbound_opening: "o",
-        inbound_personalization_template: "with {elder_name}",
+        inbound_personalization_template: "with {contact_name}",
       },
     },
   });

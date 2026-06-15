@@ -75,16 +75,16 @@ export function CallDetailPage() {
 
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <div className="flex items-baseline gap-3">
-          {c.elder_id !== null ? (
+          {c.contact_id !== null ? (
             <Link
-              to={`/calls?elder_id=${c.elder_id}`}
+              to={`/calls?contact_id=${c.contact_id}`}
               className="text-lg font-medium text-indigo-600 hover:underline"
               title="View this contact's calls"
             >
-              {c.elder_name ?? "Unknown contact"}
+              {c.contact_name ?? "Unknown contact"}
             </Link>
           ) : (
-            <span className="text-lg font-medium text-slate-900">{c.elder_name ?? "—"}</span>
+            <span className="text-lg font-medium text-slate-900">{c.contact_name ?? "—"}</span>
           )}
           <span className="font-mono text-sm text-slate-500">{c.masked_phone}</span>
         </div>

@@ -33,9 +33,9 @@ def _auth(call_id: str) -> dict:
     return {"Authorization": f"Bearer {_service_token(call_id)}"}
 
 
-def _create_elder(client) -> str:
+def _create_contact(client) -> str:
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={
             "name": "Ada",
             "phone_e164": f"+1555{str(uuid.uuid4().int)[:7]}",
@@ -48,10 +48,14 @@ def _create_elder(client) -> str:
     return r.json()["id"]
 
 
-def _enqueue(client, elder_id: str) -> str:
+def _enqueue(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"cb-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"cb-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202
@@ -59,8 +63,8 @@ def _enqueue(client, elder_id: str) -> str:
 
 
 def test_schedule_callback_ok(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/schedule_callback",
         json={
@@ -76,8 +80,8 @@ def test_schedule_callback_ok(client, mock_dispatch):
 
 
 def test_schedule_callback_minimal_no_iso_time(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/schedule_callback",
         json={"call_id": call_id, "requested_time_text": "sometime soon"},
@@ -88,8 +92,8 @@ def test_schedule_callback_minimal_no_iso_time(client, mock_dispatch):
 
 
 def test_schedule_callback_requires_token(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/schedule_callback",
         json={"call_id": call_id, "requested_time_text": "soon"},
@@ -98,8 +102,8 @@ def test_schedule_callback_requires_token(client, mock_dispatch):
 
 
 def test_schedule_callback_mismatch_403(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/schedule_callback",
         json={"call_id": call_id, "requested_time_text": "soon"},
@@ -119,8 +123,8 @@ def test_schedule_callback_unknown_call_404(client, mock_dispatch):
 
 
 def test_schedule_callback_empty_time_text_422(client, mock_dispatch):
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/schedule_callback",
         json={"call_id": call_id, "requested_time_text": ""},
@@ -133,8 +137,8 @@ def test_schedule_callback_increments_metric(client, mock_dispatch):
     from usan_api.observability.custom_metrics import CALLBACK_REQUESTS_TOTAL
 
     before = _counter_value(CALLBACK_REQUESTS_TOTAL)
-    elder_id = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     r = client.post(
         "/v1/tools/schedule_callback",
         json={"call_id": call_id, "requested_time_text": "soon"},

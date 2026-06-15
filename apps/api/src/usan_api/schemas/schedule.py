@@ -1,4 +1,4 @@
-"""Request/response schemas for per-elder call schedules (spec §4.1).
+"""Request/response schemas for per-contact call schedules (spec §4.1).
 
 Validation contract: the schema layer 422s anything the materializer could not
 act on — empty/unknown/duplicate day names, an inverted window, or a window
@@ -33,7 +33,7 @@ from usan_api.schemas.call import MAX_DYNAMIC_VARS_BYTES
 # repositories/call_schedules.MAX_SCHEDULES_LIMIT (spec §4.1).
 
 # US5: the closed morning|evening slot set; the DB CHECK (migration 0022) is the
-# matching backstop. An elder may have one schedule per slot.
+# matching backstop. An contact may have one schedule per slot.
 Slot = Literal["morning", "evening"]
 
 
@@ -61,7 +61,7 @@ def _capped_vars(v: dict[str, Any]) -> dict[str, Any]:
 
 
 class CreateScheduleRequest(BaseModel):
-    elder_id: uuid.UUID
+    contact_id: uuid.UUID
     slot: Slot = "morning"  # US5; default keeps single-slot callers unchanged
     window_start_local: time
     window_end_local: time
@@ -130,7 +130,7 @@ class UpdateScheduleRequest(BaseModel):
 
 class ScheduleResponse(BaseModel):
     id: uuid.UUID
-    elder_id: uuid.UUID
+    contact_id: uuid.UUID
     slot: Slot  # closed enum; the DB CHECK (migration 0022) guarantees the value
     enabled: bool
     window_start_local: time
@@ -149,7 +149,7 @@ class ScheduleResponse(BaseModel):
     def from_model(cls, s: CallSchedule) -> ScheduleResponse:
         return cls(
             id=s.id,
-            elder_id=s.elder_id,
+            contact_id=s.contact_id,
             slot=s.slot,
             enabled=s.enabled,
             window_start_local=s.window_start_local,
