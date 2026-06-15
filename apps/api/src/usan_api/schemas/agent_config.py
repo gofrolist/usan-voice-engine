@@ -20,30 +20,28 @@ from usan_api.schemas.tool_catalog import TOOL_NAMES
 from usan_api.schemas.variable_catalog import BUILTIN_NAMES, PHI_BUILTIN_NAMES
 from usan_api.schemas.voice_catalog import VOICE_IDS
 
-# Personalization slots allowed in the inbound template (check_in.py rendering).
-# Kept for any external code that may import it; no longer used by the validators.
+# Personalization slots resolved by the agent's token substitution (check_in.py).
+# Documented for the editor's slot hints; substitution still resolves these single-brace
+# slots, so the set stays valid even though no field-validator references it anymore.
 ALLOWED_TEMPLATE_SLOTS = frozenset({"contact_name", "last_check_in_line"})
 
 # Phase 2 token syntax: {{ name }} with optional inner spaces (design contract D/E).
 # Mirrors services/agent prompt_vars.TOKEN_RE so the two layers agree on what a token is.
 _TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
-# Legacy single-brace personalization slots kept for already-published configs.
-_LEGACY_SLOT_RE = re.compile(r"\{(contact_name|last_check_in_line)\}")
 
 
-def _reject_stray_braces_after_tokens(value: str, *, allow_legacy_slots: bool) -> str:
-    """Field-tiered brace check (design §5.1).
+def _reject_stray_braces_after_tokens(value: str) -> str:
+    """Stray-brace guard for the SHORT one-line prompt fields (design §5.1).
 
-    Strip every well-formed ``{{token}}`` (and, when ``allow_legacy_slots``, the two
-    legacy single-brace slots) then reject any ``{``/``}`` that remains. Unknown
-    ``{{var}}`` NAMES are intentionally NOT rejected here — they are surfaced as
+    Strip every well-formed ``{{token}}`` then reject any ``{``/``}`` that remains — a
+    lone brace in a short user-facing line (greeting, voicemail, ...) is almost always a
+    typo. Unknown ``{{var}}`` NAMES are intentionally NOT rejected — they surface as
     non-fatal warnings on the save response (warn-don't-block). Substitution is
-    token-scoped agent-side (never str.format), so the leftover-brace check only
-    guards against typos in the short one-line fields.
+    token-scoped agent-side (never str.format), so a leftover brace is otherwise inert;
+    the large free-form fields (system_prompt, checkin_flow_instructions,
+    inbound_personalization_template) skip this check entirely.
     """
     stripped = _TOKEN_RE.sub("", value)
-    if allow_legacy_slots:
-        stripped = _LEGACY_SLOT_RE.sub("", stripped)
     if "{" in stripped or "}" in stripped:
         raise ValueError("must not contain a stray '{' or '}' outside a {{token}}")
     return value
@@ -67,13 +65,13 @@ def unknown_tokens(text: str, known_names: frozenset[str] = frozenset()) -> list
 
 
 class PromptsConfig(BaseModel):
-    # system_prompt and checkin_flow_instructions are large free-form behavior fields
-    # that the agent passes verbatim to the LLM as instructions (pipeline.py /
-    # check_in.py). They allow braces and a generous cap to hold migrated prompts
-    # full of {{variable}} tokens. All prompt fields (including the inbound
-    # personalization template) are token-substituted via prompt_vars.substitute();
-    # legacy single-brace slots ({contact_name}, {last_check_in_line}) are str.replace-d,
-    # not str.format-ed.
+    # system_prompt, checkin_flow_instructions and inbound_personalization_template are
+    # large free-form prompt fields the agent passes to the LLM (pipeline.py /
+    # check_in.py). They allow arbitrary braces and a generous cap to hold migrated
+    # prompts full of {{variable}} tokens. All prompt fields are token-substituted via
+    # prompt_vars.substitute() (legacy single-brace slots {contact_name}/
+    # {last_check_in_line} are str.replace-d, never str.format-ed), so a stray brace is
+    # inert at substitution time.
     system_prompt: str = Field(min_length=1, max_length=24000)
     greeting: str = Field(min_length=1, max_length=1000)
     recording_disclosure: str = Field(min_length=1, max_length=1000)
@@ -83,10 +81,13 @@ class PromptsConfig(BaseModel):
     inbound_opening: str = Field(min_length=1, max_length=1000)
     inbound_personalization_template: str = Field(min_length=1, max_length=6000)
 
-    # Field-tiered braces (design §5.1). Short literal fields accept {{tokens}} but
-    # reject a stray lone brace (a typo in a one-line string). system_prompt and
-    # checkin_flow_instructions stay permissive (NOT listed here) — they carry large
-    # pasted prompts full of arbitrary braces.
+    # Field-tiered braces (design §5.1). Only the SHORT one-line fields reject a stray
+    # lone brace (a likely typo); they still accept {{tokens}}. The large free-form
+    # fields — system_prompt, checkin_flow_instructions and
+    # inbound_personalization_template — are permissive (NOT listed here): they hold
+    # multi-paragraph pasted prompts with arbitrary braces, and a stray-brace check on
+    # READ would make a stored config with any lone brace fail to deserialize (500 on
+    # GET). Substitution is token-scoped, so a lone brace is harmless.
     @field_validator(
         "greeting",
         "recording_disclosure",
@@ -96,14 +97,7 @@ class PromptsConfig(BaseModel):
     )
     @classmethod
     def _tokens_only_no_stray_braces(cls, v: str) -> str:
-        return _reject_stray_braces_after_tokens(v, allow_legacy_slots=False)
-
-    # The inbound template additionally tolerates its two legacy single-brace slots
-    # ({contact_name}/{last_check_in_line}) so old published snapshots still validate.
-    @field_validator("inbound_personalization_template")
-    @classmethod
-    def _tokens_plus_legacy_slots(cls, v: str) -> str:
-        return _reject_stray_braces_after_tokens(v, allow_legacy_slots=True)
+        return _reject_stray_braces_after_tokens(v)
 
 
 # Prompt fields spoken before the caller's identity is confirmed or to voicemail.

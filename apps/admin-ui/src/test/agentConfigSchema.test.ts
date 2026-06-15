@@ -77,10 +77,10 @@ describe("agentConfigSchema", () => {
     expect(agentConfigSchema.safeParse(cfg).success).toBe(false);
   });
 
-  it("rejects an unknown template slot", () => {
+  it("accepts an unknown single-brace slot in the template (permissive field)", () => {
     const cfg = validConfig();
     cfg.prompts.inbound_personalization_template = "Hello {first_name}, welcome.";
-    expect(agentConfigSchema.safeParse(cfg).success).toBe(false);
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
   });
 
   it("rejects voice.speed = 5 (above 4.0)", () => {
@@ -159,10 +159,10 @@ describe("agentConfigSchema", () => {
     expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
   });
 
-  it("rejects an unknown legacy single-brace slot in the template", () => {
+  it("accepts a stray lone brace in the template (no 500 on read)", () => {
     const cfg = validConfig();
-    cfg.prompts.inbound_personalization_template = "Hello {first_name}, welcome.";
-    expect(agentConfigSchema.safeParse(cfg).success).toBe(false);
+    cfg.prompts.inbound_personalization_template = "Speaking with {contact_name} and {";
+    expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
   });
 
   it("accepts an unknown {{token}} in the template (warn, never block)", () => {

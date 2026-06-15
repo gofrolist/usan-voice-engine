@@ -62,17 +62,13 @@ export const smsTemplateSchema = z
       }
     }
   });
-// Legacy single-brace slots kept only for back-compat in the personalization template.
-const LEGACY_SLOT_RE = /\{(contact_name|last_check_in_line)\}/g;
-
 // Field-tiered brace rule (mirrors apps/api schemas/agent_config.py, spec §5.1):
-// strip the allowed {{tokens}} (and, for the template, the legacy {slots}) and if any
-// lone '{' or '}' remains it is a typo -> reject. Unknown {{var}} NAMES are never
-// rejected here (warn-only, surfaced in the editor from the fetched catalog).
-function rejectStrayBraces(label: string, allowLegacySlots = false) {
+// strip the allowed {{tokens}} and if any lone '{' or '}' remains it is a typo on a
+// SHORT one-line field -> reject. Unknown {{var}} NAMES are never rejected here
+// (warn-only, surfaced in the editor from the fetched catalog).
+function rejectStrayBraces(label: string) {
   return (v: string, ctx: z.RefinementCtx) => {
-    let stripped = v.replace(DOUBLE_TOKEN_RE, "");
-    if (allowLegacySlots) stripped = stripped.replace(LEGACY_SLOT_RE, "");
+    const stripped = v.replace(DOUBLE_TOKEN_RE, "");
     if (stripped.includes("{") || stripped.includes("}")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -82,8 +78,10 @@ function rejectStrayBraces(label: string, allowLegacySlots = false) {
   };
 }
 
-// allowBraces=true: permissive big fields (system_prompt, checkin_flow_instructions) —
-// any braces allowed, unchanged from Phase 1, since substitution is token-scoped.
+// allowBraces=true: permissive large free-form fields (system_prompt,
+// checkin_flow_instructions, inbound_personalization_template) — any braces allowed,
+// since substitution is token-scoped (never str.format) and a stray brace must never
+// block validation of a stored config on read.
 function promptField(maxLength: number, label: string, allowBraces = false) {
   const base = z
     .string()
@@ -91,14 +89,6 @@ function promptField(maxLength: number, label: string, allowBraces = false) {
     .max(maxLength, `${label} must be at most ${maxLength} characters`);
   return allowBraces ? base : base.superRefine(rejectStrayBraces(label));
 }
-
-// inbound_personalization_template: allow {{tokens}} PLUS the two legacy single-brace
-// slots; reject any other stray brace.
-const personalizationTemplate = z
-  .string()
-  .min(1, "Personalization template is required")
-  .max(6000, "Personalization template must be at most 6000 characters")
-  .superRefine(rejectStrayBraces("Personalization template", true));
 
 export const promptsSchema = z.object({
   // Permissive big fields: any braces allowed (hold {{variable}} tokens + arbitrary
@@ -111,7 +101,10 @@ export const promptsSchema = z.object({
   checkin_flow_instructions: promptField(24000, "Check-in flow instructions", true),
   goodbye_message: promptField(1000, "Goodbye message"),
   inbound_opening: promptField(1000, "Inbound opening"),
-  inbound_personalization_template: personalizationTemplate,
+  // Large free-form field (like system_prompt): permissive braces so a stored prompt
+  // with a stray/legacy brace always loads. {{tokens}} + legacy {contact_name}/
+  // {last_check_in_line} slots still resolve at substitution time.
+  inbound_personalization_template: promptField(6000, "Personalization template", true),
 });
 
 // Optional string with min/max length when present, nullable.
