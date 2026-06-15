@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -8,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import dialer, livekit_dispatch, phi_audit, recording_urls
 from usan_api.auth import require_operator_token, require_service_token, require_worker_token
+from usan_api.builtin_vars import build_memory_params, resolve_builtin_vars
 from usan_api.builtin_vars import format_last_check_in as _format_last_check_in
-from usan_api.builtin_vars import resolve_builtin_vars
 from usan_api.client_ip import client_ip
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Elder
@@ -17,8 +18,13 @@ from usan_api.db.session import get_db
 from usan_api.phone import to_e164
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import conversation_summaries as conversation_summaries_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import family_tasks as family_tasks_repo
+from usan_api.repositories import medication_reminders as medication_reminders_repo
+from usan_api.repositories import personal_facts as personal_facts_repo
+from usan_api.repositories import survey_results as survey_results_repo
 from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.repositories import wellness as wellness_repo
 from usan_api.schemas.call import (
@@ -84,7 +90,27 @@ async def _create_and_dispatch(
         return _idempotent_replay(existing, body, response)
 
     last = await wellness_repo.get_latest_for_elder(db, elder.id)
-    resolved_vars, timezone = resolve_builtin_vars(elder, last, direction="outbound")
+    open_tasks = await family_tasks_repo.list_open_family_tasks(db, elder_id=elder.id)
+    pending_meds = await medication_reminders_repo.list_pending(db, elder_id=elder.id)
+    facts = await personal_facts_repo.list_active(db, elder_id=elder.id)
+    summary = await conversation_summaries_repo.get_latest(db, elder_id=elder.id)
+    memory = build_memory_params(
+        facts, summary, timezone=elder.timezone or "", now=datetime.now(UTC)
+    )
+    # US6 / FR-032: due when the elder has no survey for this (local) month yet.
+    period_month = survey_results_repo.month_anchor(elder.timezone or "", datetime.now(UTC))
+    survey_due = not await survey_results_repo.exists_for_month(
+        db, elder_id=elder.id, period_month=period_month
+    )
+    resolved_vars, timezone = resolve_builtin_vars(
+        elder,
+        last,
+        direction="outbound",
+        open_family_tasks=[t.message for t in open_tasks],
+        pending_med_reasks=[r.medication_name for r in pending_meds],
+        survey_due=survey_due,
+        **memory,
+    )
     try:
         await livekit_dispatch.dispatch_agent(
             call, settings=settings, resolved_vars=resolved_vars, timezone=timezone
@@ -185,12 +211,40 @@ async def register_inbound_call(
     # resolved_vars, NOT here.
     dynamic_vars: dict[str, Any] = {}
     last = None
+    open_task_messages: list[str] = []
+    pending_med_names: list[str] = []
+    # US6 / FR-032: survey_due stays False for an unknown caller; computed once elder known.
+    survey_due = False
+    # Memory built-ins default empty for an unknown caller; populated once the elder is known.
+    memory: dict[str, Any] = build_memory_params([], None, timezone="", now=datetime.now(UTC))
     if elder is not None:
         dynamic_vars["elder_name"] = elder.name
         last = await wellness_repo.get_latest_for_elder(db, elder.id)
         if last is not None:
             dynamic_vars["last_check_in"] = _format_last_check_in(last)
-    resolved_vars, timezone = resolve_builtin_vars(elder, last, direction="inbound")
+        open_tasks = await family_tasks_repo.list_open_family_tasks(db, elder_id=elder.id)
+        open_task_messages = [t.message for t in open_tasks]
+        pending_meds = await medication_reminders_repo.list_pending(db, elder_id=elder.id)
+        pending_med_names = [r.medication_name for r in pending_meds]
+        facts = await personal_facts_repo.list_active(db, elder_id=elder.id)
+        summary = await conversation_summaries_repo.get_latest(db, elder_id=elder.id)
+        memory = build_memory_params(
+            facts, summary, timezone=elder.timezone or "", now=datetime.now(UTC)
+        )
+        # US6 / FR-032: due when the elder has no survey for this (local) month yet.
+        period_month = survey_results_repo.month_anchor(elder.timezone or "", datetime.now(UTC))
+        survey_due = not await survey_results_repo.exists_for_month(
+            db, elder_id=elder.id, period_month=period_month
+        )
+    resolved_vars, timezone = resolve_builtin_vars(
+        elder,
+        last,
+        direction="inbound",
+        open_family_tasks=open_task_messages,
+        pending_med_reasks=pending_med_names,
+        survey_due=survey_due,
+        **memory,
+    )
     call = await calls_repo.create_inbound_call(
         db,
         elder_id=elder.id if elder is not None else None,

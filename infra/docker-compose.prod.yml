@@ -48,6 +48,11 @@ services:
       # it OFF here — a stale VM .env then interpolates the safe default. Enable
       # per the spec §11.3 sequence; refresh the VM .env BEFORE the v* tag deploy.
       WEBHOOK_DELIVERY_ENABLED: ${WEBHOOK_DELIVERY_ENABLED:-false}
+      # Clara Care Parity pollers (spec 002): NO re-pin needed here — unlike the
+      # scheduler/webhook flags above, their base-file defaults are already OFF
+      # (not dev-flipped), so the merged prod config inherits ${VAR:-false}. If a
+      # future commit ever flips a Clara flag ON in the base for dev convenience,
+      # add its OFF re-pin here BEFORE that merges, or prod ships it live.
     # Map host.docker.internal -> the docker bridge gateway so this bridge container
     # can reach the host-networked livekit (Linux Docker >= 20.10). Plan 4e C3.
     extra_hosts:

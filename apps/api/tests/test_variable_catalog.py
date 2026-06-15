@@ -21,6 +21,14 @@ def test_builtin_variables_are_the_contract_names_in_order():
         "last_mood",
         "last_pain",
         "today_meds",
+        "open_family_tasks",  # US2 / FR-009 — open family tasks to convey this call
+        "pending_med_reasks",  # US3 / FR-005 — meds reported not-taken, to re-ask
+        # US4 / FR-024 — durable memory carried across calls.
+        "personal_facts",
+        "last_call_summary",
+        "open_plans",
+        "important_dates",
+        "survey_due",  # US6 / FR-032 — monthly wellbeing survey due flag
     ]
 
 
@@ -51,13 +59,19 @@ def test_data_builtins_default_to_empty_string():
         "last_mood",
         "last_pain",
         "today_meds",
+        "open_family_tasks",
+        "pending_med_reasks",
+        "personal_facts",
+        "last_call_summary",
+        "open_plans",
+        "important_dates",
     ):
         assert BUILTIN_DEFAULTS[name] == ""
 
 
 def test_builtin_names_is_frozenset_of_all_builtins():
     assert frozenset(v.name for v in BUILTIN_VARIABLES) == BUILTIN_NAMES
-    assert len(BUILTIN_NAMES) == 11  # 10 originals + contact_name (US4 / FR-024)
+    assert len(BUILTIN_NAMES) == 18  # 13 + 4 US4 memory builtins + 1 US6 survey_due
 
 
 def test_builtin_defaults_cover_every_name():
@@ -66,7 +80,23 @@ def test_builtin_defaults_cover_every_name():
 
 # --- PHI flag tests ---
 
-PHI_NAMES = {"last_check_in", "last_check_in_line", "last_mood", "last_pain", "today_meds"}
+PHI_NAMES = {
+    "last_check_in",
+    "last_check_in_line",
+    "last_mood",
+    "last_pain",
+    "today_meds",
+    # Family-task text is elder-specific and may reference health — warn if used in a
+    # field spoken before identity confirmation / to voicemail (US2 / FR-009).
+    "open_family_tasks",
+    # Names a medication (health info) — same PHI warning surface (US3 / FR-005).
+    "pending_med_reasks",
+    # US4 / FR-024 — memory built-ins embed elder-specific (often health) context.
+    "personal_facts",
+    "last_call_summary",
+    "open_plans",
+    "important_dates",
+}
 
 
 def test_phi_true_variables_are_exactly_the_health_data_set():
@@ -90,6 +120,18 @@ def test_every_builtin_has_phi_field():
 
 def test_phi_builtin_names_is_exactly_the_health_data_frozenset():
     expected = frozenset(
-        {"last_check_in", "last_check_in_line", "last_mood", "last_pain", "today_meds"}
+        {
+            "last_check_in",
+            "last_check_in_line",
+            "last_mood",
+            "last_pain",
+            "today_meds",
+            "open_family_tasks",
+            "pending_med_reasks",
+            "personal_facts",
+            "last_call_summary",
+            "open_plans",
+            "important_dates",
+        }
     )
     assert expected == PHI_BUILTIN_NAMES

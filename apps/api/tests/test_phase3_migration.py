@@ -119,11 +119,38 @@ def test_follow_up_flags_cascades_call_not_elder(async_database_url):
     assert rules["elders"] == "NO ACTION"
 
 
+async def _delete_rules_by_column(async_database_url: str, table: str) -> dict[str, str]:
+    # Column-aware variant: a table may have >1 FK to the same referenced table (US8 added
+    # callback_requests.dispatched_call_id -> calls alongside call_id -> calls), so key the
+    # delete rule by the SOURCE column rather than the referenced table.
+    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            rows = await conn.execute(
+                text(
+                    "SELECT kcu.column_name AS src_col, rc.delete_rule "
+                    "FROM information_schema.referential_constraints rc "
+                    "JOIN information_schema.key_column_usage kcu "
+                    "  ON kcu.constraint_name = rc.constraint_name "
+                    "JOIN information_schema.table_constraints tc "
+                    "  ON tc.constraint_name = rc.constraint_name "
+                    "WHERE tc.table_name = :t AND tc.table_schema = 'public'"
+                ),
+                {"t": table},
+            )
+            return {r[0]: r[1] for r in rows}
+    finally:
+        await engine.dispose()
+
+
 def test_callback_requests_cascades(async_database_url):
-    # Same FK rules as follow_up_flags: CASCADE to calls, NO ACTION to elders.
-    rules = asyncio.run(_delete_rules(async_database_url, "callback_requests"))
-    assert rules["calls"] == "CASCADE"
-    assert rules["elders"] == "NO ACTION"
+    # call_id CASCADEs to calls and elder_id is NO ACTION (mirrors follow_up_flags). The
+    # US8 dispatched_call_id is a SECOND FK to calls but SET NULL — a retention purge of the
+    # dialed call keeps the callback record (so the column query must be source-column-aware).
+    rules = asyncio.run(_delete_rules_by_column(async_database_url, "callback_requests"))
+    assert rules["call_id"] == "CASCADE"
+    assert rules["elder_id"] == "NO ACTION"
+    assert rules["dispatched_call_id"] == "SET NULL"
 
 
 def test_sms_messages_cascades(async_database_url):

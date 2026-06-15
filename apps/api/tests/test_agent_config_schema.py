@@ -22,11 +22,37 @@ def test_default_config_matches_current_agent_constants():
         "log_medication",
         "get_today_meds",
         "flag_for_followup",
+        "raise_crisis",
         "schedule_callback",
+        "close_family_task",
+        "record_personal_fact",
+        "record_survey",
+        "get_activity",
         "send_sms",
+        "send_info_sms",
+        "register_opt_out",
+        "set_spanish_callback",
         "end_call",
     ]
     assert cfg.prompts.greeting.startswith("Hello! This is your daily check-in")
+
+
+def test_us7_safety_guidance_in_default_prompts():
+    # T069 / FR-036: anti-scam guidance plus the opt-out and informational-SMS tools are
+    # wired into BOTH the outbound check-in and the inbound personalization prompts.
+    prompts = DEFAULT_AGENT_CONFIG.prompts
+    for block in (prompts.checkin_flow_instructions, prompts.inbound_personalization_template):
+        assert "SCAM AWARENESS" in block
+        assert "register_opt_out" in block
+        assert "send_info_sms" in block
+
+
+def test_us8_spanish_guidance_in_default_prompts():
+    # FR-040: the Spanish-callback guidance + tool are wired into BOTH default prompt blocks.
+    prompts = DEFAULT_AGENT_CONFIG.prompts
+    for block in (prompts.checkin_flow_instructions, prompts.inbound_personalization_template):
+        assert "SPANISH" in block
+        assert "set_spanish_callback" in block
 
 
 def test_config_round_trips_through_dict():

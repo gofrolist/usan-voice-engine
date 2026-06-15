@@ -9,13 +9,21 @@ def test_tool_names_equals_catalog_names():
     assert catalog_names == CATALOG_TOOL_NAMES
 
 
-def test_catalog_has_exactly_seven_in_order():
+def test_catalog_has_exactly_fifteen_in_order():
     assert [t.name for t in TOOL_CATALOG] == [
         "log_wellness",
         "log_medication",
         "get_today_meds",
         "flag_for_followup",
+        "raise_crisis",
         "schedule_callback",
+        "close_family_task",
+        "record_personal_fact",
+        "record_survey",
+        "get_activity",
         "send_sms",
+        "send_info_sms",
+        "register_opt_out",
+        "set_spanish_callback",
         "end_call",
     ]

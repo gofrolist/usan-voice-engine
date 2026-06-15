@@ -20,6 +20,13 @@ def test_builtin_mirror_has_the_expected_names():
                 "last_mood",
                 "last_pain",
                 "today_meds",
+                "open_family_tasks",  # US2 / FR-009
+                "pending_med_reasks",  # US3 / FR-005
+                "personal_facts",  # US4 / FR-024
+                "last_call_summary",
+                "open_plans",
+                "important_dates",
+                "survey_due",  # US6 / FR-032
             }
         )
         == BUILTIN_NAMES

@@ -9,15 +9,19 @@ from livekit import api
 from loguru import logger
 
 from usan_api import quiet_hours
-from usan_api.builtin_vars import resolve_builtin_vars
+from usan_api.builtin_vars import build_memory_params, resolve_builtin_vars
 from usan_api.db.base import CallStatus
 from usan_api.db.models import Call, Elder
 from usan_api.db.session import get_session_factory
 from usan_api.observability.custom_metrics import DIAL_REQUEUED_TOTAL
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import conversation_summaries as conversation_summaries_repo
 from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import family_tasks as family_tasks_repo
+from usan_api.repositories import medication_reminders as medication_reminders_repo
+from usan_api.repositories import personal_facts as personal_facts_repo
 from usan_api.repositories import wellness as wellness_repo
 from usan_api.settings import Settings
 from usan_api.sip_status import classify_dial_exception
@@ -509,7 +513,21 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
                 await _delete_room(room, settings)
                 return
             last_log = await wellness_repo.get_latest_for_elder(db, elder.id)
-            resolved_vars, timezone = resolve_builtin_vars(elder, last_log, direction="outbound")
+            open_tasks = await family_tasks_repo.list_open_family_tasks(db, elder_id=elder.id)
+            pending_meds = await medication_reminders_repo.list_pending(db, elder_id=elder.id)
+            facts = await personal_facts_repo.list_active(db, elder_id=elder.id)
+            summary = await conversation_summaries_repo.get_latest(db, elder_id=elder.id)
+            memory = build_memory_params(
+                facts, summary, timezone=elder.timezone or "", now=datetime.now(UTC)
+            )
+            resolved_vars, timezone = resolve_builtin_vars(
+                elder,
+                last_log,
+                direction="outbound",
+                open_family_tasks=[t.message for t in open_tasks],
+                pending_med_reasks=[r.medication_name for r in pending_meds],
+                **memory,
+            )
             await db.commit()  # release the advisory lock before the slow dial
 
         try:

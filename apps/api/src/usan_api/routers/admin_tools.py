@@ -75,6 +75,7 @@ def _callback_summary(
         requested_at=row.requested_at,
         notes=row.notes,
         status=row.status,
+        dispatched_call_id=row.dispatched_call_id,
         status_updated_at=row.status_updated_at,
         status_updated_by=row.status_updated_by,
         created_at=row.created_at,
@@ -139,8 +140,11 @@ async def list_follow_up_flags(
 @router.get("/callback-requests", response_model=list[CallbackRequestSummary])
 async def list_callback_requests(
     # Typed status (spec §4.4 deliberate change): junk now 422s instead of a
-    # silent 200-empty, symmetric with list_follow_up_flags above.
-    status: Literal["open", "acknowledged", "resolved"] | None = Query(default=None),
+    # silent 200-empty, symmetric with list_follow_up_flags above. The dial-workflow
+    # states (US8) are filterable too so operators can see scheduled/dialed callbacks.
+    status: Literal["open", "acknowledged", "resolved", "scheduled", "dialed"] | None = Query(
+        default=None
+    ),
     elder_id: uuid.UUID | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),

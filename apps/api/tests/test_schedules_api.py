@@ -73,6 +73,7 @@ def test_create_schedule_201_computes_next_run_at(client):
     body = r.json()
     assert body["elder_id"] == elder_id
     assert body["enabled"] is True
+    assert body["slot"] == "morning"  # US5 default
     assert body["days_of_week"] == ALL_DAYS  # echoed as the string list
     next_run = _parse_aware_utc(body["next_run_at"])
     # Earliest occurrence >= now: never in the past (allow clock-read slack).
@@ -87,11 +88,54 @@ def test_create_schedule_404_unknown_elder(client):
 
 
 def test_create_schedule_409_second_schedule_same_elder(client):
+    # No slot given -> both default to 'morning' -> the per-(elder, slot) 409.
     elder_id = _seed_elder(client)
     first = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP)
     assert first.status_code == 201
     r = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP)
     assert r.status_code == 409
+
+
+def test_create_two_slots_then_per_slot_409_and_filter(client):
+    # US5: an elder may have a morning AND an evening schedule; the 409 is per slot.
+    elder_id = _seed_elder(client)
+    morning = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP)
+    assert morning.status_code == 201
+    assert morning.json()["slot"] == "morning"
+
+    evening_body = _schedule_body(
+        elder_id, slot="evening", window_start_local="18:00", window_end_local="20:00"
+    )
+    evening = client.post("/v1/schedules", json=evening_body, headers=_OP)
+    assert evening.status_code == 201
+    assert evening.json()["slot"] == "evening"
+
+    # A duplicate evening collides on (elder_id, slot) -> 409 naming the slot.
+    dup = client.post("/v1/schedules", json=evening_body, headers=_OP)
+    assert dup.status_code == 409
+    assert "evening" in dup.json()["detail"]
+
+    # ?slot= narrows the list; without it both slots come back.
+    only_evening = client.get(
+        "/v1/schedules", params={"elder_id": elder_id, "slot": "evening"}, headers=_OP
+    )
+    assert only_evening.status_code == 200
+    assert [r["slot"] for r in only_evening.json()] == ["evening"]
+    both = client.get("/v1/schedules", params={"elder_id": elder_id}, headers=_OP)
+    assert {r["slot"] for r in both.json()} == {"morning", "evening"}
+
+
+def test_patch_slot_and_invalid_slot_filter_are_422(client):
+    elder_id = _seed_elder(client)
+    created = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP).json()
+    # slot is immutable identity: a PATCH carrying it 422s (extra="forbid"), never a
+    # silent no-op that would let the caller believe a move succeeded.
+    r = client.patch(f"/v1/schedules/{created['id']}", json={"slot": "evening"}, headers=_OP)
+    assert r.status_code == 422
+    # The ?slot= filter is the closed morning|evening enum: an unknown value 422s at
+    # the boundary instead of returning a misleading empty 200.
+    bad = client.get("/v1/schedules", params={"slot": "afternoon"}, headers=_OP)
+    assert bad.status_code == 422
 
 
 def test_create_schedule_422_invalid_elder_timezone(client):

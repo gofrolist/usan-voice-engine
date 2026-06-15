@@ -40,7 +40,7 @@ class ToolSpec(BaseModel):
     requires_config: bool = False
 
 
-# The 7 catalog tools, in catalog/display order (design §4.1). This is the superset;
+# The 15 catalog tools, in catalog/display order (design §4.1). This is the superset;
 # the agent-side mirror (services/agent/.../check_in.py _TOOL_REGISTRY) catches up as
 # each tool's @function_tool callable lands (B/C/D) and may legitimately trail it.
 TOOL_CATALOG: tuple[ToolSpec, ...] = (
@@ -69,10 +69,55 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
         category="safety",
     ),
     ToolSpec(
+        name="raise_crisis",
+        label="Raise crisis",
+        description=(
+            "Escalate a life-safety crisis (suicidal, medical, abuse, confusion, overdose): "
+            "record an urgent flag, return the emergency resource to read out, and alert family."
+        ),
+        category="safety",
+    ),
+    ToolSpec(
         name="schedule_callback",
         label="Schedule callback",
         description="Record a call-back request in the elder's words for a human to action.",
         category="safety",
+    ),
+    ToolSpec(
+        name="close_family_task",
+        label="Close family task",
+        description=(
+            "After conveying a family member's message to the elder, mark it delivered so "
+            "it is not repeated on the next call."
+        ),
+        category="logging",
+    ),
+    ToolSpec(
+        name="record_personal_fact",
+        label="Record personal fact",
+        description=(
+            "Remember a durable fact the elder shared (a person, routine, preference, "
+            "important date, or health context) to use naturally on future calls."
+        ),
+        category="logging",
+    ),
+    ToolSpec(
+        name="record_survey",
+        label="Record wellbeing survey",
+        description=(
+            "Record the elder's monthly wellbeing survey (loneliness, mood, satisfaction). "
+            "Idempotent: at most one survey per elder per calendar month."
+        ),
+        category="logging",
+    ),
+    ToolSpec(
+        name="get_activity",
+        label="Get mood-boosting activity",
+        description=(
+            "Fetch a mood-boosting activity (breathing, memory, or light game) not used "
+            "recently, to offer when the elder's mood is low."
+        ),
+        category="logging",
     ),
     ToolSpec(
         name="send_sms",
@@ -80,6 +125,33 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
         description="Send an operator-authored, non-PHI templated text after the call.",
         category="messaging",
         requires_config=True,
+    ),
+    ToolSpec(
+        name="send_info_sms",
+        label="Send helpful numbers (SMS)",
+        description=(
+            "Text the elder a fixed, PHI-free list of helpful emergency and helpline "
+            "phone numbers on request. Needs no template."
+        ),
+        category="messaging",
+    ),
+    ToolSpec(
+        name="register_opt_out",
+        label="Register opt-out",
+        description=(
+            "Honor a spoken request to stop calls: add the elder's number to the "
+            "do-not-call list, acknowledge it, and alert an operator."
+        ),
+        category="safety",
+    ),
+    ToolSpec(
+        name="set_spanish_callback",
+        label="Set Spanish callback",
+        description=(
+            "When the elder speaks Spanish, record the language preference and schedule a "
+            "Spanish-language callback (Clara does not switch languages mid-call)."
+        ),
+        category="safety",
     ),
     ToolSpec(
         name="end_call",

@@ -65,6 +65,9 @@ class CallbackRequestSummary(BaseModel):
     requested_at: datetime | None
     notes: str | None
     status: str
+    # Set by the callback dialer (US8) once the request is materialized into an outbound
+    # call; None for requests still in the open/acknowledged/resolved ops lane.
+    dispatched_call_id: uuid.UUID | None = None
     status_updated_at: datetime | None = None  # NULL = never transitioned past 'open'
     status_updated_by: str | None = None  # admin actor email
     created_at: datetime

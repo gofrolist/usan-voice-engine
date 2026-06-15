@@ -248,6 +248,20 @@ services:
       WEBHOOK_DELIVERY_POLL_INTERVAL_S: ${WEBHOOK_DELIVERY_POLL_INTERVAL_S:-10}
       WEBHOOK_DELIVERY_TIMEOUT_S: ${WEBHOOK_DELIVERY_TIMEOUT_S:-10}
       WEBHOOK_DELIVERY_CIRCUIT_BREAKER_THRESHOLD: ${WEBHOOK_DELIVERY_CIRCUIT_BREAKER_THRESHOLD:-10}
+      # Clara Care Parity pollers (spec 002). SHIP-INERT: all default OFF so a stale .env
+      # interpolates to no autonomous behavior; opt in per-stack via .env. The notification
+      # outbox additionally cannot transmit unless TELNYX_MESSAGING_ENABLED=true above —
+      # it backlogs as 'pending' until then (compliance Gate 1).
+      NOTIFICATION_OUTBOX_ENABLED: ${NOTIFICATION_OUTBOX_ENABLED:-false}
+      NOTIFICATION_OUTBOX_POLL_INTERVAL_S: ${NOTIFICATION_OUTBOX_POLL_INTERVAL_S:-60}
+      CALLBACK_DIALER_POLLER_ENABLED: ${CALLBACK_DIALER_POLLER_ENABLED:-false}
+      CALLBACK_DIALER_POLL_INTERVAL_S: ${CALLBACK_DIALER_POLL_INTERVAL_S:-60}
+      FAMILY_REPORT_POLLER_ENABLED: ${FAMILY_REPORT_POLLER_ENABLED:-false}
+      FAMILY_REPORT_POLL_INTERVAL_S: ${FAMILY_REPORT_POLL_INTERVAL_S:-3600}
+      # Ed25519 public key verifying inbound Telnyx SMS webhooks (fail-closed when blank);
+      # SPANISH_PROFILE_ID picks the agent profile for Spanish callbacks (blank => operator-flagged).
+      TELNYX_INBOUND_PUBLIC_KEY: ${TELNYX_INBOUND_PUBLIC_KEY:-}
+      SPANISH_PROFILE_ID: ${SPANISH_PROFILE_ID:-}
       # Voice-sample preview proxy (Admin Studio): the voice picker's "Play sample"
       # calls Cartesia TTS from the API, so the API needs its OWN copy of the key
       # (the agent service also gets it for live TTS). CARTESIA_API_KEY is required

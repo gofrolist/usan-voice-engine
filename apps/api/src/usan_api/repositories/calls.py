@@ -8,10 +8,11 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api import quiet_hours, webhook_events
+from usan_api import notifications, quiet_hours, webhook_events
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, CallBatch, CallBatchTarget, Elder
 from usan_api.repositories import agent_profiles, webhook_outbox
+from usan_api.repositories import follow_up_flags as follow_up_flags_repo
 from usan_api.retry_policy import MAX_CHAIN_ATTEMPTS, next_retry_delay
 from usan_api.schemas.call import RESERVED_KEY_PREFIXES  # single source (spec §2.2 invariant 3)
 
@@ -287,6 +288,17 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
         delay_multiplier=policy.delay_multiplier,
     )
     if delay is None:
+        # Retry policy exhausted → this call is terminally MISSED (FR-010). Alert the
+        # family contacts opted in to missed-call alerts; if none is registered, surface
+        # the miss to the operator queue (FR-013 / T088). Idempotent on the call id, so a
+        # finalizer re-entry never double-notifies. Joins the caller's transaction.
+        dispatch = await notifications.dispatch_family_alert(
+            db, elder_id=elder.id, reason="missed_call", dedupe_base=f"missed:{parent.id}"
+        )
+        if not dispatch.had_contacts:
+            await follow_up_flags_repo.ensure_operator_missed_flag(
+                db, call_id=parent.id, elder_id=elder.id
+            )
         return None
     try:
         scheduled_at = quiet_hours.next_allowed(

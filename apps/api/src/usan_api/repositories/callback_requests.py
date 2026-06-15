@@ -5,8 +5,12 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import webhook_events
-from usan_api.db.models import CallbackRequest, Elder
+from usan_api.db.base import CallStatus
+from usan_api.db.models import Call, CallbackRequest, Elder
 from usan_api.repositories import webhook_outbox
+
+# The callback dialer (US8) records who advanced the row; admin actors use their email.
+_DIALER_ACTOR = "system:callback_dialer"
 
 # Bound the list read: callback requests accumulate per call/elder over time.
 # Default cap mirrors the sibling follow_up_flags repo (MAX_FLAGS_LIMIT=500);
@@ -30,6 +34,7 @@ async def create_callback_request(
     requested_time_text: str,
     requested_at: datetime | None,
     notes: str | None,
+    profile_override: uuid.UUID | None = None,
 ) -> CallbackRequest:
     row = CallbackRequest(
         call_id=call_id,
@@ -37,6 +42,7 @@ async def create_callback_request(
         requested_time_text=requested_time_text,
         requested_at=requested_at,
         notes=notes,
+        profile_override=profile_override,
     )
     db.add(row)
     await db.flush()
@@ -132,3 +138,85 @@ async def count_by_status(db: AsyncSession) -> dict[str, int]:
     stmt = select(CallbackRequest.status, func.count()).group_by(CallbackRequest.status)
     result = await db.execute(stmt)
     return {status: count for status, count in result.all()}
+
+
+# ── Callback auto-dial (US8 / T074) ──────────────────────────────────────────
+# A separate, system-driven lane from the open→acknowledged→resolved ops queue: the
+# dialer materializes a Call for a due request and advances open→scheduled→dialed.
+
+
+async def list_due_open_ids(db: AsyncSession, *, now: datetime, limit: int) -> list[int]:
+    """IDs of ``open`` callbacks whose parsed time has arrived (oldest first).
+
+    Only requests with a resolved ``requested_at`` are auto-dialed; one with a NULL time
+    the agent could not parse stays in the ops queue for a human (FR-030). This is a plain
+    read (no lock); the dialer re-locks each row by id when it materializes, so a stale id
+    that another worker already took is skipped there.
+    """
+    stmt = (
+        select(CallbackRequest.id)
+        .where(
+            CallbackRequest.status == "open",
+            CallbackRequest.requested_at.is_not(None),
+            CallbackRequest.requested_at <= now,
+        )
+        .order_by(CallbackRequest.requested_at)
+        .limit(max(1, limit))
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def claim_open_for_dial(db: AsyncSession, request_id: int) -> CallbackRequest | None:
+    """Row-lock one still-``open`` callback for materialization (FOR UPDATE).
+
+    Returns None if another worker already advanced it past ``open`` — the caller then
+    skips it (SKIP LOCKED semantics across the per-request transaction).
+    """
+    stmt = (
+        select(CallbackRequest)
+        .where(CallbackRequest.id == request_id, CallbackRequest.status == "open")
+        .with_for_update()
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def mark_scheduled(
+    db: AsyncSession, request_id: int, *, dispatched_call_id: uuid.UUID
+) -> CallbackRequest | None:
+    """Advance ``open -> scheduled`` and link the materialized Call (guarded UPDATE)."""
+    stmt = (
+        update(CallbackRequest)
+        .where(CallbackRequest.id == request_id, CallbackRequest.status == "open")
+        .values(
+            status="scheduled",
+            dispatched_call_id=dispatched_call_id,
+            status_updated_at=func.now(),
+            status_updated_by=_DIALER_ACTOR,
+        )
+        .returning(CallbackRequest)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def reconcile_dialed(db: AsyncSession) -> int:
+    """Advance ``scheduled -> dialed`` for callbacks whose Call has left the queue.
+
+    A dispatched Call leaves QUEUED when the scheduler picks it up (DIALING/…) or it was
+    terminal at birth (DNC_BLOCKED). Either way the callback is done from the dialer's
+    side. Bulk guarded UPDATE; returns the number advanced.
+    """
+    left_queue = select(Call.id).where(Call.status != CallStatus.QUEUED)
+    stmt = (
+        update(CallbackRequest)
+        .where(
+            CallbackRequest.status == "scheduled",
+            CallbackRequest.dispatched_call_id.in_(left_queue),
+        )
+        .values(
+            status="dialed",
+            status_updated_at=func.now(),
+            status_updated_by=_DIALER_ACTOR,
+        )
+        .returning(CallbackRequest.id)
+    )
+    return len((await db.execute(stmt)).scalars().all())

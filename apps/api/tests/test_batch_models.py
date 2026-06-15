@@ -12,6 +12,7 @@ def test_call_schedule_columns_and_fk():
     assert {
         "id",
         "elder_id",
+        "slot",
         "enabled",
         "window_start_local",
         "window_end_local",
@@ -26,9 +27,13 @@ def test_call_schedule_columns_and_fk():
         "updated_at",
     } <= set(cols.keys())
     # Read FK rules without mutating the shared Table metadata (no .pop()).
-    # CASCADE: a schedule is meaningless without its elder; one schedule per elder.
+    # CASCADE: a schedule is meaningless without its elder. US5 relaxed the inline
+    # one-schedule-per-elder UNIQUE to a composite UNIQUE(elder_id, slot) owned by
+    # migration 0022 (not expressed on the model), so elder_id no longer carries a
+    # column-level unique; slot defaults to 'morning'.
     assert next(iter(cols["elder_id"].foreign_keys)).ondelete == "CASCADE"
-    assert cols["elder_id"].unique is True
+    assert not cols["elder_id"].unique
+    assert "morning" in str(cols["slot"].server_default.arg)
     assert next(iter(cols["profile_override"].foreign_keys)).ondelete == "SET NULL"
     assert "127" in str(cols["days_of_week"].server_default.arg)
     assert not cols["next_run_at"].nullable

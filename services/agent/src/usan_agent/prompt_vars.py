@@ -35,6 +35,16 @@ BUILTIN_DEFAULTS: dict[str, str] = {
     "last_mood": "",
     "last_pain": "",
     "today_meds": "",
+    "open_family_tasks": "",  # US2 / FR-009 — open family tasks to convey this call
+    "pending_med_reasks": "",  # US3 / FR-005 — meds reported not-taken, to re-ask
+    # US4 / FR-024 — durable memory carried across calls (resolved API-side).
+    "personal_facts": "",
+    "last_call_summary": "",
+    "open_plans": "",
+    "important_dates": "",
+    # US6 / FR-032 — "true" when the elder is due for this month's wellbeing survey
+    # (resolved API-side from wellbeing_survey_results); not PHI.
+    "survey_due": "",
 }
 BUILTIN_NAMES: frozenset[str] = frozenset(BUILTIN_DEFAULTS)
 

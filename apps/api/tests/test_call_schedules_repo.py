@@ -91,12 +91,17 @@ async def test_create_get_and_unique_elder(session_factory):
         fetched = await schedules_repo.get_schedule(db, schedule_id)
         assert fetched is not None
         assert fetched.id == schedule_id
+        assert fetched.slot == "morning"  # US5 default
         by_elder = await schedules_repo.get_by_elder(db, elder_id)
-        assert by_elder is not None
-        assert by_elder.id == schedule_id
+        assert [s.id for s in by_elder] == [schedule_id]  # one slot so far
+        morning = await schedules_repo.get_by_elder_slot(db, elder_id=elder_id, slot="morning")
+        assert morning is not None
+        assert morning.id == schedule_id
+        assert await schedules_repo.get_by_elder_slot(db, elder_id=elder_id, slot="evening") is None
         assert await schedules_repo.get_schedule(db, uuid.uuid4()) is None
 
-    # UNIQUE elder_id: one schedule per elder (the router maps this to 409).
+    # UNIQUE (elder_id, slot): a second schedule for the same elder+slot (default
+    # 'morning') is rejected — the router maps this to 409.
     async with session_factory() as db:
         with pytest.raises(IntegrityError):
             await schedules_repo.create_schedule(
@@ -110,6 +115,27 @@ async def test_create_get_and_unique_elder(session_factory):
                 profile_override=None,
                 next_run_at=NOW + timedelta(hours=2),
             )
+
+    # US5: a different slot for the SAME elder IS allowed (independent evening call).
+    async with session_factory() as db:
+        evening = await schedules_repo.create_schedule(
+            db,
+            elder_id=elder_id,
+            slot="evening",
+            window_start_local=time(18, 0),
+            window_end_local=time(20, 0),
+            days_of_week=127,
+            enabled=True,
+            dynamic_vars={},
+            profile_override=None,
+            next_run_at=NOW + timedelta(hours=6),
+        )
+        await db.commit()
+        evening_id = evening.id
+    async with session_factory() as db:
+        both = await schedules_repo.get_by_elder(db, elder_id)
+        assert {s.slot for s in both} == {"morning", "evening"}
+        assert {s.id for s in both} == {schedule_id, evening_id}
 
     async with session_factory() as db:
         fetched = await schedules_repo.get_schedule(db, schedule_id)

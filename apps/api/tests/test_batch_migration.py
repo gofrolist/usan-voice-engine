@@ -120,11 +120,14 @@ def test_call_schedules_table_shape(async_database_url: str) -> None:
     assert cols["last_materialized_date"][0] == "date"
     assert cols["last_result"][0] == "text"
     assert cols["last_result_at"][0] == "timestamp with time zone"
+    assert cols["slot"][0] == "text"  # US5
 
     idx = asyncio.run(_indexes(async_database_url, "call_schedules"))
     assert "idx_call_schedules_due" in idx
-    # UNIQUE (elder_id) — one schedule per elder, *the* daily wellness call.
-    assert "call_schedules_elder_id_key" in idx
+    # US5 (migration 0022) relaxed UNIQUE(elder_id) to a composite
+    # UNIQUE(elder_id, slot): one schedule per elder per morning|evening slot.
+    assert "call_schedules_elder_id_key" not in idx
+    assert "uq_call_schedules_elder_slot" in idx
     due_def = asyncio.run(_indexdef(async_database_url, "idx_call_schedules_due"))
     assert "WHERE enabled" in due_def
 
@@ -132,6 +135,7 @@ def test_call_schedules_table_shape(async_database_url: str) -> None:
     assert "ck_call_schedules_window" in checks
     assert "ck_call_schedules_days" in checks
     assert "ck_call_schedules_result" in checks
+    assert "ck_call_schedules_slot" in checks  # US5
 
 
 def test_call_batches_table_shape(async_database_url: str) -> None:

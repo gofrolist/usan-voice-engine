@@ -70,10 +70,12 @@ def test_list_callback_requests(client, admin_session, async_database_url):
         "requested_at",
         "notes",
         "status",
+        "dispatched_call_id",
         "status_updated_at",
         "status_updated_by",
         "created_at",
     }
+    assert one["dispatched_call_id"] is None  # not yet auto-dialed (US8)
     assert one["status"] == "open"
     # C2 workflow stamps: NULL until the first transition (no backfill needed).
     assert one["status_updated_at"] is None

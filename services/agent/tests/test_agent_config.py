@@ -15,12 +15,32 @@ def test_default_is_complete_and_branded():
         "log_medication",
         "get_today_meds",
         "flag_for_followup",
+        "raise_crisis",
         "schedule_callback",
+        "close_family_task",
+        "record_personal_fact",
+        "record_survey",
+        "get_activity",
         "send_sms",
+        "send_info_sms",
+        "register_opt_out",
+        "set_spanish_callback",
         "end_call",
     ]
     assert cfg.voicemail_detection.window_s == 3.0
     assert cfg.voicemail_detection.trigger_phrases == []
+    # T069 / FR-036 + US8 / FR-040: the agent-side prompt mirror carries the anti-scam
+    # guidance and the opt-out / info-sms / Spanish-callback tool wiring in both prompt
+    # blocks (parity with apps/api).
+    for block in (
+        cfg.prompts.checkin_flow_instructions,
+        cfg.prompts.inbound_personalization_template,
+    ):
+        assert "SCAM AWARENESS" in block
+        assert "register_opt_out" in block
+        assert "send_info_sms" in block
+        assert "SPANISH" in block
+        assert "set_spanish_callback" in block
 
 
 def test_parse_minimal_prompts_only_document():

@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.models import SmsMessage
@@ -38,6 +39,61 @@ async def create_sms_message(
     await db.flush()
     await db.refresh(row)
     return row
+
+
+async def create_notification(
+    db: AsyncSession,
+    *,
+    elder_id: uuid.UUID,
+    to_number: str,
+    kind: str,
+    body: str,
+    dedupe_key: str | None = None,
+) -> SmsMessage | None:
+    """Create a non-call notification row (call_id IS NULL) flushed by the outbox.
+
+    Idempotent on ``dedupe_key``: a collision returns the EXISTING row instead of
+    inserting a duplicate (ON CONFLICT DO NOTHING on the unique dedupe_key index). With
+    no dedupe_key, a plain insert. Flush-only; the caller commits. The unique index is
+    non-partial — NULLs are distinct in Postgres — so in-call rows (dedupe_key NULL)
+    never collide here.
+    """
+    if dedupe_key is None:
+        row = SmsMessage(call_id=None, elder_id=elder_id, to_number=to_number, kind=kind, body=body)
+        db.add(row)
+        await db.flush()
+        await db.refresh(row)
+        return row
+    stmt = (
+        pg_insert(SmsMessage)
+        .values(elder_id=elder_id, to_number=to_number, kind=kind, body=body, dedupe_key=dedupe_key)
+        .on_conflict_do_nothing(index_elements=[SmsMessage.dedupe_key])
+        .returning(SmsMessage.id)
+    )
+    result = await db.execute(stmt)
+    new_id = result.scalar_one_or_none()
+    if new_id is None:
+        # Dedupe collision: the alert is already enqueued — return the existing row.
+        existing = await db.execute(select(SmsMessage).where(SmsMessage.dedupe_key == dedupe_key))
+        return existing.scalar_one_or_none()
+    await db.flush()
+    return await db.get(SmsMessage, new_id)
+
+
+async def get_pending_notifications(db: AsyncSession, *, limit: int = 50) -> list[SmsMessage]:
+    """Pending notification rows (no owning call) for the notification outbox poller.
+
+    Served by idx_sms_notifications (partial: WHERE call_id IS NULL). In-call rows are
+    flushed by sms_outbox and are deliberately NOT returned here.
+    """
+    limit = max(1, min(limit, _MAX_LIST_LIMIT))
+    result = await db.execute(
+        select(SmsMessage)
+        .where(SmsMessage.call_id.is_(None), SmsMessage.status == "pending")
+        .order_by(SmsMessage.created_at)
+        .limit(limit)
+    )
+    return list(result.scalars().all())
 
 
 async def count_for_call(db: AsyncSession, call_id: uuid.UUID) -> int:

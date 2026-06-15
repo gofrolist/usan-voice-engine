@@ -31,6 +31,7 @@ from usan_api.schedule_windows import days_to_mask, next_run_at
 from usan_api.schemas.schedule import (
     CreateScheduleRequest,
     ScheduleResponse,
+    Slot,
     UpdateScheduleRequest,
 )
 
@@ -98,8 +99,11 @@ async def create_schedule(
     elder = await elders_repo.get_elder(db, body.elder_id)
     if elder is None:
         raise HTTPException(status_code=404, detail="elder not found")
-    if await schedules_repo.get_by_elder(db, body.elder_id) is not None:
-        raise HTTPException(status_code=409, detail="elder already has a schedule")
+    if (
+        await schedules_repo.get_by_elder_slot(db, elder_id=body.elder_id, slot=body.slot)
+        is not None
+    ):
+        raise HTTPException(status_code=409, detail=f"elder already has a {body.slot} schedule")
     if body.profile_override is not None:
         await _require_live_override(db, body.profile_override)
     computed = _compute_next_run_at(body, elder.timezone)
@@ -107,6 +111,7 @@ async def create_schedule(
         schedule = await schedules_repo.create_schedule(
             db,
             elder_id=body.elder_id,
+            slot=body.slot,
             window_start_local=body.window_start_local,
             window_end_local=body.window_end_local,
             days_of_week=body.days_mask,
@@ -117,9 +122,11 @@ async def create_schedule(
         )
         await db.commit()
     except IntegrityError as exc:
-        # Race fallback for the UNIQUE elder_id pre-check above.
+        # Race fallback for the UNIQUE(elder_id, slot) pre-check above.
         await db.rollback()
-        raise HTTPException(status_code=409, detail="elder already has a schedule") from exc
+        raise HTTPException(
+            status_code=409, detail=f"elder already has a {body.slot} schedule"
+        ) from exc
     _audit(request, schedule.id, "schedule_created", elder_id=str(body.elder_id))
     return ScheduleResponse.from_model(schedule)
 
@@ -127,15 +134,17 @@ async def create_schedule(
 @router.get("", response_model=list[ScheduleResponse])
 async def list_schedules(
     elder_id: uuid.UUID | None = None,
+    slot: Slot | None = None,
     last_result: str | None = None,
     limit: int = 100,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ) -> list[ScheduleResponse]:
     # ?last_result=skipped_window is the "who missed today's call" view (spec §4.1);
-    # the repository clamps limit/offset to the bounded-read house rules.
+    # ?slot=evening narrows to one slot (US5). The repository clamps limit/offset to
+    # the bounded-read house rules.
     rows = await schedules_repo.list_schedules(
-        db, elder_id=elder_id, last_result=last_result, limit=limit, offset=offset
+        db, elder_id=elder_id, slot=slot, last_result=last_result, limit=limit, offset=offset
     )
     return [ScheduleResponse.from_model(s) for s in rows]
 

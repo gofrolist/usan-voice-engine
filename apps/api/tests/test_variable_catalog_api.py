@@ -22,6 +22,13 @@ BUILTIN_ORDER = [
     "last_mood",
     "last_pain",
     "today_meds",
+    "open_family_tasks",  # US2 / FR-009
+    "pending_med_reasks",  # US3 / FR-005
+    "personal_facts",  # US4 / FR-024
+    "last_call_summary",
+    "open_plans",
+    "important_dates",
+    "survey_due",  # US6 / FR-032
 ]
 _N_BUILTINS = len(BUILTIN_ORDER)
 
@@ -55,7 +62,19 @@ def test_variable_catalog_each_entry_has_contract_shape(client, admin_session):
 def test_variable_catalog_phi_field_values(client, admin_session):
     variables = client.get("/v1/admin/variable-catalog").json()["variables"]
     by_name = {v["name"]: v for v in variables}
-    phi_names = {"last_check_in", "last_check_in_line", "last_mood", "last_pain", "today_meds"}
+    phi_names = {
+        "last_check_in",
+        "last_check_in_line",
+        "last_mood",
+        "last_pain",
+        "today_meds",
+        "open_family_tasks",
+        "pending_med_reasks",  # US3 / FR-005 — names a medication
+        "personal_facts",  # US4 / FR-024 — memory builtins are PHI
+        "last_call_summary",
+        "open_plans",
+        "important_dates",
+    }
     for name, v in by_name.items():
         if name in phi_names:
             assert v["phi"] is True, f"{name} should have phi=True"

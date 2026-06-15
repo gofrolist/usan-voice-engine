@@ -26,6 +26,7 @@ def test_create_defaults():
     assert req.enabled is True
     assert req.dynamic_vars == {}
     assert req.profile_override is None
+    assert req.slot == "morning"  # US5 default keeps single-slot callers unchanged
     # "HH:MM" strings parse to datetime.time
     assert req.window_start_local == time(9, 0)
     assert req.window_end_local == time(17, 0)
@@ -130,6 +131,17 @@ def test_update_all_fields_optional():
     assert UpdateScheduleRequest(days_of_week=["sun", "mon"]).days_of_week == ["mon", "sun"]
 
 
+def test_update_forbids_unknown_fields_including_slot():
+    from usan_api.schemas.schedule import UpdateScheduleRequest
+
+    # slot is immutable identity (move = delete+create); extra="forbid" turns a PATCH
+    # attempt to change it (or any unknown key) into a 422, never a silent no-op.
+    with pytest.raises(ValidationError):
+        UpdateScheduleRequest(slot="evening")
+    with pytest.raises(ValidationError):
+        UpdateScheduleRequest(bogus_field=1)
+
+
 def test_update_rejects_half_window():
     from usan_api.schemas.schedule import UpdateScheduleRequest
 
@@ -151,6 +163,7 @@ def test_schedule_response_from_model_renders_day_list():
     class _Row:
         id = uuid.uuid4()
         elder_id = uuid.uuid4()
+        slot = "evening"
         enabled = True
         window_start_local = time(9, 0)
         window_end_local = time(17, 0)
@@ -168,6 +181,7 @@ def test_schedule_response_from_model_renders_day_list():
     resp = ScheduleResponse.from_model(row)
     assert resp.id == row.id
     assert resp.elder_id == row.elder_id
+    assert resp.slot == "evening"
     assert resp.days_of_week == ["mon", "sun"]
     assert resp.next_run_at == row.next_run_at
     assert resp.last_materialized_date == date(2026, 6, 7)

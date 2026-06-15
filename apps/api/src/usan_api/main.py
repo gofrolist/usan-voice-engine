@@ -9,6 +9,9 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from usan_api import (
     background,
+    callback_dialer,
+    family_report_job,
+    notification_outbox,
     retention,
     retry_orchestrator,
     schedule_orchestrator,
@@ -26,6 +29,7 @@ from usan_api.routers import (
     admin_custom_variables,
     admin_defaults,
     admin_elders,
+    admin_family,
     admin_model_catalog,
     admin_profile_tests,
     admin_profiles,
@@ -95,6 +99,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         poller_tasks.append(asyncio.create_task(retention.run_poller(settings, stop)))
     if settings.scheduler_poller_enabled:
         poller_tasks.append(asyncio.create_task(schedule_orchestrator.run_poller(settings, stop)))
+    # Notification outbox (Clara Care Parity 002): delivers family alerts / reports /
+    # opt-out acks (sms_messages with call_id IS NULL). Ship-inert — off by default.
+    if settings.notification_outbox_enabled:
+        poller_tasks.append(asyncio.create_task(notification_outbox.run_poller(settings, stop)))
+    # Callback auto-dial (US8): materialize due callback requests into outbound calls.
+    if settings.callback_dialer_poller_enabled:
+        poller_tasks.append(asyncio.create_task(callback_dialer.run_poller(settings, stop)))
+    # Monthly family report (US8): aggregate the prior month + send the PHI-minimized SMS.
+    if settings.family_report_poller_enabled:
+        poller_tasks.append(asyncio.create_task(family_report_job.run_poller(settings, stop)))
     # The webhook delivery poller ALWAYS starts (spec §5.1): WEBHOOK_DELIVERY_ENABLED
     # gates only the claim+POST half of each cycle; the housekeeping half (crash-residue
     # sweep, 7-day expiry, 30-day prune) and the pending-depth gauge must run even with
@@ -176,6 +190,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_users.router)
     app.include_router(admin_audit.router)
     app.include_router(admin_elders.router)
+    app.include_router(admin_family.router)
     app.include_router(admin_variable_catalog.router)
     app.include_router(admin_custom_variables.router)
     app.include_router(admin_tool_catalog.router)

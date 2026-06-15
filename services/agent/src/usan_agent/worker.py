@@ -13,14 +13,16 @@ from typing import Any, Literal
 from livekit.agents import JobContext, WorkerOptions, cli
 from loguru import logger
 
+from usan_agent import api_client
 from usan_agent.agent_config import AgentConfig
-from usan_agent.api_client import fetch_agent_config, start_inbound_call
+from usan_agent.api_client import CrisisCategory, fetch_agent_config, start_inbound_call
 from usan_agent.check_in import (
     CheckInData,
     build_check_in_agent,
     build_inbound_agent,
     build_test_agent,
 )
+from usan_agent.crisis_watcher import CrisisWatcher
 from usan_agent.ids import validate_call_id
 from usan_agent.logging_config import configure_logging
 from usan_agent.metrics_hooks import register_metrics_flush
@@ -139,6 +141,8 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
+        # Deterministic crisis safety net for inbound known-elder calls too (US1 / FR-002).
+        _arm_crisis_safety_net(session, call_id=call_id, settings=settings)
         # Hold a reference so the guard task is not garbage-collected before it
         # completes (asyncio keeps only a weak reference to fire-and-forget tasks).
         _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
@@ -266,6 +270,53 @@ async def _run_test_session(ctx: JobContext, settings: Settings, meta: CallMetad
     await session.generate_reply(instructions=cfg.prompts.checkin_flow_instructions)
 
 
+async def _handle_crisis(
+    session: Any, call_id: str, settings: Settings, category: CrisisCategory
+) -> None:
+    """Escalate a deterministically-detected crisis and speak the emergency resource.
+
+    Best-effort: a failed escalation still speaks a safe fallback so the elder always
+    hears help. The server-side raise_crisis records the urgent flag and notifies family.
+    """
+    script: str | None = None
+    try:
+        resp = await api_client.raise_crisis(
+            call_id, settings, category=category, detection_source="safety_net"
+        )
+        if isinstance(resp, dict):
+            spoken = resp.get("spoken_script")
+            script = spoken if isinstance(spoken, str) and spoken else None
+    except Exception:
+        logger.bind(call_id=call_id).warning("Crisis safety-net escalation failed")
+    spoken_text = script or (
+        "I'm very concerned about your safety. If this is an emergency, please call 911 right now."
+    )
+    try:
+        await session.say(spoken_text, allow_interruptions=False)
+    except Exception:
+        logger.bind(call_id=call_id).warning("Failed to speak crisis resource")
+
+
+def _arm_crisis_safety_net(session: Any, *, call_id: str, settings: Settings) -> None:
+    """Subscribe a deterministic CrisisWatcher to STT and escalate on the first match.
+
+    The life-safety net (FR-002): it fires server-side escalation + spoken resource even
+    if the LLM never calls raise_crisis. ``feed`` is sync (runs in the event handler); the
+    async escalation is spawned and strong-referenced so it is not GC'd mid-flight.
+    """
+    watcher = CrisisWatcher()
+
+    def _on_transcript(ev: Any) -> None:
+        category = watcher.feed(ev.transcript)
+        if category is None:
+            return
+        task = asyncio.create_task(_handle_crisis(session, call_id, settings, category))
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+    session.on("user_input_transcribed", _on_transcript)
+
+
 async def entrypoint(ctx: JobContext) -> None:
     """Per-room entrypoint. LiveKit calls this once per dispatched job."""
     settings = get_settings()
@@ -343,6 +394,9 @@ async def entrypoint(ctx: JobContext) -> None:
         # Honour admin-configured voicemail phrases; empty -> built-in §7 patterns.
         watcher = VoicemailWatcher(matcher=build_matcher(cfg.voicemail_detection.trigger_phrases))
         session.on("user_input_transcribed", lambda ev: watcher.feed(ev.transcript))
+        # Deterministic crisis safety net for the whole call (US1 / FR-002): escalates +
+        # speaks the resource even if the LLM misses the crisis.
+        _arm_crisis_safety_net(session, call_id=call_id, settings=settings)
         log.info("Participant present; running voicemail detection window")
         await _run_detection_window(
             ctx, session, watcher, call_id=call_id, settings=settings, cfg=cfg

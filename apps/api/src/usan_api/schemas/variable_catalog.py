@@ -117,6 +117,73 @@ BUILTIN_VARIABLES: tuple[VariableSpec, ...] = (
         example="Lisinopril, Metformin",
         phi=True,
     ),
+    # US2 / FR-009: open family tasks to convey on this call (then close). PHI=True —
+    # the task text is elder-specific and may reference health, so it is warned if used
+    # in a field spoken before identity confirmation or to voicemail.
+    VariableSpec(
+        name="open_family_tasks",
+        tier="builtin",
+        description="Open tasks family members asked to pass on, to convey then close.",
+        default="",
+        example="remind mom to drink water; ask about her doctor visit",
+        phi=True,
+    ),
+    # US3 / FR-005: medications the elder reported NOT taken, to gently re-ask this call.
+    # PHI=True — names a medication, health information.
+    VariableSpec(
+        name="pending_med_reasks",
+        tier="builtin",
+        description="Medications reported not taken, to gently re-ask whether taken yet.",
+        default="",
+        example="Lisinopril, Metformin",
+        phi=True,
+    ),
+    # US4 / FR-024: durable memory carried across calls. All PHI=True — they embed
+    # elder-specific (often health) context resolved from personal_facts /
+    # conversation_summaries, so they are warned if used in a field spoken before
+    # identity confirmation or to voicemail.
+    VariableSpec(
+        name="personal_facts",
+        tier="builtin",
+        description="Durable facts remembered about the elder (people, routines, preferences).",
+        default="",
+        example="son Tom lives nearby; walks every morning",
+        phi=True,
+    ),
+    VariableSpec(
+        name="last_call_summary",
+        tier="builtin",
+        description="A short recap of the elder's most recent call.",
+        default="",
+        example="Chatted about the garden; in good spirits.",
+        phi=True,
+    ),
+    VariableSpec(
+        name="open_plans",
+        tier="builtin",
+        description="Follow-ups the elder mentioned last time, to ask about this call.",
+        default="",
+        example="water the roses; call the pharmacy",
+        phi=True,
+    ),
+    VariableSpec(
+        name="important_dates",
+        tier="builtin",
+        description="Important dates (birthdays, anniversaries) within a day of today.",
+        default="",
+        example="her birthday",
+        phi=True,
+    ),
+    # US6 / FR-032: "true" when the elder is due for this month's wellbeing survey, else
+    # empty. A scheduling flag (no clinical content), so phi=False — safe to reference even
+    # in fields spoken before identity confirmation.
+    VariableSpec(
+        name="survey_due",
+        tier="builtin",
+        description="'true' when the elder is due for this month's wellbeing survey.",
+        default="",
+        example="true",
+    ),
 )
 
 BUILTIN_NAMES: frozenset[str] = frozenset(v.name for v in BUILTIN_VARIABLES)
