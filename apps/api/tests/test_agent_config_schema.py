@@ -126,11 +126,13 @@ def test_tools_accepts_three_new_catalog_tools():
     assert ToolsConfig(enabled=names).enabled == names
 
 
-def test_personalization_template_rejects_stray_brace():
-    bad = DEFAULT_AGENT_CONFIG.prompts.model_dump()
-    bad["inbound_personalization_template"] = "{contact_name} and {"
-    with pytest.raises(ValidationError):
-        PromptsConfig.model_validate(bad)
+def test_personalization_template_permissive_allows_stray_brace():
+    # inbound_personalization_template is a large free-form field (like system_prompt):
+    # a stray brace is accepted, not rejected. This guarantees a stored config carrying a
+    # lone brace still DESERIALIZES on read (no 500 on GET /v1/admin/profiles/{id}).
+    ok = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    ok["inbound_personalization_template"] = "{contact_name} and {"
+    assert PromptsConfig.model_validate(ok)
 
 
 def test_speech_advanced_rejects_inverted_endpointing():
@@ -175,12 +177,12 @@ def test_personalization_template_still_accepts_legacy_single_brace_slots():
     assert PromptsConfig.model_validate(ok)
 
 
-def test_personalization_template_rejects_unknown_single_brace_slot():
-    # A non-legacy single-brace slot is still a stray brace -> rejected.
-    bad = DEFAULT_AGENT_CONFIG.prompts.model_dump()
-    bad["inbound_personalization_template"] = "Hi {ssn}"
-    with pytest.raises(ValidationError):
-        PromptsConfig.model_validate(bad)
+def test_personalization_template_permissive_allows_unknown_single_brace():
+    # Now permissive: a non-legacy single-brace token passes through untouched at
+    # substitution time (never str.format-ed), so it no longer blocks validation.
+    ok = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    ok["inbound_personalization_template"] = "Hi {ssn}"
+    assert PromptsConfig.model_validate(ok)
 
 
 def test_short_field_rejects_stray_brace_even_with_valid_token():
