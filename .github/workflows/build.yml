@@ -171,7 +171,13 @@ jobs:
             $COMPOSE pull
             $COMPOSE up -d
             $COMPOSE ps
-            # (Re)apply the inbound SIP trunk + dispatch rule. These live only in
+            # Reclaim disk: drop images no longer used by a RUNNING container — i.e. the
+            # previous release's version- and SHA-tagged images. Runs AFTER `up -d` so the
+            # just-deployed images are in use and protected. Without this the 30G boot disk
+            # fills after a handful of releases (each agent image is ~3.9G), eventually
+            # ENOSPC-crashing the agent (it can't spawn its inference subprocess). Safe:
+            # old tags re-pull from Artifact Registry for a break-glass rollback.
+            docker image prune -af
             # LiveKit/redis runtime state (not in compose), so a redis/stack restart
             # drops them; reapplying every deploy keeps inbound calling durable.
             # Idempotent; reads TELNYX_INBOUND_DID + LiveKit creds from infra/.env.
