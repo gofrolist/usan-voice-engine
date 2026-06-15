@@ -5,16 +5,16 @@ import { Spinner } from "../../components/ui/spinner";
 import { Button } from "../../components/ui/button";
 import { useIsAdmin } from "../../auth/useSession";
 import { useProfiles } from "../profiles/hooks";
-import { useAssignProfile, useElders } from "./hooks";
+import { useAssignProfile, useContacts } from "./hooks";
 
 const PAGE_SIZE = 200;
 
 // Admin-only: assign each contact a specific agent profile, or "— none —" to fall
 // back to the per-direction default. Only active profiles are assignable.
-export function EldersPage() {
+export function ContactsPage() {
   const isAdmin = useIsAdmin();
   const [offset, setOffset] = useState(0);
-  const elders = useElders(PAGE_SIZE, offset);
+  const contacts = useContacts(PAGE_SIZE, offset);
   const profiles = useProfiles();
   const assign = useAssignProfile();
 
@@ -22,28 +22,28 @@ export function EldersPage() {
     return <p className="text-sm text-slate-600">Admins only.</p>;
   }
 
-  if (elders.isLoading || profiles.isLoading) {
+  if (contacts.isLoading || profiles.isLoading) {
     return (
       <div className="flex items-center gap-2 text-slate-600">
         <Spinner /> Loading contacts…
       </div>
     );
   }
-  if (elders.isError) {
+  if (contacts.isError) {
     return (
       <p className="text-sm text-red-700">
-        Failed to load contacts: {(elders.error as Error)?.message}
+        Failed to load contacts: {(contacts.error as Error)?.message}
       </p>
     );
   }
 
-  const elderList = elders.data ?? [];
+  const contactList = contacts.data ?? [];
   const assignable = (profiles.data ?? []).filter((p) => p.status === "active");
   // A full page means there may be more rows; a short page is the last one.
-  const hasNext = elderList.length === PAGE_SIZE;
+  const hasNext = contactList.length === PAGE_SIZE;
   const hasPrev = offset > 0;
-  const rangeStart = elderList.length === 0 ? 0 : offset + 1;
-  const rangeEnd = offset + elderList.length;
+  const rangeStart = contactList.length === 0 ? 0 : offset + 1;
+  const rangeEnd = offset + contactList.length;
 
   return (
     <div className="space-y-4">
@@ -57,14 +57,14 @@ export function EldersPage() {
           </Tr>
         </Thead>
         <Tbody>
-          {elderList.length === 0 ? (
+          {contactList.length === 0 ? (
             <Tr>
               <Td className="text-slate-500" colSpan={3}>
                 No contacts.
               </Td>
             </Tr>
           ) : null}
-          {elderList.map((e) => (
+          {contactList.map((e) => (
             <Tr key={e.id}>
               <Td className="font-medium text-slate-900">{e.name}</Td>
               <Td className="font-mono text-xs">{e.masked_phone}</Td>
@@ -73,10 +73,10 @@ export function EldersPage() {
                   aria-label={`Assigned profile for ${e.name}`}
                   value={e.agent_profile_id ?? ""}
                   // Disable only the row being saved, not the whole table.
-                  disabled={assign.isPending && assign.variables?.elderId === e.id}
+                  disabled={assign.isPending && assign.variables?.contactId === e.id}
                   onChange={(ev) =>
                     assign.mutate({
-                      elderId: e.id,
+                      contactId: e.id,
                       agentProfileId: ev.target.value === "" ? null : ev.target.value,
                     })
                   }

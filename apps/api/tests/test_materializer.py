@@ -1,7 +1,7 @@
 """Shared materializer: schedule_orchestrator.materialize_call (spec §5.3, §9).
 
 Pins: QUEUED root creation (key, fresh room, attempt 1, dynamic_vars/profile
-copies), the per-elder daily repetition cap on elder-local dates (including the
+copies), the per-contact daily repetition cap on contact-local dates (including the
 DST 25-hour fall-back day), the DNC gate (advisory phone lock first, terminal
 DNC_BLOCKED row consuming the key), and the verified-ownership replay path on
 idempotency-key collisions (adopt our own root via SAVEPOINT, refuse foreign
@@ -18,9 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from usan_api import schedule_orchestrator
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import AgentProfile, Call, Elder
+from usan_api.db.models import AgentProfile, Call, Contact
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import dnc as dnc_repo
-from usan_api.repositories import elders as elders_repo
 from usan_api.settings import Settings
 
 NOW = datetime(2026, 6, 10, 15, 0, tzinfo=UTC)
@@ -38,7 +38,9 @@ async def session_factory(async_database_url):
 async def _truncate(session_factory):
     async with session_factory() as db:
         await db.execute(
-            text("TRUNCATE calls, dnc_list, agent_profile_versions, agent_profiles, elders CASCADE")
+            text(
+                "TRUNCATE calls, dnc_list, agent_profile_versions, agent_profiles, contacts CASCADE"
+            )
         )
         await db.commit()
 
@@ -56,21 +58,23 @@ def _settings(**overrides) -> Settings:
     return Settings(**base)
 
 
-async def _seed_elder(factory, *, timezone: str = "UTC") -> Elder:
+async def _seed_contact(factory, *, timezone: str = "UTC") -> Contact:
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone=timezone)
+        contact = await contacts_repo.create_contact(
+            db, name="A", phone_e164=phone, timezone=timezone
+        )
         await db.commit()
-    return elder
+    return contact
 
 
 async def _seed_root(
-    factory, *, elder_id: uuid.UUID, key: str, scheduled_at: datetime
+    factory, *, contact_id: uuid.UUID, key: str, scheduled_at: datetime
 ) -> uuid.UUID:
     """Pre-existing autonomous root (reserved-prefix key) for cap/replay scenarios."""
     async with factory() as db:
         call = Call(
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.QUEUED,
             idempotency_key=key,
@@ -86,7 +90,7 @@ async def _seed_root(
 async def _materialize(
     db: AsyncSession,
     settings: Settings,
-    elder: Elder,
+    contact: Contact,
     *,
     key: str,
     scheduled_at: datetime = NOW,
@@ -97,7 +101,7 @@ async def _materialize(
     return await schedule_orchestrator.materialize_call(
         db,
         settings,
-        elder=elder,
+        contact=contact,
         idempotency_key=key,
         scheduled_at=scheduled_at,
         local_day=local_day,
@@ -113,7 +117,7 @@ async def _count_calls(factory) -> int:
 
 
 async def test_materialize_creates_queued_root_with_key_and_room(session_factory):
-    elder = await _seed_elder(session_factory)
+    contact = await _seed_contact(session_factory)
     async with session_factory() as db:
         profile = AgentProfile(name=f"profile-{uuid.uuid4()}", draft_config={})
         db.add(profile)
@@ -126,9 +130,9 @@ async def test_materialize_creates_queued_root_with_key_and_room(session_factory
         outcome = await _materialize(
             db,
             _settings(),
-            elder,
+            contact,
             key=key,
-            dynamic_vars={"elder_name": "A"},
+            dynamic_vars={"contact_name": "A"},
             profile_override=profile_id,
         )
         await db.commit()
@@ -143,26 +147,26 @@ async def test_materialize_creates_queued_root_with_key_and_room(session_factory
     assert call.idempotency_key == key
     assert call.livekit_room is not None
     assert call.livekit_room.startswith("usan-outbound-")
-    assert call.dynamic_vars == {"elder_name": "A"}
+    assert call.dynamic_vars == {"contact_name": "A"}
     assert call.profile_override == profile_id
 
 
 async def test_daily_cap_blocks_third_root_same_local_date(session_factory):
     # §9 daily-cap scenario: a schedule root + a batch root already exist on the
-    # elder-local date; with the default cap of 2 the third root is skipped.
-    elder = await _seed_elder(session_factory)
+    # contact-local date; with the default cap of 2 the third root is skipped.
+    contact = await _seed_contact(session_factory)
     await _seed_root(
         session_factory,
-        elder_id=elder.id,
+        contact_id=contact.id,
         key=f"sched:{uuid.uuid4()}:2026-06-10",
         scheduled_at=NOW,
     )
     await _seed_root(
-        session_factory, elder_id=elder.id, key=f"batch:{uuid.uuid4()}:0", scheduled_at=NOW
+        session_factory, contact_id=contact.id, key=f"batch:{uuid.uuid4()}:0", scheduled_at=NOW
     )
 
     async with session_factory() as db:
-        outcome = await _materialize(db, _settings(), elder, key=f"batch:{uuid.uuid4()}:1")
+        outcome = await _materialize(db, _settings(), contact, key=f"batch:{uuid.uuid4()}:1")
         await db.commit()
 
     assert outcome.result == "skipped_daily_cap"
@@ -170,15 +174,15 @@ async def test_daily_cap_blocks_third_root_same_local_date(session_factory):
     assert await _count_calls(session_factory) == 2  # no third row
 
 
-async def test_daily_cap_counts_elder_local_date_not_utc(session_factory):
+async def test_daily_cap_counts_contact_local_date_not_utc(session_factory):
     # Pacific/Auckland is UTC+12 in June: a root at 11:30Z June 10 is June 10
     # 23:30 LOCAL, while the candidate at 13:00Z June 10 is June 11 LOCAL —
-    # different elder-local dates, so with cap=1 they must NOT cap together
+    # different contact-local dates, so with cap=1 they must NOT cap together
     # (day_bounds_utc; a naive UTC-date count would block the candidate).
-    elder = await _seed_elder(session_factory, timezone="Pacific/Auckland")
+    contact = await _seed_contact(session_factory, timezone="Pacific/Auckland")
     await _seed_root(
         session_factory,
-        elder_id=elder.id,
+        contact_id=contact.id,
         key=f"sched:{uuid.uuid4()}:2026-06-10",
         scheduled_at=datetime(2026, 6, 10, 11, 30, tzinfo=UTC),
     )
@@ -186,8 +190,8 @@ async def test_daily_cap_counts_elder_local_date_not_utc(session_factory):
     async with session_factory() as db:
         outcome = await _materialize(
             db,
-            _settings(MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY="1"),
-            elder,
+            _settings(MAX_AUTONOMOUS_CALLS_PER_CONTACT_PER_DAY="1"),
+            contact,
             key=f"batch:{uuid.uuid4()}:0",
             scheduled_at=datetime(2026, 6, 10, 13, 0, tzinfo=UTC),
             local_day=date(2026, 6, 11),
@@ -205,16 +209,16 @@ async def test_daily_cap_on_dst_fall_back_day(session_factory):
     local_day = date(2026, 11, 1)
     candidate_at = datetime(2026, 11, 1, 15, 0, tzinfo=UTC)
 
-    capped = await _seed_elder(session_factory, timezone="America/New_York")
+    capped = await _seed_contact(session_factory, timezone="America/New_York")
     await _seed_root(
         session_factory,
-        elder_id=capped.id,
+        contact_id=capped.id,
         key=f"sched:{uuid.uuid4()}:2026-11-01",
         scheduled_at=datetime(2026, 11, 1, 4, 30, tzinfo=UTC),
     )
     await _seed_root(
         session_factory,
-        elder_id=capped.id,
+        contact_id=capped.id,
         key=f"batch:{uuid.uuid4()}:0",
         scheduled_at=datetime(2026, 11, 2, 4, 30, tzinfo=UTC),
     )
@@ -232,16 +236,16 @@ async def test_daily_cap_on_dst_fall_back_day(session_factory):
 
     # A root at 05:30Z Nov 2 is local Nov 2 — past the 25-hour boundary, so it
     # must NOT count toward Nov 1 (the exact spot a cached-offset bug bites).
-    free = await _seed_elder(session_factory, timezone="America/New_York")
+    free = await _seed_contact(session_factory, timezone="America/New_York")
     await _seed_root(
         session_factory,
-        elder_id=free.id,
+        contact_id=free.id,
         key=f"sched:{uuid.uuid4()}:2026-11-01",
         scheduled_at=datetime(2026, 11, 1, 4, 30, tzinfo=UTC),
     )
     await _seed_root(
         session_factory,
-        elder_id=free.id,
+        contact_id=free.id,
         key=f"batch:{uuid.uuid4()}:0",
         scheduled_at=datetime(2026, 11, 2, 5, 30, tzinfo=UTC),
     )
@@ -259,9 +263,9 @@ async def test_daily_cap_on_dst_fall_back_day(session_factory):
 
 
 async def test_dnc_blocked_creates_terminal_row_consuming_key(session_factory, monkeypatch):
-    elder = await _seed_elder(session_factory)
+    contact = await _seed_contact(session_factory)
     async with session_factory() as db:
-        await dnc_repo.add_entry(db, elder.phone_e164, "asked to stop")
+        await dnc_repo.add_entry(db, contact.phone_e164, "asked to stop")
         await db.commit()
 
     locked: list[str] = []
@@ -275,7 +279,7 @@ async def test_dnc_blocked_creates_terminal_row_consuming_key(session_factory, m
     key = f"batch:{uuid.uuid4()}:0"
 
     async with session_factory() as db:
-        outcome = await _materialize(db, _settings(), elder, key=key)
+        outcome = await _materialize(db, _settings(), contact, key=key)
         await db.commit()
 
     assert outcome.result == "dnc_blocked"
@@ -283,21 +287,25 @@ async def test_dnc_blocked_creates_terminal_row_consuming_key(session_factory, m
     assert call is not None
     assert call.status is CallStatus.DNC_BLOCKED
     assert call.idempotency_key == key  # the deterministic key is consumed
-    assert locked == [elder.phone_e164]  # the advisory lock is taken first
+    assert locked == [contact.phone_e164]  # the advisory lock is taken first
 
 
 async def test_replay_adopts_owned_existing_row(session_factory):
     # §9 deterministic-key double-materialization race: the key already exists
-    # for the SAME elder (re-poll after a partial crash) -> adopt, exactly one row.
-    elder = await _seed_elder(session_factory)
+    # for the SAME contact (re-poll after a partial crash) -> adopt, exactly one row.
+    contact = await _seed_contact(session_factory)
     key = f"sched:{uuid.uuid4()}:2026-06-10"
-    existing_id = await _seed_root(session_factory, elder_id=elder.id, key=key, scheduled_at=NOW)
+    existing_id = await _seed_root(
+        session_factory, contact_id=contact.id, key=key, scheduled_at=NOW
+    )
 
     async with session_factory() as db:
-        outcome = await _materialize(db, _settings(), elder, key=key)
+        outcome = await _materialize(db, _settings(), contact, key=key)
         # SAVEPOINT path — no transaction poisoning: a subsequent flush in the
         # same session must succeed after the swallowed IntegrityError.
-        marker = Call(elder_id=elder.id, direction=CallDirection.OUTBOUND, status=CallStatus.QUEUED)
+        marker = Call(
+            contact_id=contact.id, direction=CallDirection.OUTBOUND, status=CallStatus.QUEUED
+        )
         db.add(marker)
         await db.flush()
         await db.commit()
@@ -313,12 +321,12 @@ async def test_replay_adopts_owned_existing_row(session_factory):
 
 
 async def test_replay_refuses_foreign_row_key_conflict(session_factory):
-    # A squatted key (different elder) can never substitute a wellness call
+    # A squatted key (different contact) can never substitute a wellness call
     # (§5.3 step 5): refuse to adopt, ERROR log, the foreign row untouched.
-    owner = await _seed_elder(session_factory)
-    foreign = await _seed_elder(session_factory)
+    owner = await _seed_contact(session_factory)
+    foreign = await _seed_contact(session_factory)
     key = f"sched:{uuid.uuid4()}:2026-06-10"
-    foreign_id = await _seed_root(session_factory, elder_id=foreign.id, key=key, scheduled_at=NOW)
+    foreign_id = await _seed_root(session_factory, contact_id=foreign.id, key=key, scheduled_at=NOW)
 
     errors: list[str] = []
     handler_id = logger.add(lambda m: errors.append(m.record["message"]), level="ERROR")
@@ -336,4 +344,4 @@ async def test_replay_refuses_foreign_row_key_conflict(session_factory):
         rows = (await db.execute(select(Call).where(Call.idempotency_key == key))).scalars().all()
         assert len(rows) == 1  # a key never dials twice — and never duplicates
         assert rows[0].id == foreign_id
-        assert rows[0].elder_id == foreign.id
+        assert rows[0].contact_id == foreign.id

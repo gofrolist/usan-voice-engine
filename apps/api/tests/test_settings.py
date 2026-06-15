@@ -427,3 +427,89 @@ def test_db_tls_no_warning_for_asyncpg_ssl_param(monkeypatch):
     finally:
         logger.remove(handler_id)
     assert not messages
+
+
+# --- Clara Care Parity (002): poller flags + inbound key + med cap + Spanish ---
+
+
+def test_clara_parity_settings_defaults(monkeypatch):
+    _base_env(monkeypatch)
+    for var in (
+        "NOTIFICATION_OUTBOX_ENABLED",
+        "NOTIFICATION_OUTBOX_POLL_INTERVAL_S",
+        "CALLBACK_DIALER_POLLER_ENABLED",
+        "CALLBACK_DIALER_POLL_INTERVAL_S",
+        "FAMILY_REPORT_POLLER_ENABLED",
+        "FAMILY_REPORT_POLL_INTERVAL_S",
+        "TELNYX_INBOUND_PUBLIC_KEY",
+        "MED_REASK_CAP",
+        "SPANISH_PROFILE_ID",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    s = Settings()
+    # Ship-inert: every new poller defaults OFF so merging changes no runtime behavior.
+    assert s.notification_outbox_enabled is False
+    assert s.callback_dialer_poller_enabled is False
+    assert s.family_report_poller_enabled is False
+    assert s.notification_outbox_poll_interval_s == 60
+    assert s.callback_dialer_poll_interval_s == 60
+    assert s.family_report_poll_interval_s == 3600
+    assert s.telnyx_inbound_public_key is None
+    assert s.med_reask_cap == 3
+    assert s.spanish_profile_id is None
+
+
+def test_clara_parity_settings_from_env(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("NOTIFICATION_OUTBOX_ENABLED", "true")
+    monkeypatch.setenv("NOTIFICATION_OUTBOX_POLL_INTERVAL_S", "30")
+    monkeypatch.setenv("CALLBACK_DIALER_POLLER_ENABLED", "true")
+    monkeypatch.setenv("FAMILY_REPORT_POLLER_ENABLED", "true")
+    monkeypatch.setenv("TELNYX_INBOUND_PUBLIC_KEY", "ed25519-pub")
+    monkeypatch.setenv("MED_REASK_CAP", "5")
+    monkeypatch.setenv("SPANISH_PROFILE_ID", "11111111-1111-1111-1111-111111111111")
+    s = Settings()
+    assert s.notification_outbox_enabled is True
+    assert s.notification_outbox_poll_interval_s == 30
+    assert s.callback_dialer_poller_enabled is True
+    assert s.family_report_poller_enabled is True
+    assert s.telnyx_inbound_public_key is not None
+    assert s.telnyx_inbound_public_key.get_secret_value() == "ed25519-pub"
+    assert s.med_reask_cap == 5
+    assert s.spanish_profile_id == "11111111-1111-1111-1111-111111111111"
+
+
+def test_notification_outbox_interval_capped_for_sc004(monkeypatch):
+    # SC-004: a family alert must dispatch within 5 minutes. The poll interval is the
+    # worst-case latency, so it is hard-capped at 300s — an over-budget value is rejected.
+    _base_env(monkeypatch)
+    monkeypatch.setenv("NOTIFICATION_OUTBOX_POLL_INTERVAL_S", "301")
+    with pytest.raises(ValueError, match="NOTIFICATION_OUTBOX_POLL_INTERVAL_S"):
+        get_settings()
+
+
+def test_med_reask_cap_out_of_range_rejected(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("MED_REASK_CAP", "0")
+    with pytest.raises(ValueError, match="MED_REASK_CAP"):
+        get_settings()
+
+
+def test_spanish_profile_id_non_uuid_rejected_at_startup(monkeypatch):
+    # A misconfigured non-UUID SPANISH_PROFILE_ID must fail fast at startup, not 500 on
+    # every Spanish callback (set_spanish_callback parses it as the callback profile UUID).
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SPANISH_PROFILE_ID", "not-a-uuid")
+    with pytest.raises(ValueError, match="valid UUID"):
+        Settings()
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_inbound_key_and_spanish_profile_blank_coerce_to_none(monkeypatch, blank):
+    # Compose passes unset optionals as "" (${VAR:-}); blank must coerce to None.
+    _base_env(monkeypatch)
+    monkeypatch.setenv("TELNYX_INBOUND_PUBLIC_KEY", blank)
+    monkeypatch.setenv("SPANISH_PROFILE_ID", blank)
+    s = get_settings()
+    assert s.telnyx_inbound_public_key is None
+    assert s.spanish_profile_id is None

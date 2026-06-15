@@ -9,7 +9,7 @@ disjointness, and the run_poller loop discipline cloned from the retry poller.
 
 Plus the batch-target phases (spec §5.2 phases 1/4/5/6): the intrinsic
 flag-independent slot budget, schedule-over-batch priority, the per-target skip
-branches (elder_deleted / invalid_timezone / daily_cap / key_conflict), the
+branches (contact_deleted / invalid_timezone / daily_cap / key_conflict), the
 window-pushed dial time capped against the PUSHED day, cross-process crash
 resume via verified key replay, the §6.2 finalizer matrix, the cancelled-batch
 sweep backstop, and drained-batch completion bookkeeping.
@@ -28,13 +28,13 @@ from sqlalchemy.pool import NullPool
 from tests.conftest import counter_value
 from usan_api import quiet_hours, schedule_orchestrator, schedule_windows
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call, CallBatch, CallBatchTarget, CallSchedule, Elder
+from usan_api.db.models import Call, CallBatch, CallBatchTarget, CallSchedule, Contact
 from usan_api.observability.custom_metrics import MATERIALIZED_CALLS_TOTAL
 from usan_api.repositories import agent_profiles as profiles_repo
 from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import call_schedules as schedules_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import dnc as dnc_repo
-from usan_api.repositories import elders as elders_repo
 from usan_api.schemas.batch import BatchTargetIn
 from usan_api.settings import Settings
 
@@ -59,7 +59,7 @@ async def _truncate(session_factory):
         await db.execute(
             text(
                 "TRUNCATE call_batch_targets, call_batches, call_schedules, calls, "
-                "dnc_list, elders CASCADE"
+                "dnc_list, contacts CASCADE"
             )
         )
         await db.commit()
@@ -98,22 +98,26 @@ async def _publish_policy_profile(db, *, policy=None):
     return profile.id
 
 
-async def _seed_elder(factory, *, timezone: str = "America/New_York", policy=_NO_PROFILE) -> Elder:
-    """One elder; ``policy``: ``_NO_PROFILE`` leaves them profile-less, ``None``
+async def _seed_contact(
+    factory, *, timezone: str = "America/New_York", policy=_NO_PROFILE
+) -> Contact:
+    """One contact; ``policy``: ``_NO_PROFILE`` leaves them profile-less, ``None``
     assigns a published profile with no ``policy`` section, a dict publishes
     that policy and assigns it (the test_dispatch_and_dial.py discipline)."""
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="S", phone_e164=phone, timezone=timezone)
+        contact = await contacts_repo.create_contact(
+            db, name="S", phone_e164=phone, timezone=timezone
+        )
         if policy is not _NO_PROFILE:
-            elder.agent_profile_id = await _publish_policy_profile(db, policy=policy)
+            contact.agent_profile_id = await _publish_policy_profile(db, policy=policy)
         await db.commit()
-    return elder
+    return contact
 
 
 async def _seed_schedule(
     factory,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     *,
     next_run_at: datetime,
     window_start: time = time(9, 0),
@@ -124,7 +128,7 @@ async def _seed_schedule(
     async with factory() as db:
         row = await schedules_repo.create_schedule(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             window_start_local=window_start,
             window_end_local=window_end,
             days_of_week=days_of_week,
@@ -138,7 +142,7 @@ async def _seed_schedule(
 
 
 async def _seed_batch(factory, *, trigger_at: datetime | None) -> uuid.UUID:
-    elder = await _seed_elder(factory)
+    contact = await _seed_contact(factory)
     async with factory() as db:
         batch = await batches_repo.create_batch_with_targets(
             db,
@@ -151,17 +155,17 @@ async def _seed_batch(factory, *, trigger_at: datetime | None) -> uuid.UUID:
             days_of_week=None,
             max_concurrency=None,
             profile_override=None,
-            targets=[BatchTargetIn(elder_id=elder.id)],
+            targets=[BatchTargetIn(contact_id=contact.id)],
         )
         await db.commit()
         return batch.id
 
 
-async def _seed_call_with_key(factory, *, elder_id: uuid.UUID, key: str) -> uuid.UUID:
+async def _seed_call_with_key(factory, *, contact_id: uuid.UUID, key: str) -> uuid.UUID:
     """Pre-existing root carrying an idempotency key (replay/conflict scenarios)."""
     async with factory() as db:
         call = Call(
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.QUEUED,
             idempotency_key=key,
@@ -189,9 +193,9 @@ async def _set_schedule(factory, schedule_id: uuid.UUID, **values) -> None:
         await db.commit()
 
 
-async def _set_elder(factory, elder_id: uuid.UUID, **values) -> None:
+async def _set_contact(factory, contact_id: uuid.UUID, **values) -> None:
     async with factory() as db:
-        await db.execute(update(Elder).where(Elder.id == elder_id).values(**values))
+        await db.execute(update(Contact).where(Contact.id == contact_id).values(**values))
         await db.commit()
 
 
@@ -202,8 +206,8 @@ async def _calls(factory) -> list[Call]:
 
 
 async def test_poll_once_materializes_due_schedule_inside_window(session_factory):
-    elder = await _seed_elder(session_factory)  # NY: NOW is 11:00 EDT, inside 09:00-17:00
-    sid = await _seed_schedule(session_factory, elder.id, next_run_at=NOW - timedelta(hours=1))
+    contact = await _seed_contact(session_factory)  # NY: NOW is 11:00 EDT, inside 09:00-17:00
+    sid = await _seed_schedule(session_factory, contact.id, next_run_at=NOW - timedelta(hours=1))
 
     counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=NOW)
 
@@ -212,7 +216,7 @@ async def test_poll_once_materializes_due_schedule_inside_window(session_factory
     assert len(calls) == 1
     call = calls[0]
     assert call.status is CallStatus.QUEUED
-    assert call.elder_id == elder.id
+    assert call.contact_id == contact.id
     assert call.idempotency_key == f"sched:{sid}:{TODAY.isoformat()}"
     assert call.scheduled_at == quiet_hours.next_allowed(NOW, "America/New_York")
     schedule = await _get_schedule(session_factory, sid)
@@ -222,8 +226,8 @@ async def test_poll_once_materializes_due_schedule_inside_window(session_factory
 
 
 async def test_poll_once_twice_is_idempotent_with_full_bookkeeping(session_factory):
-    elder = await _seed_elder(session_factory)
-    sid = await _seed_schedule(session_factory, elder.id, next_run_at=NOW - timedelta(hours=1))
+    contact = await _seed_contact(session_factory)
+    sid = await _seed_schedule(session_factory, contact.id, next_run_at=NOW - timedelta(hours=1))
     await schedule_orchestrator.poll_once(session_factory, _settings(), now=NOW)
     # Simulate the crash-before-bookkeeping window: the call row committed but
     # next_run_at was rewound to due — the §5.3(5)/§9 replay regression.
@@ -242,11 +246,11 @@ async def test_poll_once_twice_is_idempotent_with_full_bookkeeping(session_facto
 
 
 async def test_schedule_key_conflict_records_and_advances(session_factory):
-    owner = await _seed_elder(session_factory)
-    foreign = await _seed_elder(session_factory)
+    owner = await _seed_contact(session_factory)
+    foreign = await _seed_contact(session_factory)
     sid = await _seed_schedule(session_factory, owner.id, next_run_at=NOW - timedelta(hours=1))
     key = f"sched:{sid}:{TODAY.isoformat()}"
-    foreign_call_id = await _seed_call_with_key(session_factory, elder_id=foreign.id, key=key)
+    foreign_call_id = await _seed_call_with_key(session_factory, contact_id=foreign.id, key=key)
 
     errors: list[str] = []
     handler_id = logger.add(lambda m: errors.append(m.record["message"]), level="ERROR")
@@ -258,7 +262,7 @@ async def test_schedule_key_conflict_records_and_advances(session_factory):
     calls = await _calls(session_factory)
     assert len(calls) == 1  # no adoption: no second row minted
     assert calls[0].id == foreign_call_id
-    assert calls[0].elder_id == foreign.id  # the foreign row untouched
+    assert calls[0].contact_id == foreign.id  # the foreign row untouched
     schedule = await _get_schedule(session_factory, sid)
     assert schedule.last_result == "key_conflict"
     # A missing advance here is the same infinite re-claim loop class as replay.
@@ -267,10 +271,10 @@ async def test_schedule_key_conflict_records_and_advances(session_factory):
 
 
 async def test_past_window_end_skips_observably(session_factory):
-    elder = await _seed_elder(session_factory)  # NOW = 11:00 EDT, past a 09:00-10:30 window
+    contact = await _seed_contact(session_factory)  # NOW = 11:00 EDT, past a 09:00-10:30 window
     sid = await _seed_schedule(
         session_factory,
-        elder.id,
+        contact.id,
         next_run_at=NOW - timedelta(hours=2),
         window_start=time(9, 0),
         window_end=time(10, 30),
@@ -294,11 +298,11 @@ async def test_past_window_end_skips_observably(session_factory):
 
 
 async def test_before_window_start_reschedules_without_skipping_day(session_factory):
-    elder = await _seed_elder(session_factory)  # created NY (09:00 EDT = 13:00Z)
-    sid = await _seed_schedule(session_factory, elder.id, next_run_at=NOW - timedelta(hours=2))
+    contact = await _seed_contact(session_factory)  # created NY (09:00 EDT = 13:00Z)
+    sid = await _seed_schedule(session_factory, contact.id, next_run_at=NOW - timedelta(hours=2))
     # Westward tz edit AFTER create: 09:00 local is now 16:00Z, so NOW (15:00Z)
     # is before today's window start under the CURRENT timezone.
-    await _set_elder(session_factory, elder.id, timezone="America/Los_Angeles")
+    await _set_contact(session_factory, contact.id, timezone="America/Los_Angeles")
 
     counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=NOW)
 
@@ -312,9 +316,9 @@ async def test_before_window_start_reschedules_without_skipping_day(session_fact
 
 
 async def test_invalid_timezone_fails_closed_hourly(session_factory):
-    elder = await _seed_elder(session_factory)
-    sid = await _seed_schedule(session_factory, elder.id, next_run_at=NOW - timedelta(hours=1))
-    await _set_elder(session_factory, elder.id, timezone="Not/AZone")
+    contact = await _seed_contact(session_factory)
+    sid = await _seed_schedule(session_factory, contact.id, next_run_at=NOW - timedelta(hours=1))
+    await _set_contact(session_factory, contact.id, timezone="Not/AZone")
 
     errors: list[str] = []
     handler_id = logger.add(lambda m: errors.append(m.record["message"]), level="ERROR")
@@ -332,10 +336,10 @@ async def test_invalid_timezone_fails_closed_hourly(session_factory):
 
 
 async def test_dnc_auto_disables_schedule(session_factory):
-    elder = await _seed_elder(session_factory)
-    sid = await _seed_schedule(session_factory, elder.id, next_run_at=NOW - timedelta(hours=1))
+    contact = await _seed_contact(session_factory)
+    sid = await _seed_schedule(session_factory, contact.id, next_run_at=NOW - timedelta(hours=1))
     async with session_factory() as db:
-        await dnc_repo.add_entry(db, elder.phone_e164, "asked to stop")
+        await dnc_repo.add_entry(db, contact.phone_e164, "asked to stop")
         await db.commit()
 
     warnings: list[str] = []
@@ -389,10 +393,14 @@ async def test_concurrent_poll_once_disjoint_claims(session_factory, async_datab
     # §9 SKIP LOCKED race, open-transaction interleaving (precedent:
     # test_claim_skips_locked_rows) — sequential runs prove nothing because the
     # first commit advances next_run_at and the second poll trivially finds nothing.
-    elder_a = await _seed_elder(session_factory)
-    elder_b = await _seed_elder(session_factory)
-    sid_a = await _seed_schedule(session_factory, elder_a.id, next_run_at=NOW - timedelta(hours=2))
-    sid_b = await _seed_schedule(session_factory, elder_b.id, next_run_at=NOW - timedelta(hours=1))
+    contact_a = await _seed_contact(session_factory)
+    contact_b = await _seed_contact(session_factory)
+    sid_a = await _seed_schedule(
+        session_factory, contact_a.id, next_run_at=NOW - timedelta(hours=2)
+    )
+    sid_b = await _seed_schedule(
+        session_factory, contact_b.id, next_run_at=NOW - timedelta(hours=1)
+    )
 
     engine_a = create_async_engine(async_database_url, poolclass=NullPool)
     try:
@@ -484,7 +492,7 @@ PUSHED_MONDAY_DIAL = datetime(2026, 6, 15, 14, 0, tzinfo=UTC)
 async def _seed_call(
     factory,
     *,
-    elder_id: uuid.UUID | None = None,
+    contact_id: uuid.UUID | None = None,
     status: CallStatus = CallStatus.QUEUED,
     scheduled_at: datetime | None = None,
     key: str | None = None,
@@ -492,13 +500,13 @@ async def _seed_call(
     attempt: int = 1,
     fresh: bool = False,
 ) -> uuid.UUID:
-    """Insert one call row (own elder unless given); ``fresh`` forces
+    """Insert one call row (own contact unless given); ``fresh`` forces
     ``updated_at == NOW`` so the row passes the in-flight recency bound."""
-    if elder_id is None:
-        elder_id = (await _seed_elder(factory)).id
+    if contact_id is None:
+        contact_id = (await _seed_contact(factory)).id
     async with factory() as db:
         call = Call(
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=CallDirection.OUTBOUND,
             status=status,
             idempotency_key=key,
@@ -521,14 +529,14 @@ async def _seed_call(
 async def _seed_running_batch(
     factory,
     *,
-    elder_ids: list[uuid.UUID],
+    contact_ids: list[uuid.UUID],
     status: str = "running",
     window_start: time | None = None,
     window_end: time | None = None,
     days_of_week: int | None = None,
     profile_override: uuid.UUID | None = None,
 ) -> uuid.UUID:
-    """One batch with a pending target per elder, forced straight to ``status``."""
+    """One batch with a pending target per contact, forced straight to ``status``."""
     async with factory() as db:
         batch = await batches_repo.create_batch_with_targets(
             db,
@@ -541,7 +549,7 @@ async def _seed_running_batch(
             days_of_week=days_of_week,
             max_concurrency=None,
             profile_override=profile_override,
-            targets=[BatchTargetIn(elder_id=eid) for eid in elder_ids],
+            targets=[BatchTargetIn(contact_id=eid) for eid in contact_ids],
         )
         batch.status = status
         batch.started_at = NOW
@@ -584,9 +592,9 @@ async def _get_batch(factory, batch_id: uuid.UUID) -> CallBatch:
         return batch
 
 
-async def _delete_elder(factory, elder_id: uuid.UUID) -> None:
+async def _delete_contact(factory, contact_id: uuid.UUID) -> None:
     async with factory() as db:
-        await db.execute(delete(Elder).where(Elder.id == elder_id))
+        await db.execute(delete(Contact).where(Contact.id == contact_id))
         await db.commit()
 
 
@@ -596,8 +604,8 @@ async def _run_slot_budget_case(session_factory, *, gate: str) -> None:
     await _seed_call(
         session_factory, status=CallStatus.QUEUED, scheduled_at=NOW - timedelta(minutes=1)
     )
-    elder_ids = [(await _seed_elder(session_factory)).id for _ in range(3)]
-    batch_id = await _seed_running_batch(session_factory, elder_ids=elder_ids)
+    contact_ids = [(await _seed_contact(session_factory)).id for _ in range(3)]
+    batch_id = await _seed_running_batch(session_factory, contact_ids=contact_ids)
 
     counts = await schedule_orchestrator.poll_once(
         session_factory,
@@ -630,12 +638,12 @@ async def test_batch_budget_applies_even_with_gate_disabled(session_factory):
 async def test_schedules_outrank_batches(session_factory):
     # slots before phase 3: 4 max − 2 reserved − 1 in-flight = 1.
     await _seed_call(session_factory, status=CallStatus.IN_PROGRESS, fresh=True)
-    sched_elder = await _seed_elder(session_factory)
+    sched_contact = await _seed_contact(session_factory)
     sid = await _seed_schedule(
-        session_factory, sched_elder.id, next_run_at=NOW - timedelta(hours=1)
+        session_factory, sched_contact.id, next_run_at=NOW - timedelta(hours=1)
     )
-    batch_elder = await _seed_elder(session_factory)
-    batch_id = await _seed_running_batch(session_factory, elder_ids=[batch_elder.id])
+    batch_contact = await _seed_contact(session_factory)
+    batch_id = await _seed_running_batch(session_factory, contact_ids=[batch_contact.id])
     settings = _settings(MAX_CONCURRENT_CALLS="4", RESERVED_CONCURRENCY="2")
 
     counts = await schedule_orchestrator.poll_once(session_factory, settings, now=NOW)
@@ -656,19 +664,19 @@ async def test_schedules_outrank_batches(session_factory):
 
 
 async def test_batch_target_skip_branches(session_factory):
-    deleted = await _seed_elder(session_factory)
-    bad_tz = await _seed_elder(session_factory)
-    capped = await _seed_elder(session_factory)
-    blocked = await _seed_elder(session_factory)
+    deleted = await _seed_contact(session_factory)
+    bad_tz = await _seed_contact(session_factory)
+    capped = await _seed_contact(session_factory)
+    blocked = await _seed_contact(session_factory)
     batch_id = await _seed_running_batch(
-        session_factory, elder_ids=[deleted.id, bad_tz.id, capped.id, blocked.id]
+        session_factory, contact_ids=[deleted.id, bad_tz.id, capped.id, blocked.id]
     )
-    await _delete_elder(session_factory, deleted.id)  # FK SET NULL orphans target 0
-    await _set_elder(session_factory, bad_tz.id, timezone="Not/AZone")
+    await _delete_contact(session_factory, deleted.id)  # FK SET NULL orphans target 0
+    await _set_contact(session_factory, bad_tz.id, timezone="Not/AZone")
     for _ in range(2):  # default daily cap = 2: two reserved-key roots already on TODAY
         await _seed_call(
             session_factory,
-            elder_id=capped.id,
+            contact_id=capped.id,
             status=CallStatus.QUEUED,
             scheduled_at=NOW,
             key=f"sched:{uuid.uuid4()}:{TODAY.isoformat()}",
@@ -686,11 +694,11 @@ async def test_batch_target_skip_branches(session_factory):
 
     assert counts["batch_targets"] == 4
     targets = await _targets(session_factory, batch_id)
-    assert (targets[0].status, targets[0].skip_reason) == ("skipped", "elder_deleted")
+    assert (targets[0].status, targets[0].skip_reason) == ("skipped", "contact_deleted")
     assert (targets[1].status, targets[1].skip_reason) == ("skipped", "invalid_timezone")
     assert (targets[2].status, targets[2].skip_reason) == ("skipped", "daily_cap")
     # Spec §7: skips log at WARNING (fail-closed paths at ERROR), ids only.
-    assert any("elder deleted" in m for m in warnings)
+    assert any("contact deleted" in m for m in warnings)
     assert any("daily autonomous-call cap" in m for m in warnings)
     # DNC: terminal row consumes the key; target materialized — the finalizer
     # settles it done/dnc_blocked next cycle (asserted in the finalizer matrix).
@@ -700,11 +708,11 @@ async def test_batch_target_skip_branches(session_factory):
 
 
 async def test_batch_target_key_conflict_skipped(session_factory):
-    owner = await _seed_elder(session_factory)
-    foreign = await _seed_elder(session_factory)
-    batch_id = await _seed_running_batch(session_factory, elder_ids=[owner.id])
+    owner = await _seed_contact(session_factory)
+    foreign = await _seed_contact(session_factory)
+    batch_id = await _seed_running_batch(session_factory, contact_ids=[owner.id])
     squatter_id = await _seed_call(
-        session_factory, elder_id=foreign.id, scheduled_at=NOW, key=f"batch:{batch_id}:0"
+        session_factory, contact_id=foreign.id, scheduled_at=NOW, key=f"batch:{batch_id}:0"
     )
 
     errors: list[str] = []
@@ -719,15 +727,15 @@ async def test_batch_target_key_conflict_skipped(session_factory):
     assert targets[0].call_id is None  # never linked to a foreign row
     calls = await _calls(session_factory)
     assert [c.id for c in calls] == [squatter_id]  # no second row minted
-    assert calls[0].elder_id == foreign.id  # the foreign row untouched
+    assert calls[0].contact_id == foreign.id  # the foreign row untouched
     assert errors
 
 
 async def test_batch_window_pushes_dial_time(session_factory):
-    elder = await _seed_elder(session_factory)
+    contact = await _seed_contact(session_factory)
     batch_id = await _seed_running_batch(
         session_factory,
-        elder_ids=[elder.id],
+        contact_ids=[contact.id],
         window_start=time(10, 0),
         window_end=time(12, 0),
         days_of_week=schedule_windows.days_to_mask(["mon"]),
@@ -741,24 +749,24 @@ async def test_batch_window_pushes_dial_time(session_factory):
     assert targets[0].call_id is not None
     call = await _get_call(session_factory, targets[0].call_id)
     # NOW is Wednesday: the clamp is pushed into the batch window/day-mask —
-    # next Monday 10:00 elder-local (EDT) = 14:00Z.
+    # next Monday 10:00 contact-local (EDT) = 14:00Z.
     assert call.scheduled_at == PUSHED_MONDAY_DIAL
 
 
 async def test_pushed_target_capped_against_pushed_day(session_factory):
-    elder = await _seed_elder(session_factory)
-    # Two pre-existing autonomous roots already on the PUSHED Monday (elder-local).
+    contact = await _seed_contact(session_factory)
+    # Two pre-existing autonomous roots already on the PUSHED Monday (contact-local).
     for hour in (14, 15):
         await _seed_call(
             session_factory,
-            elder_id=elder.id,
+            contact_id=contact.id,
             status=CallStatus.QUEUED,
             scheduled_at=datetime(2026, 6, 15, hour, 0, tzinfo=UTC),
             key=f"sched:{uuid.uuid4()}:2026-06-15",
         )
     batch_id = await _seed_running_batch(
         session_factory,
-        elder_ids=[elder.id],
+        contact_ids=[contact.id],
         window_start=time(10, 0),
         window_end=time(12, 0),
         days_of_week=schedule_windows.days_to_mask(["mon"]),
@@ -775,11 +783,11 @@ async def test_pushed_target_capped_against_pushed_day(session_factory):
 
 async def test_crash_mid_batch_resume(session_factory):
     # §9 poller-crash shape: a cross-process duplicate already carries target 0's
-    # key (same elder, chain root) while target 0 is still pending.
-    elder_ids = [(await _seed_elder(session_factory)).id for _ in range(3)]
-    batch_id = await _seed_running_batch(session_factory, elder_ids=elder_ids)
+    # key (same contact, chain root) while target 0 is still pending.
+    contact_ids = [(await _seed_contact(session_factory)).id for _ in range(3)]
+    batch_id = await _seed_running_batch(session_factory, contact_ids=contact_ids)
     orphan_id = await _seed_call(
-        session_factory, elder_id=elder_ids[0], scheduled_at=NOW, key=f"batch:{batch_id}:0"
+        session_factory, contact_id=contact_ids[0], scheduled_at=NOW, key=f"batch:{batch_id}:0"
     )
 
     counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=NOW)
@@ -796,66 +804,74 @@ async def test_crash_mid_batch_resume(session_factory):
 
 
 async def test_finalizer_matrix(session_factory):
-    elders = [await _seed_elder(session_factory) for _ in range(7)]
-    batch_id = await _seed_running_batch(session_factory, elder_ids=[e.id for e in elders])
+    contacts = [await _seed_contact(session_factory) for _ in range(7)]
+    batch_id = await _seed_running_batch(session_factory, contact_ids=[e.id for e in contacts])
     targets = await _targets(session_factory, batch_id)
 
     # (a) completed root, no child -> settled done/completed.
-    a_root = await _seed_call(session_factory, elder_id=elders[0].id, status=CallStatus.COMPLETED)
+    a_root = await _seed_call(
+        session_factory, contact_id=contacts[0].id, status=CallStatus.COMPLETED
+    )
     # (b) no_answer root WITH a QUEUED child -> unsettled (stays materialized).
-    b_root = await _seed_call(session_factory, elder_id=elders[1].id, status=CallStatus.NO_ANSWER)
+    b_root = await _seed_call(
+        session_factory, contact_id=contacts[1].id, status=CallStatus.NO_ANSWER
+    )
     await _seed_call(
         session_factory,
-        elder_id=elders[1].id,
+        contact_id=contacts[1].id,
         status=CallStatus.QUEUED,
         scheduled_at=NOW + timedelta(hours=1),
         parent_call_id=b_root,
         attempt=2,
     )
     # (c) ladder-exhausted no_answer: attempts 1 -> 2 -> 3, childless tip -> settled.
-    c_root = await _seed_call(session_factory, elder_id=elders[2].id, status=CallStatus.NO_ANSWER)
+    c_root = await _seed_call(
+        session_factory, contact_id=contacts[2].id, status=CallStatus.NO_ANSWER
+    )
     c_mid = await _seed_call(
         session_factory,
-        elder_id=elders[2].id,
+        contact_id=contacts[2].id,
         status=CallStatus.NO_ANSWER,
         parent_call_id=c_root,
         attempt=2,
     )
     await _seed_call(
         session_factory,
-        elder_id=elders[2].id,
+        contact_id=contacts[2].id,
         status=CallStatus.NO_ANSWER,
         parent_call_id=c_mid,
         attempt=3,
     )
-    # (d) fail-closed-no-child: FAILED root, elder deleted => no child ever -> settled.
-    d_root = await _seed_call(session_factory, elder_id=elders[3].id, status=CallStatus.FAILED)
-    await _delete_elder(session_factory, elders[3].id)
+    # (d) fail-closed-no-child: FAILED root, contact deleted => no child ever -> settled.
+    d_root = await _seed_call(session_factory, contact_id=contacts[3].id, status=CallStatus.FAILED)
+    await _delete_contact(session_factory, contacts[3].id)
     # (e) voicemail chain: root with child -> unsettled; childless attempt-2 -> settled.
     e1_root = await _seed_call(
-        session_factory, elder_id=elders[4].id, status=CallStatus.VOICEMAIL_LEFT
+        session_factory, contact_id=contacts[4].id, status=CallStatus.VOICEMAIL_LEFT
     )
     await _seed_call(
         session_factory,
-        elder_id=elders[4].id,
+        contact_id=contacts[4].id,
         status=CallStatus.QUEUED,
         scheduled_at=NOW + timedelta(hours=3),
         parent_call_id=e1_root,
         attempt=2,
     )
     e2_root = await _seed_call(
-        session_factory, elder_id=elders[5].id, status=CallStatus.VOICEMAIL_LEFT
+        session_factory, contact_id=contacts[5].id, status=CallStatus.VOICEMAIL_LEFT
     )
     await _seed_call(
         session_factory,
-        elder_id=elders[5].id,
+        contact_id=contacts[5].id,
         status=CallStatus.VOICEMAIL_LEFT,
         parent_call_id=e2_root,
         attempt=2,
     )
     # (f) DNC_BLOCKED root, no child -> settled done/dnc_blocked: completes the §9
     # DNC-batch flow (blocked number -> DNC_BLOCKED row -> target materialized -> done).
-    f_root = await _seed_call(session_factory, elder_id=elders[6].id, status=CallStatus.DNC_BLOCKED)
+    f_root = await _seed_call(
+        session_factory, contact_id=contacts[6].id, status=CallStatus.DNC_BLOCKED
+    )
 
     roots = [a_root, b_root, c_root, d_root, e1_root, e2_root, f_root]
     for target, root in zip(targets, roots, strict=True):
@@ -880,19 +896,19 @@ async def test_finalizer_matrix(session_factory):
 async def test_sweep_cancels_queued_chains_backstop(session_factory):
     # The narrow cancel-vs-terminal-commit race: a cancelled batch still owns a
     # materialized target whose chain tip sits QUEUED.
-    elders = [await _seed_elder(session_factory) for _ in range(2)]
+    contacts = [await _seed_contact(session_factory) for _ in range(2)]
     batch_id = await _seed_running_batch(
-        session_factory, elder_ids=[e.id for e in elders], status="cancelled"
+        session_factory, contact_ids=[e.id for e in contacts], status="cancelled"
     )
     targets = await _targets(session_factory, batch_id)
     queued_root = await _seed_call(
         session_factory,
-        elder_id=elders[0].id,
+        contact_id=contacts[0].id,
         status=CallStatus.QUEUED,
         scheduled_at=NOW + timedelta(minutes=30),
     )
     inflight_root = await _seed_call(
-        session_factory, elder_id=elders[1].id, status=CallStatus.IN_PROGRESS, fresh=True
+        session_factory, contact_id=contacts[1].id, status=CallStatus.IN_PROGRESS, fresh=True
     )
     await _set_target(
         session_factory,
@@ -919,10 +935,12 @@ async def test_sweep_cancels_queued_chains_backstop(session_factory):
 
 async def test_completion_stamps_running_and_drained_cancelled(session_factory):
     # Running batch whose single chain completed.
-    run_elder = await _seed_elder(session_factory)
-    run_batch = await _seed_running_batch(session_factory, elder_ids=[run_elder.id])
+    run_contact = await _seed_contact(session_factory)
+    run_batch = await _seed_running_batch(session_factory, contact_ids=[run_contact.id])
     run_targets = await _targets(session_factory, run_batch)
-    run_root = await _seed_call(session_factory, elder_id=run_elder.id, status=CallStatus.COMPLETED)
+    run_root = await _seed_call(
+        session_factory, contact_id=run_contact.id, status=CallStatus.COMPLETED
+    )
     await _set_target(
         session_factory,
         run_targets[0].id,
@@ -932,16 +950,16 @@ async def test_completion_stamps_running_and_drained_cancelled(session_factory):
     )
 
     # Cancelled batch: one guard-cancelled chain + one that finished naturally after cancel.
-    c_elders = [await _seed_elder(session_factory) for _ in range(2)]
+    c_contacts = [await _seed_contact(session_factory) for _ in range(2)]
     c_batch = await _seed_running_batch(
-        session_factory, elder_ids=[e.id for e in c_elders], status="cancelled"
+        session_factory, contact_ids=[e.id for e in c_contacts], status="cancelled"
     )
     c_targets = await _targets(session_factory, c_batch)
     cancelled_root = await _seed_call(
-        session_factory, elder_id=c_elders[0].id, status=CallStatus.CANCELLED
+        session_factory, contact_id=c_contacts[0].id, status=CallStatus.CANCELLED
     )
     natural_root = await _seed_call(
-        session_factory, elder_id=c_elders[1].id, status=CallStatus.NO_ANSWER
+        session_factory, contact_id=c_contacts[1].id, status=CallStatus.NO_ANSWER
     )
     await _set_target(
         session_factory,
@@ -993,10 +1011,10 @@ async def test_batch_target_policy_window_empty_skips_observably(session_factory
     # scheduled outside the window, never silently dropped, no call row. The
     # source="batch" x result="skipped_window" emission is the new bounded
     # label value (the custom_metrics docstring's old impossibility claim).
-    elder = await _seed_elder(session_factory, policy={"quiet_hours_start_local": "11:00"})
+    contact = await _seed_contact(session_factory, policy={"quiet_hours_start_local": "11:00"})
     batch_id = await _seed_running_batch(
         session_factory,
-        elder_ids=[elder.id],
+        contact_ids=[contact.id],
         window_start=time(9, 0),
         window_end=time(10, 0),
         days_of_week=127,
@@ -1025,10 +1043,10 @@ async def test_batch_target_dial_pushed_to_policy_start_inside_window(session_fa
     # window at 09:30 local — the dial lands AT the policy start (11:00 EDT =
     # 15:00Z), never inside the policy-forbidden [09:00, 11:00) zone.
     now = datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT
-    elder = await _seed_elder(session_factory, policy={"quiet_hours_start_local": "11:00"})
+    contact = await _seed_contact(session_factory, policy={"quiet_hours_start_local": "11:00"})
     batch_id = await _seed_running_batch(
         session_factory,
-        elder_ids=[elder.id],
+        contact_ids=[contact.id],
         window_start=time(9, 0),
         window_end=time(18, 0),
         days_of_week=127,
@@ -1049,10 +1067,10 @@ async def test_schedule_occurrence_policy_window_empty_skips(session_factory):
     # 11:00, now 09:15 local on a masked weekday -> skipped_window, no call row,
     # and next_run_at advanced POLICY-FREE (cadence never sees policy bounds).
     now = datetime(2026, 6, 10, 13, 15, tzinfo=UTC)  # 09:15 EDT, Wednesday
-    elder = await _seed_elder(session_factory, policy={"quiet_hours_start_local": "11:00"})
+    contact = await _seed_contact(session_factory, policy={"quiet_hours_start_local": "11:00"})
     sid = await _seed_schedule(
         session_factory,
-        elder.id,
+        contact.id,
         next_run_at=now - timedelta(minutes=5),
         window_start=time(9, 0),
         window_end=time(10, 0),
@@ -1080,10 +1098,10 @@ async def test_schedule_occurrence_policy_end_clamp_past_skips(session_factory):
     # 10:00. Companion at 09:45 local: inside the effective window -> created at
     # now; next_run_at advances policy-free.
     early = datetime(2026, 6, 10, 13, 45, tzinfo=UTC)  # 09:45 EDT
-    elder_a = await _seed_elder(session_factory, policy={"quiet_hours_end_local": "10:00"})
+    contact_a = await _seed_contact(session_factory, policy={"quiet_hours_end_local": "10:00"})
     sid_a = await _seed_schedule(
         session_factory,
-        elder_a.id,
+        contact_a.id,
         next_run_at=early - timedelta(minutes=5),
         window_start=time(9, 0),
         window_end=time(12, 0),
@@ -1101,10 +1119,10 @@ async def test_schedule_occurrence_policy_end_clamp_past_skips(session_factory):
     # policy end (10:00) has passed: the skip keys on the EFFECTIVE end — a
     # clamp past it becomes skipped_window, never a late dial.
     late = datetime(2026, 6, 10, 14, 30, tzinfo=UTC)  # 10:30 EDT
-    elder_b = await _seed_elder(session_factory, policy={"quiet_hours_end_local": "10:00"})
+    contact_b = await _seed_contact(session_factory, policy={"quiet_hours_end_local": "10:00"})
     sid_b = await _seed_schedule(
         session_factory,
-        elder_b.id,
+        contact_b.id,
         next_run_at=late - timedelta(minutes=5),
         window_start=time(9, 0),
         window_end=time(12, 0),
@@ -1125,10 +1143,10 @@ async def test_schedule_occurrence_policy_push_no_reschedule_loop(session_factor
     # a naive policy-narrowed start_utc would take the `rescheduled` branch
     # with next_run_at(now) == now and re-claim the row every cycle until 09:30.
     now = datetime(2026, 6, 10, 13, 0, tzinfo=UTC)  # exactly 09:00 EDT
-    elder = await _seed_elder(session_factory, policy={"quiet_hours_start_local": "09:30"})
+    contact = await _seed_contact(session_factory, policy={"quiet_hours_start_local": "09:30"})
     sid = await _seed_schedule(
         session_factory,
-        elder.id,
+        contact.id,
         next_run_at=now,
         window_start=time(9, 0),
         window_end=time(12, 0),
@@ -1151,13 +1169,13 @@ async def test_schedule_occurrence_policy_push_no_reschedule_loop(session_factor
 
 
 async def test_windowless_batch_target_clamps_to_policy_start(session_factory):
-    # Windowless batch + elder-profile policy: with no batch window there is no
+    # Windowless batch + contact-profile policy: with no batch window there is no
     # next_run_at composition at all — the dial time is the bare policy-aware
     # next_allowed clamp, so a 09:30 EDT poll under policy start 11:00 schedules
     # the target at 11:00 EDT (15:00Z), never at now.
     now = datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT, Wednesday
-    elder = await _seed_elder(session_factory, policy={"quiet_hours_start_local": "11:00"})
-    batch_id = await _seed_running_batch(session_factory, elder_ids=[elder.id])  # no window
+    contact = await _seed_contact(session_factory, policy={"quiet_hours_start_local": "11:00"})
+    batch_id = await _seed_running_batch(session_factory, contact_ids=[contact.id])  # no window
 
     counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=now)
 
@@ -1172,13 +1190,13 @@ async def test_windowless_batch_target_clamps_to_policy_start(session_factory):
 
 async def test_schedule_profile_override_policy_clamps_materialized_call(session_factory):
     # profile_override threading pin (§3.3.2): the SCHEDULE's override carries
-    # the narrowing (start 11:00) while the elder's assigned profile resolves
-    # but has NO policy section. If only elder_profile_id were threaded, the
+    # the narrowing (start 11:00) while the contact's assigned profile resolves
+    # but has NO policy section. If only contact_profile_id were threaded, the
     # whole-profile walk would yield statutory and the call would dial at now
     # (09:30 EDT, inside [09:00, 17:00)); the override must win — the
     # materialized call clamps to the override's window start (11:00 EDT).
     now = datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT, Wednesday
-    elder = await _seed_elder(session_factory, policy=None)  # published, no policy key
+    contact = await _seed_contact(session_factory, policy=None)  # published, no policy key
     async with session_factory() as db:
         override_pid = await _publish_policy_profile(
             db, policy={"quiet_hours_start_local": "11:00"}
@@ -1186,7 +1204,7 @@ async def test_schedule_profile_override_policy_clamps_materialized_call(session
         await db.commit()
     sid = await _seed_schedule(
         session_factory,
-        elder.id,
+        contact.id,
         next_run_at=now - timedelta(minutes=5),
         profile_override=override_pid,
     )
@@ -1204,10 +1222,10 @@ async def test_schedule_profile_override_policy_clamps_materialized_call(session
 
 async def test_batch_profile_override_policy_clamps_materialized_call(session_factory):
     # Same threading pin for the batch path: the BATCH-level override carries
-    # the narrowing while the elder's profile has no policy section; the target
+    # the narrowing while the contact's profile has no policy section; the target
     # dial is pushed to the override's window start, never dialed at now.
     now = datetime(2026, 6, 10, 13, 30, tzinfo=UTC)  # 09:30 EDT, Wednesday
-    elder = await _seed_elder(session_factory, policy=None)  # published, no policy key
+    contact = await _seed_contact(session_factory, policy=None)  # published, no policy key
     async with session_factory() as db:
         override_pid = await _publish_policy_profile(
             db, policy={"quiet_hours_start_local": "11:00"}
@@ -1215,7 +1233,7 @@ async def test_batch_profile_override_policy_clamps_materialized_call(session_fa
         await db.commit()
     batch_id = await _seed_running_batch(
         session_factory,
-        elder_ids=[elder.id],
+        contact_ids=[contact.id],
         window_start=time(9, 0),
         window_end=time(18, 0),
         days_of_week=127,
@@ -1236,8 +1254,8 @@ async def test_batch_profile_override_policy_clamps_materialized_call(session_fa
 async def test_policy_free_profiles_orchestrate_unchanged(session_factory):
     # Ship-inert pin (spec §9): a resolving profile WITHOUT a `policy` section
     # reproduces the pre-policy happy path byte-for-byte (statutory defaults).
-    elder = await _seed_elder(session_factory, policy=None)  # published, no policy key
-    sid = await _seed_schedule(session_factory, elder.id, next_run_at=NOW - timedelta(hours=1))
+    contact = await _seed_contact(session_factory, policy=None)  # published, no policy key
+    sid = await _seed_schedule(session_factory, contact.id, next_run_at=NOW - timedelta(hours=1))
 
     counts = await schedule_orchestrator.poll_once(session_factory, _settings(), now=NOW)
 

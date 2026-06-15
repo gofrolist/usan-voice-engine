@@ -1,8 +1,8 @@
 """Request/response schemas for one-off call batches (spec §4.2).
 
-Create-time contract: 1-500 targets, each elder unique within the batch (the
+Create-time contract: 1-500 targets, each contact unique within the batch (the
 422 names the offending ``target_index``), per-target ``dynamic_vars`` capped
-at the canonical 8 KB, optional per-elder-local window that must intersect
+at the canonical 8 KB, optional per-contact-local window that must intersect
 quiet hours [09:00, 21:00), and a naive ``trigger_at`` assumed UTC (precedent:
 ``ScheduleCallbackRequest._assume_utc``).
 
@@ -37,7 +37,7 @@ MAX_BATCH_NAME_LENGTH = 200
 
 
 class BatchWindow(BaseModel):
-    """Optional per-elder-local dial window; ``days_of_week is None`` = any day."""
+    """Optional per-contact-local dial window; ``days_of_week is None`` = any day."""
 
     start_local: time
     end_local: time
@@ -59,7 +59,7 @@ class BatchWindow(BaseModel):
 
 
 class BatchTargetIn(BaseModel):
-    elder_id: uuid.UUID
+    contact_id: uuid.UUID
     dynamic_vars: dict[str, Any] = Field(default_factory=dict)
     profile_override: uuid.UUID | None = None
 
@@ -89,15 +89,15 @@ class CreateBatchRequest(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _unique_elders(self) -> CreateBatchRequest:
-        # Duplicate elders within one batch = N simultaneous campaigns against one
-        # elder from a single payload — rejected with the offending index (spec §4.2).
+    def _unique_contacts(self) -> CreateBatchRequest:
+        # Duplicate contacts within one batch = N simultaneous campaigns against one
+        # contact from a single payload — rejected with the offending index (spec §4.2).
         seen: dict[uuid.UUID, int] = {}
         for index, target in enumerate(self.targets):
-            first = seen.setdefault(target.elder_id, index)
+            first = seen.setdefault(target.contact_id, index)
             if first != index:
                 raise ValueError(
-                    f"duplicate elder_id across targets: target_index {index} "
+                    f"duplicate contact_id across targets: target_index {index} "
                     f"repeats target_index {first}"
                 )
         return self
@@ -128,7 +128,7 @@ def payload_digest(req: CreateBatchRequest) -> str:
         # a JSON array: target ORDER is part of the payload (it assigns target_index)
         "targets": [
             {
-                "elder_id": str(t.elder_id),
+                "contact_id": str(t.contact_id),
                 "dynamic_vars": t.dynamic_vars,
                 "profile_override": (
                     None if t.profile_override is None else str(t.profile_override)
@@ -153,7 +153,7 @@ class BatchCounts(BaseModel):
 
 class BatchTargetResponse(BaseModel):
     target_index: int
-    elder_id: uuid.UUID | None
+    contact_id: uuid.UUID | None
     status: str
     skip_reason: str | None
     call_id: uuid.UUID | None
@@ -165,7 +165,7 @@ class BatchTargetResponse(BaseModel):
     def from_model(cls, t: CallBatchTarget) -> BatchTargetResponse:
         return cls(
             target_index=t.target_index,
-            elder_id=t.elder_id,
+            contact_id=t.contact_id,
             status=t.status,
             skip_reason=t.skip_reason,
             call_id=t.call_id,

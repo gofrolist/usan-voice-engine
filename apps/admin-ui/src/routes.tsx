@@ -5,7 +5,7 @@ import { PageLayout } from "./components/PageLayout";
 import { ProfilesListPage } from "./features/profiles/ProfilesListPage";
 import { ProfileEditorPage } from "./features/editor/ProfileEditorPage";
 import { VersionHistoryPage } from "./features/versions/VersionHistoryPage";
-import { EldersPage } from "./features/elders/EldersPage";
+import { ContactsPage } from "./features/contacts/ContactsPage";
 import { CallsPage } from "./features/calls/CallsPage";
 import { CallDetailPage } from "./features/calls/CallDetailPage";
 import { QueuesPage } from "./features/queues/QueuesPage";
@@ -37,7 +37,7 @@ export const router = createBrowserRouter([
           { path: "calls", element: <CallsPage /> },
           { path: "calls/:id", element: <CallDetailPage /> },
           { path: "queues", element: <QueuesPage /> },
-          { path: "contacts", element: <EldersPage /> },
+          { path: "contacts", element: <ContactsPage /> },
           { path: "defaults", element: <DefaultsPage /> },
           { path: "custom-variables", element: <CustomVariablesPage /> },
           { path: "audit", element: <AuditPage /> },

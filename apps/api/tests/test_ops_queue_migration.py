@@ -129,25 +129,25 @@ def test_status_check_constraints_present_and_enforced(async_database_url: str) 
     checks = asyncio.run(_check_constraints(async_database_url, "callback_requests"))
     assert "ck_callback_requests_status" in checks
 
-    # Runtime enforcement. These inserts bypass the `client` fixture's teardown
-    # TRUNCATE, so the seeded rows are deleted explicitly at the end.
-    elder_id = uuid.uuid4()
+    # Runtime enforcement (at HEAD: the table is `contacts`/`contact_id` after 0027). These
+    # inserts bypass the `client` fixture's teardown TRUNCATE, so rows are deleted explicitly.
+    contact_id = uuid.uuid4()
     call_id = uuid.uuid4()
     asyncio.run(
         _execute(
             async_database_url,
-            "INSERT INTO elders (id, name, phone_e164, timezone) "
+            "INSERT INTO contacts (id, name, phone_e164, timezone) "
             "VALUES (:id, 'Mig Test', '+19998880013', 'America/New_York')",
-            {"id": elder_id},
+            {"id": contact_id},
         )
     )
     asyncio.run(
         _execute(
             async_database_url,
-            "INSERT INTO calls (id, elder_id, direction, status) "
-            "VALUES (:id, :elder_id, CAST('outbound' AS call_direction), "
+            "INSERT INTO calls (id, contact_id, direction, status) "
+            "VALUES (:id, :contact_id, CAST('outbound' AS call_direction), "
             "CAST('queued' AS call_status))",
-            {"id": call_id, "elder_id": elder_id},
+            {"id": call_id, "contact_id": contact_id},
         )
     )
 
@@ -156,9 +156,9 @@ def test_status_check_constraints_present_and_enforced(async_database_url: str) 
         asyncio.run(
             _execute(
                 async_database_url,
-                "INSERT INTO follow_up_flags (call_id, elder_id, severity, category, status) "
-                "VALUES (:call_id, :elder_id, 'routine', 'medical', 'bogus')",
-                {"call_id": call_id, "elder_id": elder_id},
+                "INSERT INTO follow_up_flags (call_id, contact_id, severity, category, status) "
+                "VALUES (:call_id, :contact_id, 'routine', 'medical', 'bogus')",
+                {"call_id": call_id, "contact_id": contact_id},
             )
         )
 
@@ -166,14 +166,16 @@ def test_status_check_constraints_present_and_enforced(async_database_url: str) 
         asyncio.run(
             _execute(
                 async_database_url,
-                "INSERT INTO callback_requests (call_id, elder_id, requested_time_text, status) "
-                "VALUES (:call_id, :elder_id, 'x', 'bogus')",
-                {"call_id": call_id, "elder_id": elder_id},
+                "INSERT INTO callback_requests (call_id, contact_id, requested_time_text, status) "
+                "VALUES (:call_id, :contact_id, 'x', 'bogus')",
+                {"call_id": call_id, "contact_id": contact_id},
             )
         )
 
     asyncio.run(_execute(async_database_url, "DELETE FROM calls WHERE id = :id", {"id": call_id}))
-    asyncio.run(_execute(async_database_url, "DELETE FROM elders WHERE id = :id", {"id": elder_id}))
+    asyncio.run(
+        _execute(async_database_url, "DELETE FROM contacts WHERE id = :id", {"id": contact_id})
+    )
 
 
 def test_idx_calls_created_shape(async_database_url: str) -> None:
@@ -311,4 +313,8 @@ def test_downgrade_seed_upgrade_normalizes_and_roundtrips(
         )
     )
     asyncio.run(_execute(async_database_url, "DELETE FROM calls WHERE id = :id", {"id": call_id}))
-    asyncio.run(_execute(async_database_url, "DELETE FROM elders WHERE id = :id", {"id": elder_id}))
+    # Runs at HEAD (after the `upgrade head` above): the seeded `elders` row is now a
+    # `contacts` row (0027 renamed the table); delete it by the same id.
+    asyncio.run(
+        _execute(async_database_url, "DELETE FROM contacts WHERE id = :id", {"id": elder_id})
+    )

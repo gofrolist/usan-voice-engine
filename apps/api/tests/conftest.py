@@ -100,7 +100,7 @@ _TRUNCATE_ALL = (
     "call_batch_targets, call_batches, call_schedules, "
     "agent_profile_versions, agent_profiles, admin_audit_log, "
     "admin_users, follow_up_flags, callback_requests, sms_messages, "
-    "calls, dnc_list, elders "
+    "calls, dnc_list, contacts "
     "RESTART IDENTITY CASCADE"
 )
 

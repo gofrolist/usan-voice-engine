@@ -20,7 +20,7 @@ from usan_api.db.models import CallBatch, CallBatchTarget
 from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import callback_requests as callbacks_repo
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import follow_up_flags as flags_repo
 from usan_api.schemas.batch import BatchTargetIn
 
@@ -42,19 +42,21 @@ async def session_factory(async_database_url):
 async def _truncate(session_factory):
     async with session_factory() as db:
         await db.execute(
-            text("TRUNCATE call_batch_targets, call_batches, call_schedules, calls, elders CASCADE")
+            text(
+                "TRUNCATE call_batch_targets, call_batches, call_schedules, calls, contacts CASCADE"
+            )
         )
         await db.commit()
 
 
-async def _seed_elder(factory, *, name: str = "Events Elder") -> tuple[uuid.UUID, str]:
+async def _seed_contact(factory, *, name: str = "Events Contact") -> tuple[uuid.UUID, str]:
     phone = f"+1555{str(uuid.uuid4().int)[:7].zfill(7)}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(
+        contact = await contacts_repo.create_contact(
             db, name=name, phone_e164=phone, timezone="America/New_York"
         )
         await db.commit()
-        return elder.id, phone
+        return contact.id, phone
 
 
 def _batch_kwargs(**overrides):
@@ -73,21 +75,21 @@ def _batch_kwargs(**overrides):
 
 
 async def test_payload_field_allowlists_exact(session_factory):
-    elder_id, _phone = await _seed_elder(session_factory)
+    contact_id, _phone = await _seed_contact(session_factory)
     async with session_factory() as db:
         inbound = await calls_repo.create_inbound_call(
-            db, elder_id=elder_id, livekit_room=f"usan-inbound-{uuid.uuid4()}"
+            db, contact_id=contact_id, livekit_room=f"usan-inbound-{uuid.uuid4()}"
         )
         completed = await calls_repo.create_call(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.COMPLETED,
         )
         flag = await flags_repo.create_follow_up_flag(
             db,
             call_id=completed.id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             severity="routine",
             category="other",
             reason=None,
@@ -95,13 +97,13 @@ async def test_payload_field_allowlists_exact(session_factory):
         callback = await callbacks_repo.create_callback_request(
             db,
             call_id=completed.id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             requested_time_text="tomorrow morning",
             requested_at=None,
             notes=None,
         )
         batch = await batches_repo.create_batch_with_targets(
-            db, targets=[BatchTargetIn(elder_id=elder_id)], **_batch_kwargs()
+            db, targets=[BatchTargetIn(contact_id=contact_id)], **_batch_kwargs()
         )
 
         table = [
@@ -110,7 +112,7 @@ async def test_payload_field_allowlists_exact(session_factory):
                 await webhook_events.call_started_payload(db, inbound),
                 {
                     "call_id",
-                    "elder_id",
+                    "contact_id",
                     "direction",
                     "attempt",
                     "parent_call_id",
@@ -123,7 +125,7 @@ async def test_payload_field_allowlists_exact(session_factory):
                 await webhook_events.call_completed_payload(db, completed),
                 {
                     "call_id",
-                    "elder_id",
+                    "contact_id",
                     "direction",
                     "status",
                     "attempt",
@@ -143,7 +145,7 @@ async def test_payload_field_allowlists_exact(session_factory):
             (
                 "callback.created",
                 webhook_events.callback_created_payload(callback),
-                {"callback_id", "call_id", "elder_id", "requested_at", "created_at"},
+                {"callback_id", "call_id", "contact_id", "requested_at", "created_at"},
             ),
             (
                 "batch.completed",
@@ -166,13 +168,13 @@ async def test_payload_field_allowlists_exact(session_factory):
 async def test_phi_exclusions_pinned(session_factory):
     phone = "+15550007777"
     async with session_factory() as db:
-        elder = await elders_repo.create_elder(
+        contact = await contacts_repo.create_contact(
             db, name="PHIPHI_NAME", phone_e164=phone, timezone="America/New_York"
         )
-        elder_id = elder.id
+        contact_id = contact.id
         call = await calls_repo.create_call(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.COMPLETED,
             idempotency_key="PHIPHI-IDEMKEY",
@@ -189,7 +191,7 @@ async def test_phi_exclusions_pinned(session_factory):
         flag = await flags_repo.create_follow_up_flag(
             db,
             call_id=call.id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             severity="urgent",
             category="medical",
             reason="PHIPHI_REASON",
@@ -197,14 +199,14 @@ async def test_phi_exclusions_pinned(session_factory):
         callback = await callbacks_repo.create_callback_request(
             db,
             call_id=call.id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             requested_time_text="PHIPHI_TIMETEXT",
             requested_at=None,
             notes="PHIPHI_NOTES",
         )
         batch = await batches_repo.create_batch_with_targets(
             db,
-            targets=[BatchTargetIn(elder_id=elder_id)],
+            targets=[BatchTargetIn(contact_id=contact_id)],
             **_batch_kwargs(name="PHIPHI_BATCHNAME", idempotency_key="PHIPHI-BKEY"),
         )
 
@@ -217,10 +219,10 @@ async def test_phi_exclusions_pinned(session_factory):
         }
 
     sentinels = (
-        "PHIPHI_NAME",  # elder name
-        phone,  # elder phone_e164
+        "PHIPHI_NAME",  # contact name
+        phone,  # contact phone_e164
         "PHIPHI_REASON",  # flag reason (free text)
-        "medical",  # flag category (§6.4: dropped with elder_id)
+        "medical",  # flag category (§6.4: dropped with contact_id)
         "PHIPHI_TIMETEXT",  # callback requested_time_text
         "PHIPHI_NOTES",  # callback notes
         "PHIPHI_ENDREASON",  # end_reason (conditionally free text)
@@ -239,19 +241,19 @@ async def test_phi_exclusions_pinned(session_factory):
         for sentinel in sentinels:
             assert sentinel not in blob, f"{event} leaked {sentinel!r}"
 
-    # elder_id is excluded from flag.created specifically (§6.4: the health-domain
+    # contact_id is excluded from flag.created specifically (§6.4: the health-domain
     # severity/category x person-identifier pairing); it stays on call.*/callback.*.
-    assert str(elder_id) not in json.dumps(payloads["flag.created"])
-    assert str(elder_id) in json.dumps(payloads["callback.created"])
+    assert str(contact_id) not in json.dumps(payloads["flag.created"])
+    assert str(contact_id) in json.dumps(payloads["callback.created"])
 
 
 async def test_origin_root_walk_retry_child(session_factory):
-    elder_id, _phone = await _seed_elder(session_factory)
+    contact_id, _phone = await _seed_contact(session_factory)
     batch_uuid = uuid.uuid4()
     async with session_factory() as db:
         root = await calls_repo.create_call(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.NO_ANSWER,
             idempotency_key=f"batch:{batch_uuid}:3",
@@ -271,17 +273,17 @@ async def test_origin_root_walk_retry_child(session_factory):
 
 
 async def test_origin_null_for_operator_and_inbound(session_factory):
-    elder_id, _phone = await _seed_elder(session_factory)
+    contact_id, _phone = await _seed_contact(session_factory)
     async with session_factory() as db:
         oneoff = await calls_repo.create_call(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.COMPLETED,
             idempotency_key="operator-key-1",
         )
         inbound = await calls_repo.create_inbound_call(
-            db, elder_id=None, livekit_room=f"usan-inbound-{uuid.uuid4()}"
+            db, contact_id=None, livekit_room=f"usan-inbound-{uuid.uuid4()}"
         )
         completed = await webhook_events.call_completed_payload(db, oneoff)
         started = await webhook_events.call_started_payload(db, inbound)
@@ -289,15 +291,15 @@ async def test_origin_null_for_operator_and_inbound(session_factory):
     assert completed["data"]["origin"] is None
     assert started["data"]["origin"] is None
     assert started["data"]["direction"] == "inbound"
-    assert started["data"]["elder_id"] is None  # unknown inbound caller tolerated
+    assert started["data"]["contact_id"] is None  # unknown inbound caller tolerated
 
 
 async def test_call_completed_nulls_for_dnc_at_birth(session_factory):
-    elder_id, _phone = await _seed_elder(session_factory)
+    contact_id, _phone = await _seed_contact(session_factory)
     async with session_factory() as db:
         call = await calls_repo.create_call(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.DNC_BLOCKED,
         )
@@ -311,11 +313,11 @@ async def test_call_completed_nulls_for_dnc_at_birth(session_factory):
 
 
 async def test_batch_completed_counts(session_factory):
-    elder_ids = [(await _seed_elder(session_factory))[0] for _ in range(3)]
+    contact_ids = [(await _seed_contact(session_factory))[0] for _ in range(3)]
     async with session_factory() as db:
         batch = await batches_repo.create_batch_with_targets(
             db,
-            targets=[BatchTargetIn(elder_id=eid) for eid in elder_ids],
+            targets=[BatchTargetIn(contact_id=eid) for eid in contact_ids],
             **_batch_kwargs(),
         )
         await db.commit()

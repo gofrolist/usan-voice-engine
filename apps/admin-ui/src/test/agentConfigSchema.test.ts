@@ -19,7 +19,7 @@ function validConfig(): AgentConfigForm {
       goodbye_message: "Take care, goodbye.",
       inbound_opening: "Greet warmly and begin.",
       inbound_personalization_template:
-        "Speaking with {elder_name}. {last_check_in_line} Begin the check-in.",
+        "Speaking with {contact_name}. {last_check_in_line} Begin the check-in.",
     },
     voice: {
       cartesia_voice_id: null,
@@ -148,14 +148,14 @@ describe("agentConfigSchema", () => {
   it("accepts {{tokens}} in the personalization template", () => {
     const cfg = validConfig();
     cfg.prompts.inbound_personalization_template =
-      "Speaking with {{elder_name}}. {{last_check_in_line}} Begin.";
+      "Speaking with {{contact_name}}. {{last_check_in_line}} Begin.";
     expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
   });
 
   it("still accepts the two legacy single-brace slots in the template", () => {
     const cfg = validConfig();
     cfg.prompts.inbound_personalization_template =
-      "Speaking with {elder_name}. {last_check_in_line} Begin.";
+      "Speaking with {contact_name}. {last_check_in_line} Begin.";
     expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
   });
 
@@ -168,7 +168,7 @@ describe("agentConfigSchema", () => {
   it("accepts an unknown {{token}} in the template (warn, never block)", () => {
     const cfg = validConfig();
     cfg.prompts.inbound_personalization_template =
-      "Speaking with {{elder_name}}. {{made_up_var}} Begin.";
+      "Speaking with {{contact_name}}. {{made_up_var}} Begin.";
     expect(agentConfigSchema.safeParse(cfg).success).toBe(true);
   });
 });

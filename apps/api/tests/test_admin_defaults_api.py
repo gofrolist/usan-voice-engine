@@ -94,13 +94,13 @@ def test_defaults_unpublished_default_is_ineligible(client, admin_session):
 def test_defaults_never_returns_phi_or_call_keys(client, admin_session):
     # The response is a fixed read model: per-direction default refs + resolution
     # order + the built-in config. It must carry NO per-call PHI key (a contact's
-    # masked phone, elder id, transcript, etc.). The static built-in prompt copy may
-    # contain the word "phone" ("...an elder over the phone..."), so assert on the
+    # masked phone, contact id, transcript, etc.). The static built-in prompt copy may
+    # contain the word "phone" ("...an contact over the phone..."), so assert on the
     # response KEYS, not a substring of the rendered prompt text.
     pid = _publish_new_profile(client)
     client.post(f"/v1/admin/profiles/{pid}/set-default", json={"direction": "inbound"})
     body = client.get("/v1/admin/defaults").json()
     assert set(body) == {"directions", "resolution_order", "builtin_fallback"}
     dp = next(d for d in body["directions"] if d["direction"] == "inbound")["default_profile"]
-    # Only name/id/status/version/eligibility — never a phone, masked_phone or elder_id.
+    # Only name/id/status/version/eligibility — never a phone, masked_phone or contact_id.
     assert set(dp) == {"id", "name", "status", "published_version", "eligible"}

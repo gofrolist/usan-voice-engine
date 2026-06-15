@@ -67,8 +67,8 @@ _SUBSTITUTE_CORPUS = [
     ("Hi {{nope}}!", {"first_name": "Margaret"}),
     ("Mood {{last_mood}}.", {}),
     (
-        "Hi {elder_name}.\n{last_check_in_line}",
-        {"elder_name": "Ada", "last_check_in_line": "Last seen Tuesday.\n"},
+        "Hi {contact_name}.\n{last_check_in_line}",
+        {"contact_name": "Ada", "last_check_in_line": "Last seen Tuesday.\n"},
     ),
     ("a {other} b", {"other": "X"}),
     ("use {0} and { and } and {unknown_slot}", {"first_name": "x"}),
@@ -108,3 +108,32 @@ def test_build_vars_matches_agent_on_corpus():
 def test_builtin_names_and_defaults_match_agent():
     assert api_sub.BUILTIN_NAMES == agent_sub.BUILTIN_NAMES
     assert api_sub.BUILTIN_DEFAULTS == agent_sub.BUILTIN_DEFAULTS
+
+
+def _load_agent_agent_config():
+    """Load the agent's self-contained agent_config.py (pydantic-only) by file path."""
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "services"
+        / "agent"
+        / "src"
+        / "usan_agent"
+        / "agent_config.py"
+    )
+    spec = importlib.util.spec_from_file_location("usan_agent_agent_config_mirror", path)
+    assert spec is not None
+    assert spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_default_agent_config_prompts_match_agent_mirror():
+    # apps/api and services/agent keep hand-mirrored DEFAULT_AGENT_CONFIG copies (no
+    # cross-imports). The prompt BODIES must stay byte-identical, or a prompt edited in one
+    # mirror but not the other (e.g. the US3 {{pending_med_reasks}} re-ask line) would
+    # silently drift — the agent's local fallback prompt would diverge from the API's.
+    from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG as API_DEFAULT
+
+    agent_cfg = _load_agent_agent_config()
+    assert API_DEFAULT.prompts.model_dump() == agent_cfg.DEFAULT_AGENT_CONFIG.prompts.model_dump()

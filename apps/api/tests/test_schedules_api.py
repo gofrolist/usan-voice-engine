@@ -1,11 +1,11 @@
 """Operator CRUD API for /v1/schedules (spec §4.1).
 
 Covers the full router contract: next_run_at computation at create (aware UTC),
-404/409/422 mappings (unknown elder, duplicate schedule, zoneinfo fail-closed,
+404/409/422 mappings (unknown contact, duplicate schedule, zoneinfo fail-closed,
 quiet-hours-empty window, unpublished profile_override), the last_result filter
 ("who missed today's call"), PATCH merge + revalidate + recompute — including
-the elder-timezone-went-bad 422-not-500 pin — DELETE, ids-only audit logging
-(never elder name / dynamic_vars, spec §8), and the operator-token gate.
+the contact-timezone-went-bad 422-not-500 pin — DELETE, ids-only audit logging
+(never contact name / dynamic_vars, spec §8), and the operator-token gate.
 """
 
 import asyncio
@@ -25,10 +25,10 @@ _OP = {"Authorization": "Bearer " + "o" * 32}
 ALL_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
-def _seed_elder(client, *, timezone: str = "America/New_York", name: str = "Rose Elder") -> str:
+def _seed_contact(client, *, timezone: str = "America/New_York", name: str = "Rose Contact") -> str:
     phone = f"+1555{str(uuid.uuid4().int)[:7].zfill(7)}"
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={"name": name, "phone_e164": phone, "timezone": timezone},
         headers=_OP,
     )
@@ -36,9 +36,9 @@ def _seed_elder(client, *, timezone: str = "America/New_York", name: str = "Rose
     return r.json()["id"]
 
 
-def _schedule_body(elder_id: str, **overrides: Any) -> dict[str, Any]:
+def _schedule_body(contact_id: str, **overrides: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
-        "elder_id": elder_id,
+        "contact_id": contact_id,
         "window_start_local": "09:00",
         "window_end_local": "17:00",
     }
@@ -66,13 +66,14 @@ async def _run_db(async_database_url: str, fn) -> Any:
 
 
 def test_create_schedule_201_computes_next_run_at(client):
-    elder_id = _seed_elder(client)
+    contact_id = _seed_contact(client)
     before = datetime.now(UTC)
-    r = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP)
+    r = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP)
     assert r.status_code == 201
     body = r.json()
-    assert body["elder_id"] == elder_id
+    assert body["contact_id"] == contact_id
     assert body["enabled"] is True
+    assert body["slot"] == "morning"  # US5 default
     assert body["days_of_week"] == ALL_DAYS  # echoed as the string list
     next_run = _parse_aware_utc(body["next_run_at"])
     # Earliest occurrence >= now: never in the past (allow clock-read slack).
@@ -81,24 +82,67 @@ def test_create_schedule_201_computes_next_run_at(client):
     assert body["last_materialized_date"] is None
 
 
-def test_create_schedule_404_unknown_elder(client):
+def test_create_schedule_404_unknown_contact(client):
     r = client.post("/v1/schedules", json=_schedule_body(str(uuid.uuid4())), headers=_OP)
     assert r.status_code == 404
 
 
-def test_create_schedule_409_second_schedule_same_elder(client):
-    elder_id = _seed_elder(client)
-    first = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP)
+def test_create_schedule_409_second_schedule_same_contact(client):
+    # No slot given -> both default to 'morning' -> the per-(contact, slot) 409.
+    contact_id = _seed_contact(client)
+    first = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP)
     assert first.status_code == 201
-    r = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP)
+    r = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP)
     assert r.status_code == 409
 
 
-def test_create_schedule_422_invalid_elder_timezone(client):
-    # The elder API only length-validates timezone, so a bad zone can be seeded;
+def test_create_two_slots_then_per_slot_409_and_filter(client):
+    # US5: an contact may have a morning AND an evening schedule; the 409 is per slot.
+    contact_id = _seed_contact(client)
+    morning = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP)
+    assert morning.status_code == 201
+    assert morning.json()["slot"] == "morning"
+
+    evening_body = _schedule_body(
+        contact_id, slot="evening", window_start_local="18:00", window_end_local="20:00"
+    )
+    evening = client.post("/v1/schedules", json=evening_body, headers=_OP)
+    assert evening.status_code == 201
+    assert evening.json()["slot"] == "evening"
+
+    # A duplicate evening collides on (contact_id, slot) -> 409 naming the slot.
+    dup = client.post("/v1/schedules", json=evening_body, headers=_OP)
+    assert dup.status_code == 409
+    assert "evening" in dup.json()["detail"]
+
+    # ?slot= narrows the list; without it both slots come back.
+    only_evening = client.get(
+        "/v1/schedules", params={"contact_id": contact_id, "slot": "evening"}, headers=_OP
+    )
+    assert only_evening.status_code == 200
+    assert [r["slot"] for r in only_evening.json()] == ["evening"]
+    both = client.get("/v1/schedules", params={"contact_id": contact_id}, headers=_OP)
+    assert {r["slot"] for r in both.json()} == {"morning", "evening"}
+
+
+def test_patch_slot_and_invalid_slot_filter_are_422(client):
+    contact_id = _seed_contact(client)
+    created = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP).json()
+    # slot is immutable identity: a PATCH carrying it 422s (extra="forbid"), never a
+    # silent no-op that would let the caller believe a move succeeded.
+    r = client.patch(f"/v1/schedules/{created['id']}", json={"slot": "evening"}, headers=_OP)
+    assert r.status_code == 422
+    # The ?slot= filter is the closed morning|evening enum: an unknown value 422s at
+    # the boundary instead of returning a misleading empty 200.
+    bad = client.get("/v1/schedules", params={"slot": "afternoon"}, headers=_OP)
+    assert bad.status_code == 422
+
+
+def test_create_schedule_422_invalid_contact_timezone(client):
+    # The contact API only length-validates timezone, so a bad zone can be seeded;
     # schedule creation must fail closed (zoneinfo ValueError -> 422, spec §6.3).
-    elder_id = _seed_elder(client, timezone="Mars/Olympus")
-    r = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP)
+    contact_id = _seed_contact(client, timezone="Mars/Olympus")
+    r = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP)
     assert r.status_code == 422
 
 
@@ -109,24 +153,24 @@ def test_create_schedule_defensive_none_maps_to_422(client, monkeypatch):
     # handled 422 path as the other ValueErrors, never escape as a 500.
     from usan_api.routers import schedules as schedules_router
 
-    elder_id = _seed_elder(client)
+    contact_id = _seed_contact(client)
     monkeypatch.setattr(schedules_router, "next_run_at", lambda *a, **k: None)
-    r = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP)
+    r = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP)
     assert r.status_code == 422
 
 
 def test_create_schedule_422_window_outside_quiet_hours(client):
-    elder_id = _seed_elder(client)
+    contact_id = _seed_contact(client)
     r = client.post(
         "/v1/schedules",
-        json=_schedule_body(elder_id, window_start_local="06:00", window_end_local="08:00"),
+        json=_schedule_body(contact_id, window_start_local="06:00", window_end_local="08:00"),
         headers=_OP,
     )
     assert r.status_code == 422
 
 
 def test_create_schedule_422_unpublished_profile_override(client, async_database_url):
-    elder_id = _seed_elder(client)
+    contact_id = _seed_contact(client)
 
     async def _seed_draft(db):
         profile = await agent_profiles_repo.create_profile(
@@ -137,17 +181,17 @@ def test_create_schedule_422_unpublished_profile_override(client, async_database
     profile_id = asyncio.run(_run_db(async_database_url, _seed_draft))
     r = client.post(
         "/v1/schedules",
-        json=_schedule_body(elder_id, profile_override=profile_id),
+        json=_schedule_body(contact_id, profile_override=profile_id),
         headers=_OP,
     )
     assert r.status_code == 422  # not live: no published version (C2 helper)
 
 
 def test_list_schedules_filters_last_result(client, async_database_url):
-    miss_elder = _seed_elder(client)
-    ok_elder = _seed_elder(client)
-    miss = client.post("/v1/schedules", json=_schedule_body(miss_elder), headers=_OP).json()
-    client.post("/v1/schedules", json=_schedule_body(ok_elder), headers=_OP)
+    miss_contact = _seed_contact(client)
+    ok_contact = _seed_contact(client)
+    miss = client.post("/v1/schedules", json=_schedule_body(miss_contact), headers=_OP).json()
+    client.post("/v1/schedules", json=_schedule_body(ok_contact), headers=_OP)
 
     async def _mark_skipped(db):
         schedule = await schedules_repo.get_schedule(db, uuid.UUID(miss["id"]))
@@ -169,8 +213,8 @@ def test_list_schedules_filters_last_result(client, async_database_url):
 
 
 def test_get_schedule_200_and_404(client):
-    elder_id = _seed_elder(client)
-    created = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP).json()
+    contact_id = _seed_contact(client)
+    created = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP).json()
     r = client.get(f"/v1/schedules/{created['id']}", headers=_OP)
     assert r.status_code == 200
     assert r.json()["id"] == created["id"]
@@ -178,10 +222,10 @@ def test_get_schedule_200_and_404(client):
 
 
 def test_patch_recomputes_next_run_at_and_revalidates(client):
-    elder_id = _seed_elder(client)
+    contact_id = _seed_contact(client)
     created = client.post(
         "/v1/schedules",
-        json=_schedule_body(elder_id, window_start_local="09:00", window_end_local="10:00"),
+        json=_schedule_body(contact_id, window_start_local="09:00", window_end_local="10:00"),
         headers=_OP,
     ).json()
 
@@ -210,16 +254,16 @@ def test_patch_recomputes_next_run_at_and_revalidates(client):
     assert r_pause.json()["enabled"] is False
 
 
-def test_patch_window_422_when_elder_timezone_went_bad(client, async_database_url):
-    # elders.timezone is only length-validated at the elder API boundary, so it can
+def test_patch_window_422_when_contact_timezone_went_bad(client, async_database_url):
+    # contacts.timezone is only length-validated at the contact API boundary, so it can
     # go bad after schedule creation; the recompute's ValueError maps to 422, not 500.
-    elder_id = _seed_elder(client)
-    created = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP).json()
+    contact_id = _seed_contact(client)
+    created = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP).json()
 
     async def _corrupt_tz(db):
         await db.execute(
-            text("UPDATE elders SET timezone = 'Mars/Olympus' WHERE id = :id"),
-            {"id": elder_id},
+            text("UPDATE contacts SET timezone = 'Mars/Olympus' WHERE id = :id"),
+            {"id": contact_id},
         )
 
     asyncio.run(_run_db(async_database_url, _corrupt_tz))
@@ -233,22 +277,22 @@ def test_patch_window_422_when_elder_timezone_went_bad(client, async_database_ur
 
 
 def test_delete_schedule_204_then_404(client):
-    elder_id = _seed_elder(client)
-    created = client.post("/v1/schedules", json=_schedule_body(elder_id), headers=_OP).json()
+    contact_id = _seed_contact(client)
+    created = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP).json()
     assert client.delete(f"/v1/schedules/{created['id']}", headers=_OP).status_code == 204
     assert client.get(f"/v1/schedules/{created['id']}", headers=_OP).status_code == 404
     assert client.delete(f"/v1/schedules/{created['id']}", headers=_OP).status_code == 404
 
 
 def test_mutations_write_audit_log_lines(client):
-    elder_name = "Rose Auditcheck"
-    elder_id = _seed_elder(client, name=elder_name)
+    contact_name = "Rose Auditcheck"
+    contact_id = _seed_contact(client, name=contact_name)
     records: list[dict] = []
     handler_id = logger.add(lambda m: records.append(m.record), level="INFO")
     try:
         created = client.post(
             "/v1/schedules",
-            json=_schedule_body(elder_id, dynamic_vars={"first_name": elder_name}),
+            json=_schedule_body(contact_id, dynamic_vars={"first_name": contact_name}),
             headers=_OP,
         ).json()
         client.patch(f"/v1/schedules/{created['id']}", json={"enabled": False}, headers=_OP)
@@ -264,12 +308,12 @@ def test_mutations_write_audit_log_lines(client):
         assert record["extra"].get("schedule_id") == created["id"]
         assert record["extra"].get("action")
 
-    # PHI rule (spec §8): ids only — no record binds elder name or dynamic_vars.
+    # PHI rule (spec §8): ids only — no record binds contact name or dynamic_vars.
     for record in records:
         assert "name" not in record["extra"]
         assert "dynamic_vars" not in record["extra"]
-        assert elder_name not in record["message"]
-        assert all(elder_name not in str(v) for v in record["extra"].values())
+        assert contact_name not in record["message"]
+        assert all(contact_name not in str(v) for v in record["extra"].values())
 
 
 def test_schedules_require_operator_token(client):

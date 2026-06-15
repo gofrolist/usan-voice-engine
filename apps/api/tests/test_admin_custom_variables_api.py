@@ -85,7 +85,7 @@ def test_create_bad_slug_422(client, admin_session):
 
 
 def test_create_builtin_collision_422(client, admin_session):
-    r = _create(client, "elder_name")
+    r = _create(client, "contact_name")
     assert r.status_code == 422
     assert "builtin" in json.dumps(r.json())
 

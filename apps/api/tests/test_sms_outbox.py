@@ -10,7 +10,7 @@ from usan_api import sms_outbox, telnyx_messaging
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import SmsMessage
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import sms_messages as sms_repo
 
 
@@ -38,10 +38,12 @@ async def _seed_pending(url: str, count: int = 1) -> uuid.UUID:
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     try:
         async with factory() as db:
-            elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+            contact = await contacts_repo.create_contact(
+                db, name="A", phone_e164=phone, timezone="UTC"
+            )
             call = await calls_repo.create_call(
                 db,
-                elder_id=elder.id,
+                contact_id=contact.id,
                 direction=CallDirection.OUTBOUND,
                 status=CallStatus.IN_PROGRESS,
             )
@@ -49,7 +51,7 @@ async def _seed_pending(url: str, count: int = 1) -> uuid.UUID:
                 await sms_repo.create_sms_message(
                     db,
                     call_id=call.id,
-                    elder_id=elder.id,
+                    contact_id=contact.id,
                     to_number=phone,
                     template_key=f"t{i}",
                     body="hi",
@@ -234,6 +236,6 @@ def test_flush_never_raises_on_unexpected_error(client, async_database_url, monk
     assert invoked["n"] == 1  # the failure actually came from the patched query
     crash = next(m for m in records if "SMS flush crashed" in m.record["message"])
     # PHI rule: only the exception TYPE is logged, never str(exc) (an asyncpg/httpx
-    # message can embed SQL params or URLs tied to elder phone numbers).
+    # message can embed SQL params or URLs tied to contact phone numbers).
     assert crash.record["extra"]["err"] == "RuntimeError"
     assert "db exploded" not in str(crash)

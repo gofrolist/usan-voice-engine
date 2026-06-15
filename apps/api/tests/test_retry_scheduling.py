@@ -8,11 +8,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from usan_api import retry_policy, webhook_events
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call, Elder
+from usan_api.db.models import Call, Contact
 from usan_api.repositories import agent_profiles as profiles_repo
 from usan_api.repositories import call_batches as call_batches_repo
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.schemas.batch import BatchTargetIn
 
 FIXED_NOW = datetime(2026, 5, 31, 12, 0, tzinfo=UTC)  # inside [09:00, 21:00) UTC
@@ -50,12 +50,14 @@ async def _seed_terminal(
 ):
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone=timezone)
+        contact = await contacts_repo.create_contact(
+            db, name="A", phone_e164=phone, timezone=timezone
+        )
         if policy is not None:
-            elder.agent_profile_id = await _publish_policy_profile(db, policy=policy)
+            contact.agent_profile_id = await _publish_policy_profile(db, policy=policy)
         call = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=status,
             dynamic_vars=dynamic_vars or {},
@@ -65,7 +67,7 @@ async def _seed_terminal(
         call.attempt = attempt
         await db.flush()
         await db.commit()
-        return call.id, elder.id
+        return call.id, contact.id
 
 
 async def _child_count(factory, parent_id) -> int:
@@ -78,7 +80,7 @@ async def _child_count(factory, parent_id) -> int:
 
 @pytest.mark.asyncio
 async def test_schedule_retry_creates_child(session_factory):
-    parent_id, elder_id = await _seed_terminal(
+    parent_id, contact_id = await _seed_terminal(
         session_factory, status=CallStatus.NO_ANSWER, attempt=1, dynamic_vars={"k": "v"}
     )
     async with session_factory() as db:
@@ -92,7 +94,7 @@ async def test_schedule_retry_creates_child(session_factory):
     assert reloaded.parent_call_id == parent_id
     assert reloaded.attempt == 2
     assert reloaded.status is CallStatus.QUEUED
-    assert reloaded.elder_id == elder_id
+    assert reloaded.contact_id == contact_id
     assert reloaded.dynamic_vars == {"k": "v"}
     assert reloaded.idempotency_key is None
     assert reloaded.livekit_room.startswith("usan-outbound-")
@@ -138,12 +140,12 @@ async def test_schedule_retry_noop_for_non_retryable_status(session_factory):
 
 
 @pytest.mark.asyncio
-async def test_schedule_retry_none_when_elder_missing(session_factory):
-    # elder_id is ON DELETE SET NULL, so a parent can legitimately have no elder.
+async def test_schedule_retry_none_when_contact_missing(session_factory):
+    # contact_id is ON DELETE SET NULL, so a parent can legitimately have no contact.
     parent_id, _ = await _seed_terminal(session_factory, status=CallStatus.FAILED, attempt=1)
     async with session_factory() as db:
         parent = await calls_repo.get_call(db, parent_id)
-        parent.elder_id = None
+        parent.contact_id = None
         await db.commit()
     async with session_factory() as db:
         result = await calls_repo.schedule_retry(db, parent_id)
@@ -206,9 +208,9 @@ async def _seed_batch_root(factory, *, root_status, cancel_batch, policy=None):
     AFTER the root exists — the cancel-vs-terminal-transition race window."""
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="B", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(db, name="B", phone_e164=phone, timezone="UTC")
         if policy is not None:
-            elder.agent_profile_id = await _publish_policy_profile(db, policy=policy)
+            contact.agent_profile_id = await _publish_policy_profile(db, policy=policy)
         batch = await call_batches_repo.create_batch_with_targets(
             db,
             name="d3-batch",
@@ -220,12 +222,12 @@ async def _seed_batch_root(factory, *, root_status, cancel_batch, policy=None):
             days_of_week=None,
             max_concurrency=None,
             profile_override=None,
-            targets=[BatchTargetIn(elder_id=elder.id)],
+            targets=[BatchTargetIn(contact_id=contact.id)],
         )
         batch.status = "running"
         root = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=root_status,
             idempotency_key=f"batch:{batch.id}:0",
@@ -238,15 +240,15 @@ async def _seed_batch_root(factory, *, root_status, cancel_batch, policy=None):
         if cancel_batch:
             await call_batches_repo.cancel_batch(db, batch, now=FIXED_NOW)
         await db.commit()
-        return root.id, elder.id
+        return root.id, contact.id
 
 
-async def _seed_child(factory, *, parent_id, elder_id, status, attempt):
+async def _seed_child(factory, *, parent_id, contact_id, status, attempt):
     """Append a retry-chain child (parent_call_id linked list, spec §6.2)."""
     async with factory() as db:
         child = await calls_repo.create_call(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=CallDirection.OUTBOUND,
             status=status,
             livekit_room=f"usan-outbound-{uuid.uuid4()}",
@@ -281,13 +283,13 @@ async def test_schedule_retry_suppressed_for_grandchild_of_cancelled_batch(sessi
     # batch suppresses attempt 3 even though only the ROOT carries the batch key.
     # NO_ANSWER at attempt 2 normally retries (+2h) — FAILED would stop by policy
     # alone and never exercise the guard.
-    root_id, elder_id = await _seed_batch_root(
+    root_id, contact_id = await _seed_batch_root(
         session_factory, root_status=CallStatus.NO_ANSWER, cancel_batch=True
     )
     child_id = await _seed_child(
         session_factory,
         parent_id=root_id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         status=CallStatus.NO_ANSWER,
         attempt=2,
     )
@@ -313,10 +315,10 @@ async def test_schedule_retry_unaffected_for_running_batch_and_sched_roots(sessi
 
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with session_factory() as db:
-        elder = await elders_repo.create_elder(db, name="S", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(db, name="S", phone_e164=phone, timezone="UTC")
         sched_root = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.FAILED,
             idempotency_key=f"sched:{uuid.uuid4()}:2026-06-10",
@@ -333,7 +335,7 @@ async def test_schedule_retry_unaffected_for_running_batch_and_sched_roots(sessi
 
 @pytest.mark.asyncio
 async def test_schedule_retry_clamps_into_quiet_hours(session_factory):
-    # Eastern elder; FIXED_NOW 12:00 UTC == 08:00 EDT (before 09:00 EDT).
+    # Eastern contact; FIXED_NOW 12:00 UTC == 08:00 EDT (before 09:00 EDT).
     # voicemail_left attempt 1 -> +3h == 15:00 UTC == 11:00 EDT (now inside window) -> exact.
     parent_id, _ = await _seed_terminal(
         session_factory,
@@ -368,7 +370,7 @@ async def test_chain_root_origin_recovered_at_max_policy_depth(session_factory):
     # chain_root_origin must still reach the root and recover the batch origin
     # — a 3-hop walk would stop at the depth-1 child (no key) and emit
     # origin: null in the call.started/completed payloads.
-    root_id, elder_id = await _seed_batch_root(
+    root_id, contact_id = await _seed_batch_root(
         session_factory, root_status=CallStatus.NO_ANSWER, cancel_batch=False
     )
     current_id = root_id
@@ -376,7 +378,7 @@ async def test_chain_root_origin_recovered_at_max_policy_depth(session_factory):
         current_id = await _seed_child(
             session_factory,
             parent_id=current_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             status=CallStatus.NO_ANSWER,
             attempt=attempt,
         )
@@ -394,7 +396,7 @@ async def test_chain_root_origin_recovered_at_max_policy_depth(session_factory):
 async def test_get_chain_tip_reaches_depth_four_tip(session_factory):
     # Root + 4 children (attempts 1..5): a policy max_attempts=4 chain's tip
     # sits 4 hops from root — the walk must reach it, not stop one short.
-    root_id, elder_id = await _seed_terminal(
+    root_id, contact_id = await _seed_terminal(
         session_factory, status=CallStatus.NO_ANSWER, attempt=1
     )
     current_id = root_id
@@ -402,7 +404,7 @@ async def test_get_chain_tip_reaches_depth_four_tip(session_factory):
         current_id = await _seed_child(
             session_factory,
             parent_id=current_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             status=CallStatus.NO_ANSWER,
             attempt=attempt,
         )
@@ -419,7 +421,7 @@ async def test_batch_cancel_flips_max_depth_tip(session_factory):
     # chain grown to depth 4 (policy-extended retries) still has its QUEUED tip
     # found and flipped — a 3-hop walk would stop at the depth-3 parent, leave
     # the tip QUEUED, and the cancelled batch would dial anyway.
-    root_id, elder_id = await _seed_batch_root(
+    root_id, contact_id = await _seed_batch_root(
         session_factory, root_status=CallStatus.NO_ANSWER, cancel_batch=True
     )
     current_id = root_id
@@ -427,14 +429,14 @@ async def test_batch_cancel_flips_max_depth_tip(session_factory):
         current_id = await _seed_child(
             session_factory,
             parent_id=current_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             status=CallStatus.NO_ANSWER,
             attempt=attempt,
         )
     tip_id = await _seed_child(
         session_factory,
         parent_id=current_id,
-        elder_id=elder_id,
+        contact_id=contact_id,
         status=CallStatus.QUEUED,
         attempt=5,
     )
@@ -453,8 +455,8 @@ async def test_batch_cancel_flips_max_depth_tip(session_factory):
 
 @pytest.mark.asyncio
 async def test_retry_delay_scaled_by_profile_multiplier(session_factory):
-    # Elder's profile carries delay_multiplier=2.0: NO_ANSWER attempt 1 ladder
-    # rung 30m scales to 60m. UTC elder at FIXED_NOW 12:00 -> 13:00 is inside
+    # Contact's profile carries delay_multiplier=2.0: NO_ANSWER attempt 1 ladder
+    # rung 30m scales to 60m. UTC contact at FIXED_NOW 12:00 -> 13:00 is inside
     # the window, so the clamp is exact.
     parent_id, _ = await _seed_terminal(
         session_factory,
@@ -488,7 +490,7 @@ async def test_retry_suppressed_by_max_attempts_zero(session_factory):
 
 @pytest.mark.asyncio
 async def test_retry_clamped_to_narrowed_quiet_hours(session_factory):
-    # Policy narrows the window start to 10:00 local. Halifax elder (ADT,
+    # Policy narrows the window start to 10:00 local. Halifax contact (ADT,
     # UTC-3 on 2026-05-31): FIXED_NOW 12:00 UTC == 09:00 local; FAILED's 1-min
     # ladder lands at 09:01 local — inside the STATUTORY window (no clamp
     # today) but before the policy start, so the child clamps to 10:00 local
@@ -508,19 +510,19 @@ async def test_retry_clamped_to_narrowed_quiet_hours(session_factory):
 
 
 @pytest.mark.asyncio
-async def test_retry_honors_parent_override_policy_over_elder(session_factory):
+async def test_retry_honors_parent_override_policy_over_contact(session_factory):
     # Precedence threading pin: the parent's profile_override (multiplier 2.0)
-    # outranks the elder's assigned profile (resolves, but carries no policy).
-    # If only elder_profile_id were threaded, the walk would yield statutory
+    # outranks the contact's assigned profile (resolves, but carries no policy).
+    # If only contact_profile_id were threaded, the walk would yield statutory
     # (+30m); the override must win (+60m) — whole-profile precedence, §3.3.2.
     parent_id, _ = await _seed_terminal(session_factory, status=CallStatus.NO_ANSWER, attempt=1)
     async with session_factory() as db:
         override_pid = await _publish_policy_profile(db, policy={"retry_delay_multiplier": 2.0})
-        elder_pid = await _publish_policy_profile(db, policy=None)
+        contact_pid = await _publish_policy_profile(db, policy=None)
         parent = await calls_repo.get_call(db, parent_id)
         parent.profile_override = override_pid
-        elder = await db.get(Elder, parent.elder_id)
-        elder.agent_profile_id = elder_pid
+        contact = await db.get(Contact, parent.contact_id)
+        contact.agent_profile_id = contact_pid
         await db.commit()
     async with session_factory() as db:
         child = await calls_repo.schedule_retry(db, parent_id)
@@ -532,15 +534,15 @@ async def test_retry_honors_parent_override_policy_over_elder(session_factory):
 @pytest.mark.asyncio
 async def test_policy_reresolved_not_snapshotted(session_factory):
     # Re-resolve at consumption (spec §3.3.2): the parent exists BEFORE the
-    # elder's profile publishes a tighter policy; schedule_retry must reflect
+    # contact's profile publishes a tighter policy; schedule_retry must reflect
     # the new policy — never an enqueue-time snapshot.
-    parent_id, elder_id = await _seed_terminal(
+    parent_id, contact_id = await _seed_terminal(
         session_factory, status=CallStatus.NO_ANSWER, attempt=1
     )
     async with session_factory() as db:
         pid = await _publish_policy_profile(db, policy=None)  # v1: no policy section
-        elder = await db.get(Elder, elder_id)
-        elder.agent_profile_id = pid
+        contact = await db.get(Contact, contact_id)
+        contact.agent_profile_id = pid
         await db.commit()
     async with session_factory() as db:
         profile = await profiles_repo.get_profile(db, pid)
@@ -566,7 +568,7 @@ async def test_schedule_retry_walk_finds_batch_root_at_max_depth(session_factory
     # BEFORE the root walk — so the walk must reach the batch: root and
     # suppress with the cancelled-batch log line. Asserting on the log pins
     # that the walk ran (a None for the wrong reason has no log).
-    root_id, elder_id = await _seed_batch_root(
+    root_id, contact_id = await _seed_batch_root(
         session_factory,
         root_status=CallStatus.NO_ANSWER,
         cancel_batch=True,
@@ -577,7 +579,7 @@ async def test_schedule_retry_walk_finds_batch_root_at_max_depth(session_factory
         current_id = await _seed_child(
             session_factory,
             parent_id=current_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             status=CallStatus.NO_ANSWER,
             attempt=attempt,
         )

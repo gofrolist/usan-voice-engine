@@ -92,7 +92,7 @@ function profile(over: Partial<ProfileSummary> = {}): ProfileSummary {
     is_default_outbound: false,
     published_version: 1,
     has_unpublished_draft: false,
-    assigned_elder_count: 0,
+    assigned_contact_count: 0,
     draft_revision: 1,
     updated_at: "2026-06-13T00:00:00Z",
     ...over,

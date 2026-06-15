@@ -18,7 +18,7 @@ def test_create_defaults():
     from usan_api.schemas.schedule import CreateScheduleRequest
 
     req = CreateScheduleRequest(
-        elder_id=uuid.uuid4(),
+        contact_id=uuid.uuid4(),
         window_start_local="09:00",
         window_end_local="17:00",
     )
@@ -26,6 +26,7 @@ def test_create_defaults():
     assert req.enabled is True
     assert req.dynamic_vars == {}
     assert req.profile_override is None
+    assert req.slot == "morning"  # US5 default keeps single-slot callers unchanged
     # "HH:MM" strings parse to datetime.time
     assert req.window_start_local == time(9, 0)
     assert req.window_end_local == time(17, 0)
@@ -38,7 +39,7 @@ def test_create_rejects_empty_days():
 
     with pytest.raises(ValidationError, match="empty"):
         CreateScheduleRequest(
-            elder_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
             window_start_local="09:00",
             window_end_local="17:00",
             days_of_week=[],
@@ -50,7 +51,7 @@ def test_create_rejects_unknown_day():
 
     with pytest.raises(ValidationError, match="monday"):
         CreateScheduleRequest(
-            elder_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
             window_start_local="09:00",
             window_end_local="17:00",
             days_of_week=["monday"],
@@ -62,7 +63,7 @@ def test_create_rejects_duplicate_days():
 
     with pytest.raises(ValidationError, match="duplicate"):
         CreateScheduleRequest(
-            elder_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
             window_start_local="09:00",
             window_end_local="17:00",
             days_of_week=["mon", "mon"],
@@ -74,13 +75,13 @@ def test_create_rejects_start_not_before_end():
 
     with pytest.raises(ValidationError, match="before"):
         CreateScheduleRequest(
-            elder_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
             window_start_local="17:00",
             window_end_local="09:00",
         )
     with pytest.raises(ValidationError, match="before"):
         CreateScheduleRequest(
-            elder_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
             window_start_local="10:00",
             window_end_local="10:00",
         )
@@ -91,7 +92,7 @@ def test_create_rejects_window_outside_quiet_hours():
 
     with pytest.raises(ValidationError, match="quiet hours"):
         CreateScheduleRequest(
-            elder_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
             window_start_local="21:30",
             window_end_local="22:30",
         )
@@ -107,7 +108,7 @@ def test_create_caps_dynamic_vars_at_8kb():
 
     with pytest.raises(ValidationError, match="8192"):
         schedule_schemas.CreateScheduleRequest(
-            elder_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
             window_start_local="09:00",
             window_end_local="17:00",
             dynamic_vars={"note": "x" * (call_schemas.MAX_DYNAMIC_VARS_BYTES + 1)},
@@ -130,6 +131,17 @@ def test_update_all_fields_optional():
     assert UpdateScheduleRequest(days_of_week=["sun", "mon"]).days_of_week == ["mon", "sun"]
 
 
+def test_update_forbids_unknown_fields_including_slot():
+    from usan_api.schemas.schedule import UpdateScheduleRequest
+
+    # slot is immutable identity (move = delete+create); extra="forbid" turns a PATCH
+    # attempt to change it (or any unknown key) into a 422, never a silent no-op.
+    with pytest.raises(ValidationError):
+        UpdateScheduleRequest(slot="evening")
+    with pytest.raises(ValidationError):
+        UpdateScheduleRequest(bogus_field=1)
+
+
 def test_update_rejects_half_window():
     from usan_api.schemas.schedule import UpdateScheduleRequest
 
@@ -150,7 +162,8 @@ def test_schedule_response_from_model_renders_day_list():
 
     class _Row:
         id = uuid.uuid4()
-        elder_id = uuid.uuid4()
+        contact_id = uuid.uuid4()
+        slot = "evening"
         enabled = True
         window_start_local = time(9, 0)
         window_end_local = time(17, 0)
@@ -167,7 +180,8 @@ def test_schedule_response_from_model_renders_day_list():
     row = _Row()
     resp = ScheduleResponse.from_model(row)
     assert resp.id == row.id
-    assert resp.elder_id == row.elder_id
+    assert resp.contact_id == row.contact_id
+    assert resp.slot == "evening"
     assert resp.days_of_week == ["mon", "sun"]
     assert resp.next_run_at == row.next_run_at
     assert resp.last_materialized_date == date(2026, 6, 7)

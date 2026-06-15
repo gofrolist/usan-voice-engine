@@ -1,6 +1,6 @@
 """Operator API for one-off call batches (spec §4.2, §5.6).
 
-PHI note (spec §8): ``name`` is PHI-free BY CONVENTION — never type an elder's
+PHI note (spec §8): ``name`` is PHI-free BY CONVENTION — never type an contact's
 name into it; it is never bound into log lines. Audit lines bind the client IP,
 ids, counts, and the action only.
 
@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.auth import require_operator_token
 from usan_api.client_ip import client_ip
-from usan_api.db.models import CallBatch, Elder
+from usan_api.db.models import CallBatch, Contact
 from usan_api.db.session import get_db
 from usan_api.observability.custom_metrics import BATCH_EVENTS_TOTAL
 from usan_api.repositories import agent_profiles as agent_profiles_repo
@@ -77,17 +77,17 @@ async def _replay_or_conflict(
 
 async def _validate_all_or_nothing(db: AsyncSession, body: CreateBatchRequest) -> None:
     """Every target checked, every failure reported (spec §4.2): one SELECT for
-    all elder ids, then override liveness for the batch and each target; any
+    all contact ids, then override liveness for the batch and each target; any
     error -> 422 with detail=[{target_index, error}] and nothing persisted."""
     errors: list[dict[str, Any]] = []
     result = await db.execute(
-        select(Elder.id).where(Elder.id.in_([t.elder_id for t in body.targets]))
+        select(Contact.id).where(Contact.id.in_([t.contact_id for t in body.targets]))
     )
     known = set(result.scalars().all())
     errors.extend(
-        {"target_index": index, "error": "elder not found"}
+        {"target_index": index, "error": "contact not found"}
         for index, target in enumerate(body.targets)
-        if target.elder_id not in known
+        if target.contact_id not in known
     )
 
     live: dict[uuid.UUID, bool] = {}
@@ -156,7 +156,7 @@ async def create_batch(
             else await batches_repo.get_by_idempotency_key(db, body.idempotency_key)
         )
         if existing is None:
-            raise  # not the key race (e.g. an elder vanished mid-flight)
+            raise  # not the key race (e.g. an contact vanished mid-flight)
         del exc
         return await _replay_or_conflict(db, existing, digest, response)
     # Increment-after-commit (spec §7); replays above return without counting —

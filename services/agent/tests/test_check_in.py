@@ -15,6 +15,21 @@ from usan_agent.settings import Settings
 
 _NOW = datetime(2026, 6, 8, 13, 15, 0, tzinfo=ZoneInfo("UTC"))  # a Monday
 
+# build_check_in_agent substitutes builtins into the prompt. The default outbound prompt
+# now carries the {{pending_med_reasks}} builtin (US3 / FR-005) plus the US4 memory builtins
+# ({{personal_facts}}/{{last_call_summary}}/{{open_plans}}/{{important_dates}}, FR-024), which
+# substitute() blanks to "" when build_check_in_agent is called with no resolved vars.
+_DEFAULT_CHECKIN_INSTRUCTIONS = check_in.CHECK_IN_INSTRUCTIONS
+for _tok in (
+    "pending_med_reasks",
+    "personal_facts",
+    "last_call_summary",
+    "open_plans",
+    "important_dates",
+    "survey_due",
+):
+    _DEFAULT_CHECKIN_INSTRUCTIONS = _DEFAULT_CHECKIN_INSTRUCTIONS.replace("{{" + _tok + "}}", "")
+
 
 @function_tool
 async def send_sms(ctx: RunContext[check_in.CheckInData]) -> str:
@@ -178,11 +193,39 @@ def test_build_check_in_agent_attaches_registry_tools():
         if n in check_in._TOOL_REGISTRY and n != "send_sms"
     } | {"end_call"}
     assert {t.id for t in agent.tools} == expected
-    assert agent.instructions == check_in.CHECK_IN_INSTRUCTIONS
+    assert agent.instructions == _DEFAULT_CHECKIN_INSTRUCTIONS
+
+
+def test_default_config_exposes_record_personal_fact_referenced_in_prompt():
+    # The default check-in prompt instructs the LLM to "save it with `record_personal_fact`"
+    # (US4). The tool MUST therefore be default-enabled AND attached to the built agent, or
+    # the prompt tells the LLM to call a tool it cannot see. Hardcoded (NOT derived from
+    # DEFAULT_AGENT_CONFIG.tools.enabled) so it actually guards the prompt<->tools contract.
+    assert "record_personal_fact" in DEFAULT_AGENT_CONFIG.tools.enabled
+    assert "record_personal_fact" in check_in.CHECK_IN_INSTRUCTIONS
+    agent = check_in.build_check_in_agent()
+    assert "record_personal_fact" in {t.id for t in agent.tools}
+
+
+async def test_do_record_personal_fact_forwards_structured(monkeypatch):
+    # The important_date date must reach the API: _do_record_personal_fact forwards the
+    # structured payload to api_client verbatim (US4 FR-024 contact-stated dates).
+    from unittest.mock import AsyncMock
+
+    spy = AsyncMock()
+    monkeypatch.setattr(check_in.api_client, "record_personal_fact", spy)
+    await check_in._do_record_personal_fact(
+        _data(),
+        category="important_date",
+        content="her birthday",
+        structured={"date": "2026-07-04"},
+    )
+    assert spy.await_args.kwargs["category"] == "important_date"
+    assert spy.await_args.kwargs["structured"] == {"date": "2026-07-04"}
 
 
 def test_build_inbound_agent_attaches_same_registry_tools():
-    agent = check_in.build_inbound_agent(None, resolved_vars={"elder_name": "Ada"}, now=_NOW)
+    agent = check_in.build_inbound_agent(None, resolved_vars={"contact_name": "Ada"}, now=_NOW)
     expected = {
         n
         for n in DEFAULT_AGENT_CONFIG.tools.enabled
@@ -329,11 +372,11 @@ def test_build_inbound_agent_uses_configured_template():
             **DEFAULT_AGENT_CONFIG.model_dump(),
             "prompts": {
                 **DEFAULT_AGENT_CONFIG.prompts.model_dump(),
-                "inbound_personalization_template": "Hi {elder_name}! {last_check_in_line}",
+                "inbound_personalization_template": "Hi {contact_name}! {last_check_in_line}",
             },
         }
     )
-    agent = check_in.build_inbound_agent(cfg, resolved_vars={"elder_name": "Ada"}, now=_NOW)
+    agent = check_in.build_inbound_agent(cfg, resolved_vars={"contact_name": "Ada"}, now=_NOW)
     assert "Ada" in agent.instructions
     assert "{" not in agent.instructions  # both slots consumed
 
@@ -385,7 +428,7 @@ def test_build_check_in_agent_custom_var_renders() -> None:
 def test_build_check_in_agent_defaults_when_no_vars() -> None:
     # Backward-compat: the default flow template has no tokens, so it is unchanged.
     agent = check_in.build_check_in_agent()
-    assert agent.instructions == check_in.CHECK_IN_INSTRUCTIONS
+    assert agent.instructions == _DEFAULT_CHECKIN_INSTRUCTIONS
 
 
 def test_build_inbound_agent_substitutes_double_brace_first_name() -> None:
@@ -397,12 +440,12 @@ def test_build_inbound_agent_substitutes_double_brace_first_name() -> None:
 
 
 def test_build_inbound_agent_legacy_single_brace_still_renders() -> None:
-    # An already-published template using {elder_name} must still render.
+    # An already-published template using {contact_name} must still render.
     agent = check_in.build_inbound_agent(
-        None, resolved_vars={"elder_name": "Ada"}, custom_vars={}, timezone="", now=_NOW
+        None, resolved_vars={"contact_name": "Ada"}, custom_vars={}, timezone="", now=_NOW
     )
     assert "Ada" in agent.instructions
-    assert "{elder_name}" not in agent.instructions
+    assert "{contact_name}" not in agent.instructions
 
 
 def test_build_inbound_agent_unknown_token_renders_empty() -> None:
@@ -419,7 +462,7 @@ def test_build_inbound_agent_last_check_in_appears_in_instructions() -> None:
     # instructions (build_vars derives last_check_in_line from it).
     agent = check_in.build_inbound_agent(
         None,
-        resolved_vars={"elder_name": "Ada", "last_check_in": "on 2026-05-30, mood 4/5"},
+        resolved_vars={"contact_name": "Ada", "last_check_in": "on 2026-05-30, mood 4/5"},
         custom_vars={},
         timezone="",
         now=_NOW,
@@ -434,7 +477,7 @@ def test_build_inbound_agent_caps_injected_value_length() -> None:
     # (300), so a 500-char name is truncated before reaching the LLM instructions.
     agent = check_in.build_inbound_agent(
         None,
-        resolved_vars={"elder_name": "A" * 500},
+        resolved_vars={"contact_name": "A" * 500},
         custom_vars={},
         timezone="",
         now=_NOW,
@@ -546,7 +589,9 @@ def test_send_sms_registered_in_registry():
     assert check_in._TOOL_REGISTRY.get("send_sms") is check_in.send_sms
 
 
-def test_tool_registry_has_exactly_the_seven_phase3_tools():
+def test_tool_registry_has_exactly_the_ten_catalog_tools():
+    # US1 added raise_crisis; US2 close_family_task; US4 record_personal_fact (10th). The
+    # agent registry mirrors the closed catalog one-for-one.
     from usan_agent import check_in
 
     assert set(check_in._TOOL_REGISTRY) == {
@@ -554,10 +599,127 @@ def test_tool_registry_has_exactly_the_seven_phase3_tools():
         "log_medication",
         "get_today_meds",
         "flag_for_followup",
+        "raise_crisis",
         "schedule_callback",
+        "close_family_task",
+        "record_personal_fact",
+        "record_survey",
+        "get_activity",
         "send_sms",
+        "send_info_sms",
+        "register_opt_out",
+        "set_spanish_callback",
         "end_call",
     }
+
+
+def test_test_tool_registry_mirrors_live_registry_keys():
+    # The sandbox (no-op) registry must offer the identical tool surface.
+    from usan_agent import check_in
+
+    assert set(check_in._TEST_TOOL_REGISTRY) == set(check_in._TOOL_REGISTRY)
+
+
+def test_raise_crisis_in_tool_registry():
+    from usan_agent import check_in
+
+    assert check_in._TOOL_REGISTRY.get("raise_crisis") is check_in.raise_crisis
+
+
+def test_close_family_task_in_tool_registry():
+    from usan_agent import check_in
+
+    assert check_in._TOOL_REGISTRY.get("close_family_task") is check_in.close_family_task
+
+
+async def test_do_close_family_task_calls_api_and_acks(monkeypatch):
+    seen = {}
+
+    async def _capture(call_id, settings, *, task_id=None):
+        seen["call_id"] = call_id
+        seen["task_id"] = task_id
+
+    monkeypatch.setattr(check_in.api_client, "close_family_task", _capture)
+    result = await check_in._do_close_family_task(_data(), task_id=None)
+    # Default path: no task_id (the agent sees only task text) -> close all.
+    assert seen["task_id"] is None
+    assert "marked it done" in result.lower()
+
+
+async def test_do_close_family_task_passes_explicit_task_id(monkeypatch):
+    seen = {}
+
+    async def _capture(call_id, settings, *, task_id=None):
+        seen["task_id"] = task_id
+
+    monkeypatch.setattr(check_in.api_client, "close_family_task", _capture)
+    await check_in._do_close_family_task(_data(), task_id=456)
+    assert seen["task_id"] == 456
+
+
+async def test_do_close_family_task_handles_api_failure(monkeypatch):
+    async def _boom(*a, **k):
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr(check_in.api_client, "close_family_task", _boom)
+    result = await check_in._do_close_family_task(_data(), task_id=None)
+    # Benign confirmation, never raises — a bookkeeping write must not derail the call.
+    assert isinstance(result, str)
+    assert result
+
+
+async def test_do_raise_crisis_calls_api_with_llm_source_and_returns_script(monkeypatch):
+    # The LLM crisis path posts detection_source="llm" and relays the server's
+    # spoken_script so the contact hears the emergency resource immediately.
+    seen: dict[str, object] = {}
+
+    async def _capture(call_id, settings, *, category, detection_source, evidence=None):
+        seen.update(
+            call_id=call_id, category=category, detection_source=detection_source, evidence=evidence
+        )
+        return {
+            "flag_id": 7,
+            "resource_label": "988",
+            "resource_number": "988",
+            "spoken_script": "Please call 988 now; I'm staying with you.",
+        }
+
+    monkeypatch.setattr(check_in.api_client, "raise_crisis", _capture)
+    result = await check_in._do_raise_crisis(
+        _data(), category="suicidal", evidence="said wants to end it"
+    )
+    assert seen["detection_source"] == "llm"
+    assert seen["category"] == "suicidal"
+    assert seen["call_id"] == "call-1"
+    assert result == "Please call 988 now; I'm staying with you."
+
+
+async def test_do_raise_crisis_handles_api_failure_with_safe_fallback(monkeypatch):
+    # Even if the escalation POST fails, the contact must never be left without a
+    # spoken safety directive (911/988).
+    async def _boom(*a, **k):
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr(check_in.api_client, "raise_crisis", _boom)
+    result = await check_in._do_raise_crisis(_data(), category="medical", evidence="chest pain")
+    assert isinstance(result, str)
+    assert "911" in result  # universal emergency fallback
+
+
+def test_raise_crisis_schema_constrains_category():
+    # The LLM must not stray off the five-category enum (an off-enum value 422s and
+    # the bare except would swallow it, silently losing a life-safety escalation).
+    from livekit.agents.llm import utils as llm_utils
+
+    schema = llm_utils.build_legacy_openai_schema(check_in.raise_crisis, internally_tagged=True)
+    props = schema["parameters"]["properties"]
+    assert props["category"]["enum"] == [
+        "suicidal",
+        "medical",
+        "abuse",
+        "confusion",
+        "overdose",
+    ]
 
 
 def test_flag_for_followup_schema_constrains_severity_and_category():
@@ -609,7 +771,7 @@ def test_build_check_in_agent_lists_sms_template_keys_when_offered():
 
 def test_build_inbound_agent_lists_sms_template_keys_when_offered():
     agent = check_in.build_inbound_agent(
-        _cfg_with_sms_templates(_TWO_TEMPLATES), resolved_vars={"elder_name": "Ada"}, now=_NOW
+        _cfg_with_sms_templates(_TWO_TEMPLATES), resolved_vars={"contact_name": "Ada"}, now=_NOW
     )
     assert "send_sms" in {t.id for t in agent.tools}
     assert "med_reminder" in agent.instructions
@@ -635,7 +797,7 @@ def test_build_check_in_agent_no_sms_suffix_without_templates():
     base["tools"] = {"enabled": ["log_wellness", "send_sms", "end_call"], "sms": None}
     agent = check_in.build_check_in_agent(AgentConfig.model_validate(base))
     assert "send_sms" not in {t.id for t in agent.tools}
-    assert agent.instructions == check_in.CHECK_IN_INSTRUCTIONS
+    assert agent.instructions == _DEFAULT_CHECKIN_INSTRUCTIONS
 
 
 async def test_do_flag_for_followup_normalizes_reason(monkeypatch):

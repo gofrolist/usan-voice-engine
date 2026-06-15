@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 from functools import lru_cache
 from typing import Any, Literal
@@ -42,7 +43,7 @@ class Settings(BaseSettings):
         default=1800, ge=60, le=7200, alias="OUTBOUND_MAX_CALL_DURATION_S"
     )
     jwt_signing_key: SecretStr = Field(..., min_length=32, alias="JWT_SIGNING_KEY")
-    # Static bearer token guarding the operator/management plane (elders, DNC, and
+    # Static bearer token guarding the operator/management plane (contacts, DNC, and
     # outbound call enqueue/lookup). Distinct from the agent's per-call JWTs. Held as
     # SecretStr so it is masked in repr()/model_dump()/tracebacks, never logged raw.
     operator_api_key: SecretStr = Field(..., min_length=16, alias="OPERATOR_API_KEY")
@@ -130,9 +131,16 @@ class Settings(BaseSettings):
     # (~5 simultaneous calls empirically saturated 2 vCPU; 8 on 4 vCPU is the
     # conservative start — measure before raising, per the v0.1.0 overwhelm lesson).
     # RESERVED_CONCURRENCY keeps headroom for ad-hoc/inbound calls, away from the
-    # pollers. The daily cap of 2 allows the daily wellness schedule plus one batch
-    # campaign per elder per day. AUTONOMOUS_DIALING_PAUSED is the state-preserving
-    # emergency stop (§5.4, §10).
+    # pollers. The daily cap bounds TOTAL autonomous roots/contact/day across every
+    # source (both US5 wellness slots — morning + evening — AND batch campaigns).
+    # At the default of 2 a single-slot contact gets one wellness call plus one batch
+    # campaign; a two-slot contact's morning+evening fill the cap, so a same-day batch
+    # to that contact is intentionally capped out (the harassment guard working as
+    # designed). A slot beyond the cap skips observably (skipped_daily_cap) and
+    # retries next day — never a silent drop, never a late dial. Raise the cap to
+    # leave batch headroom for two-slot contacts; lower it (>=1) only if one autonomous
+    # call/contact/day is the intended ceiling. AUTONOMOUS_DIALING_PAUSED is the
+    # state-preserving emergency stop (§5.4, §10).
     scheduler_poller_enabled: bool = Field(default=False, alias="SCHEDULER_POLLER_ENABLED")
     scheduler_poll_interval_s: int = Field(
         default=60, ge=15, le=600, alias="SCHEDULER_POLL_INTERVAL_S"
@@ -141,8 +149,8 @@ class Settings(BaseSettings):
     concurrency_gate_enabled: bool = Field(default=False, alias="CONCURRENCY_GATE_ENABLED")
     max_concurrent_calls: int = Field(default=8, ge=1, le=50, alias="MAX_CONCURRENT_CALLS")
     reserved_concurrency: int = Field(default=2, ge=0, le=20, alias="RESERVED_CONCURRENCY")
-    max_autonomous_calls_per_elder_per_day: int = Field(
-        default=2, ge=1, le=10, alias="MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY"
+    max_autonomous_calls_per_contact_per_day: int = Field(
+        default=2, ge=1, le=10, alias="MAX_AUTONOMOUS_CALLS_PER_CONTACT_PER_DAY"
     )
     autonomous_dialing_paused: bool = Field(default=False, alias="AUTONOMOUS_DIALING_PAUSED")
 
@@ -175,7 +183,47 @@ class Settings(BaseSettings):
     cartesia_version: str = Field(default="2024-11-13", alias="CARTESIA_VERSION")
     cartesia_sample_model: str = Field(default="sonic-2", alias="CARTESIA_SAMPLE_MODEL")
     gcp_project: str | None = Field(default=None, alias="GCP_PROJECT")
-    vertex_location: str = Field(default="us-central1", alias="VERTEX_LOCATION")
+    vertex_location: str = Field(default="global", alias="VERTEX_LOCATION")
+    # Post-call summarization + fact extraction (US4 / FR-024). Ship-inert: default OFF,
+    # so no Vertex call (spend or PHI egress) happens until a deploy explicitly enables it
+    # AND gcp_project is set. Reuses the text-test Vertex ADC path (Constitution II) — never
+    # the Gemini Developer API. The model is a Vertex Gemini id (model_catalog provider).
+    summarization_enabled: bool = Field(default=False, alias="SUMMARIZATION_ENABLED")
+    summarization_model: str = Field(default="gemini-2.5-flash", alias="SUMMARIZATION_MODEL")
+
+    # --- Clara Care Parity (feature 002): three new poller phases + inbound-SMS
+    # verification + Spanish callback. All ship-inert: every new poller defaults OFF,
+    # so merging changes NO runtime behavior until a deploy explicitly enables them
+    # (mirrors the scheduler/webhook-delivery flag discipline above). The notification
+    # outbox interval is capped at 300s so a family alert (crisis/missed-call) is always
+    # dispatched within the 5-minute budget (SC-004). TELNYX_INBOUND_PUBLIC_KEY verifies
+    # the inbound Telnyx SMS webhook (US2/US7); blank => None (compose passes "").
+    notification_outbox_enabled: bool = Field(default=False, alias="NOTIFICATION_OUTBOX_ENABLED")
+    notification_outbox_poll_interval_s: int = Field(
+        default=60, ge=5, le=300, alias="NOTIFICATION_OUTBOX_POLL_INTERVAL_S"
+    )
+    callback_dialer_poller_enabled: bool = Field(
+        default=False, alias="CALLBACK_DIALER_POLLER_ENABLED"
+    )
+    callback_dialer_poll_interval_s: int = Field(
+        default=60, ge=5, le=300, alias="CALLBACK_DIALER_POLL_INTERVAL_S"
+    )
+    family_report_poller_enabled: bool = Field(default=False, alias="FAMILY_REPORT_POLLER_ENABLED")
+    family_report_poll_interval_s: int = Field(
+        default=3600, ge=60, le=86400, alias="FAMILY_REPORT_POLL_INTERVAL_S"
+    )
+    # Ed25519 public key used to verify inbound Telnyx webhook signatures. Held as
+    # SecretStr so it never lands in repr()/logs even though a public key is not secret.
+    telnyx_inbound_public_key: SecretStr | None = Field(
+        default=None, alias="TELNYX_INBOUND_PUBLIC_KEY"
+    )
+    # How many times a not-taken medication is re-asked before the reminder is capped
+    # and a routine follow_up_flag is raised instead of nagging further (US3 / FR-019).
+    med_reask_cap: int = Field(default=3, ge=1, le=10, alias="MED_REASK_CAP")
+    # Agent profile id (UUID string) configured for Spanish-language callbacks (US8 /
+    # FR-030). Blank => None: a Spanish callback is then created but flagged for an
+    # operator rather than auto-dialed with a Spanish profile.
+    spanish_profile_id: str | None = Field(default=None, alias="SPANISH_PROFILE_ID")
 
     @model_validator(mode="after")
     def _reserved_below_max(self) -> Settings:
@@ -216,6 +264,9 @@ class Settings(BaseSettings):
         # Compose passes these unset optionals as "" (${VAR:-}); blank => None.
         "cartesia_api_key",
         "gcp_project",
+        # Clara Care Parity (002): inbound-SMS verification key + Spanish profile id.
+        "telnyx_inbound_public_key",
+        "spanish_profile_id",
         mode="before",
     )
     @classmethod
@@ -224,6 +275,19 @@ class Settings(BaseSettings):
         # whitespace-only values as unset so truthiness checks behave correctly.
         if isinstance(v, str) and not v.strip():
             return None
+        return v
+
+    @field_validator("spanish_profile_id", mode="after")
+    @classmethod
+    def _spanish_profile_id_is_uuid(cls, v: str | None) -> str | None:
+        # set_spanish_callback parses this as a UUID (the callback's profile_override), so a
+        # non-UUID value would raise 500 on every Spanish callback. Fail fast at startup.
+        if v is None:
+            return None
+        try:
+            uuid.UUID(v)
+        except ValueError as exc:
+            raise ValueError("SPANISH_PROFILE_ID must be a valid UUID") from exc
         return v
 
     @field_validator("livekit_url")
@@ -237,7 +301,7 @@ class Settings(BaseSettings):
     @classmethod
     def _https_scheme(cls, v: str) -> str:
         # Both carry a bearer secret in the Authorization header (the Telnyx / Cartesia
-        # API key), and the SMS flush also POSTs the rendered body + the elder's phone;
+        # API key), and the SMS flush also POSTs the rendered body + the contact's phone;
         # a plaintext/hostile endpoint would leak the secret (and PHI). Require https://
         # (operator config).
         if not v.startswith("https://"):

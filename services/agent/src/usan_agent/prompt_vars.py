@@ -6,7 +6,7 @@ variable catalog. `apps/api` and `services/agent` must not import each other
 `apps/api/.../schemas/variable_catalog.py` — keep names/defaults in sync.
 
 `substitute()` is NOT `str.format`: it only replaces `{{name}}` tokens (and the two
-legacy single-brace slots `{elder_name}` / `{last_check_in_line}` for back-compat).
+legacy single-brace slots `{contact_name}` / `{last_check_in_line}` for back-compat).
 Any other `{` or `}` in operator-authored text passes through untouched, so a stray
 or hostile brace can never raise KeyError/IndexError or act as a format-string
 injection vector (design spec §4.5).
@@ -23,9 +23,6 @@ from usan_agent.sanitize import sanitize_prompt_value
 # Order is documentation-only here; the agent only needs membership + defaults.
 BUILTIN_DEFAULTS: dict[str, str] = {
     "first_name": "there",
-    "elder_name": "there",
-    # contact_name is a permanent alias of elder_name (US4 / FR-024): same source,
-    # same "there" default. Keep adjacent to elder_name so the two stay in lockstep.
     "contact_name": "there",
     "call_direction": "",
     "current_time": "",
@@ -35,6 +32,16 @@ BUILTIN_DEFAULTS: dict[str, str] = {
     "last_mood": "",
     "last_pain": "",
     "today_meds": "",
+    "open_family_tasks": "",  # US2 / FR-009 — open family tasks to convey this call
+    "pending_med_reasks": "",  # US3 / FR-005 — meds reported not-taken, to re-ask
+    # US4 / FR-024 — durable memory carried across calls (resolved API-side).
+    "personal_facts": "",
+    "last_call_summary": "",
+    "open_plans": "",
+    "important_dates": "",
+    # US6 / FR-032 — "true" when the contact is due for this month's wellbeing survey
+    # (resolved API-side from wellbeing_survey_results); not PHI.
+    "survey_due": "",
 }
 BUILTIN_NAMES: frozenset[str] = frozenset(BUILTIN_DEFAULTS)
 
@@ -43,7 +50,7 @@ TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 
 # Legacy single-brace slots still present in already-published inbound templates.
 # Only these two are resolved; every other `{x}` passes through untouched.
-_LEGACY_SLOTS = ("elder_name", "last_check_in_line")
+_LEGACY_SLOTS = ("contact_name", "last_check_in_line")
 
 
 def substitute(text: str, values: Mapping[str, str]) -> str:
@@ -108,8 +115,8 @@ def build_vars(
         merged[name] = sanitize_prompt_value(value, max_len=_INJECTED_VALUE_MAX_LEN)
 
     # Resolved built-ins win over custom/defaults. They are STILL injected values
-    # derived from elder/call data (e.g. last_check_in embeds WellnessLog.notes —
-    # elder-spoken, transcribed text), so they are sanitized here too before being
+    # derived from contact/call data (e.g. last_check_in embeds WellnessLog.notes —
+    # contact-spoken, transcribed text), so they are sanitized here too before being
     # woven into the prompt (design spec §4.5). The agent is the trust boundary
     # nearest the LLM; sanitizing here is defense-in-depth regardless of the API.
     for name, value in resolved.items():

@@ -25,7 +25,7 @@ const SAMPLE: VariableSpec[] = [
   {
     name: "first_name",
     tier: "builtin",
-    description: "The elder's first name.",
+    description: "The contact's first name.",
     default: "there",
     example: "Margaret",
     phi: false,

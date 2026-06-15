@@ -191,7 +191,7 @@ services:
       AGENT_NAME: ${AGENT_NAME}
       LOG_LEVEL: ${LOG_LEVEL}
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
-      # Operator/management API plane auth (GET/POST /v1/elders, /v1/dnc, /v1/calls).
+      # Operator/management API plane auth (GET/POST /v1/contacts, /v1/dnc, /v1/calls).
       OPERATOR_API_KEY: ${OPERATOR_API_KEY}
       # Telnyx Messaging (Phase 3 send_sms). Feature flag default FALSE: no SMS is
       # ever sent until a deploy sets TELNYX_MESSAGING_ENABLED=true AND the secret /
@@ -235,7 +235,7 @@ services:
       CONCURRENCY_GATE_ENABLED: ${CONCURRENCY_GATE_ENABLED:-true}
       MAX_CONCURRENT_CALLS: ${MAX_CONCURRENT_CALLS:-8}
       RESERVED_CONCURRENCY: ${RESERVED_CONCURRENCY:-2}
-      MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY: ${MAX_AUTONOMOUS_CALLS_PER_ELDER_PER_DAY:-2}
+      MAX_AUTONOMOUS_CALLS_PER_CONTACT_PER_DAY: ${MAX_AUTONOMOUS_CALLS_PER_CONTACT_PER_DAY:-2}
       AUTONOMOUS_DIALING_PAUSED: ${AUTONOMOUS_DIALING_PAUSED:-false}
       # Recording (Plan 4b): blank disables it; the api signs read URLs for this bucket.
       GCS_BUCKET: ${GCS_BUCKET:-}
@@ -248,6 +248,20 @@ services:
       WEBHOOK_DELIVERY_POLL_INTERVAL_S: ${WEBHOOK_DELIVERY_POLL_INTERVAL_S:-10}
       WEBHOOK_DELIVERY_TIMEOUT_S: ${WEBHOOK_DELIVERY_TIMEOUT_S:-10}
       WEBHOOK_DELIVERY_CIRCUIT_BREAKER_THRESHOLD: ${WEBHOOK_DELIVERY_CIRCUIT_BREAKER_THRESHOLD:-10}
+      # Clara Care Parity pollers (spec 002). SHIP-INERT: all default OFF so a stale .env
+      # interpolates to no autonomous behavior; opt in per-stack via .env. The notification
+      # outbox additionally cannot transmit unless TELNYX_MESSAGING_ENABLED=true above —
+      # it backlogs as 'pending' until then (compliance Gate 1).
+      NOTIFICATION_OUTBOX_ENABLED: ${NOTIFICATION_OUTBOX_ENABLED:-false}
+      NOTIFICATION_OUTBOX_POLL_INTERVAL_S: ${NOTIFICATION_OUTBOX_POLL_INTERVAL_S:-60}
+      CALLBACK_DIALER_POLLER_ENABLED: ${CALLBACK_DIALER_POLLER_ENABLED:-false}
+      CALLBACK_DIALER_POLL_INTERVAL_S: ${CALLBACK_DIALER_POLL_INTERVAL_S:-60}
+      FAMILY_REPORT_POLLER_ENABLED: ${FAMILY_REPORT_POLLER_ENABLED:-false}
+      FAMILY_REPORT_POLL_INTERVAL_S: ${FAMILY_REPORT_POLL_INTERVAL_S:-3600}
+      # Ed25519 public key verifying inbound Telnyx SMS webhooks (fail-closed when blank);
+      # SPANISH_PROFILE_ID picks the agent profile for Spanish callbacks (blank => operator-flagged).
+      TELNYX_INBOUND_PUBLIC_KEY: ${TELNYX_INBOUND_PUBLIC_KEY:-}
+      SPANISH_PROFILE_ID: ${SPANISH_PROFILE_ID:-}
       # Voice-sample preview proxy (Admin Studio): the voice picker's "Play sample"
       # calls Cartesia TTS from the API, so the API needs its OWN copy of the key
       # (the agent service also gets it for live TTS). CARTESIA_API_KEY is required
@@ -257,6 +271,15 @@ services:
       CARTESIA_API_URL: ${CARTESIA_API_URL:-https://api.cartesia.ai}
       CARTESIA_VERSION: ${CARTESIA_VERSION:-2024-11-13}
       CARTESIA_SAMPLE_MODEL: ${CARTESIA_SAMPLE_MODEL:-sonic-2}
+      # Vertex AI (BAA-covered, ADC via the VM service account) — the API ALSO calls Vertex
+      # for the Admin Studio text-test, US4 post-call summarization, and the US8 family-report
+      # narrative (separate from the agent's own copy). SUMMARIZATION_* ship-inert (default
+      # OFF) — needs GCP_PROJECT set AND the flag on, else the narrative uses the deterministic
+      # fallback. These run in the API process, so they MUST be on the api service env too.
+      GCP_PROJECT: ${GCP_PROJECT}
+      VERTEX_LOCATION: ${VERTEX_LOCATION:-global}
+      SUMMARIZATION_ENABLED: ${SUMMARIZATION_ENABLED:-false}
+      SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL:-gemini-2.5-flash}
     # The API is stateless: no on-disk writes outside /tmp, so run the root
     # filesystem read-only and block privilege escalation. /tmp is a tmpfs for
     # any transient scratch (e.g. signed-URL staging).

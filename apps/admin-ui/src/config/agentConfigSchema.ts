@@ -21,7 +21,7 @@ export const TOOL_NAMES = [
 export type ToolName = (typeof TOOL_NAMES)[number];
 
 // Personalization slots allowed in the inbound template (ALLOWED_TEMPLATE_SLOTS).
-export const ALLOWED_TEMPLATE_SLOTS = ["elder_name", "last_check_in_line"] as const;
+export const ALLOWED_TEMPLATE_SLOTS = ["contact_name", "last_check_in_line"] as const;
 
 // {{name}} tokens (with optional inner whitespace) are the unified substitution
 // syntax. Mirrors apps/api TOKEN_RE / the agent's prompt_vars.TOKEN_RE.
@@ -63,7 +63,7 @@ export const smsTemplateSchema = z
     }
   });
 // Legacy single-brace slots kept only for back-compat in the personalization template.
-const LEGACY_SLOT_RE = /\{(elder_name|last_check_in_line)\}/g;
+const LEGACY_SLOT_RE = /\{(contact_name|last_check_in_line)\}/g;
 
 // Field-tiered brace rule (mirrors apps/api schemas/agent_config.py, spec §5.1):
 // strip the allowed {{tokens}} (and, for the template, the legacy {slots}) and if any

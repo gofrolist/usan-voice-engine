@@ -13,14 +13,16 @@ from typing import Any, Literal
 from livekit.agents import JobContext, WorkerOptions, cli
 from loguru import logger
 
+from usan_agent import api_client
 from usan_agent.agent_config import AgentConfig
-from usan_agent.api_client import fetch_agent_config, start_inbound_call
+from usan_agent.api_client import CrisisCategory, fetch_agent_config, start_inbound_call
 from usan_agent.check_in import (
     CheckInData,
     build_check_in_agent,
     build_inbound_agent,
     build_test_agent,
 )
+from usan_agent.crisis_watcher import CrisisWatcher
 from usan_agent.ids import validate_call_id
 from usan_agent.logging_config import configure_logging
 from usan_agent.metrics_hooks import register_metrics_flush
@@ -44,7 +46,7 @@ class CallMetadata:
 
     Inbound dispatch-rule jobs carry no metadata, so absence means inbound.
     ``resolved_vars`` holds the API-resolved DATA built-ins; ``timezone`` is the
-    elder's IANA tz string.  The agent adds ``current_time``/``current_date``
+    contact's IANA tz string.  The agent adds ``current_time``/``current_date``
     from ``timezone`` via ``build_vars``.  ``dynamic_vars`` stays the operator's
     custom map (the idempotency payload — never merged with built-ins).
     """
@@ -106,9 +108,9 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
     """Inbound: wait for the caller, look them up, run a personalized check-in.
 
     Uses the inbound default config (cfg). No voicemail detection on inbound (spec §7).
-    A known elder gets the tool-driven check-in with a personalized opening + transcript
+    A known contact gets the tool-driven check-in with a personalized opening + transcript
     flush; an unknown number or a failed lookup falls back to a greet-only conversation
-    (no per-elder state, so no orphaned wellness/medication logs).
+    (no per-contact state, so no orphaned wellness/medication logs).
     """
     participant = await ctx.wait_for_participant()
     phone = _caller_phone(participant)
@@ -120,7 +122,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
     # audio capture is ever needed, start the session first and reconfigure the
     # agent after the lookup.
     info = await start_inbound_call(phone, ctx.room.name, settings)
-    if info and info.get("elder_known") and info.get("call_id"):
+    if info and info.get("contact_known") and info.get("call_id"):
         call_id = str(info["call_id"])
         dynamic_vars = info.get("dynamic_vars") or {}
         data = CheckInData(
@@ -139,12 +141,14 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
+        # Deterministic crisis safety net for inbound known-contact calls too (US1 / FR-002).
+        _arm_crisis_safety_net(session, call_id=call_id, settings=settings)
         # Hold a reference so the guard task is not garbage-collected before it
         # completes (asyncio keeps only a weak reference to fire-and-forget tasks).
         _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
         _BACKGROUND_TASKS.add(_guard_task)
         _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
-        log.info("Inbound check-in started for known elder (call_id={cid})", cid=call_id)
+        log.info("Inbound check-in started for known contact (call_id={cid})", cid=call_id)
         # Consent before capture: the disclosure must finish playing before egress
         # starts, so no audio is recorded prior to the spoken notice (consent ordering).
         await say_recording_disclosure(session, cfg)
@@ -152,7 +156,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
         await session.generate_reply(instructions=cfg.prompts.inbound_opening)
         return
 
-    # Unknown caller or lookup failed: greet-only, no per-elder state.
+    # Unknown caller or lookup failed: greet-only, no per-contact state.
     session = build_session(settings, cfg)
     agent = build_agent(cfg)
     await session.start(agent=agent, room=ctx.room)
@@ -161,7 +165,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
     _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
     _BACKGROUND_TASKS.add(_guard_task)
     _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
-    log.info("Inbound greet-only (no known elder)")
+    log.info("Inbound greet-only (no known contact)")
     await greet(session, cfg)
 
 
@@ -200,7 +204,7 @@ async def _max_duration_guard(ctx: JobContext, max_s: float) -> None:
     except asyncio.CancelledError:
         return
     logger.bind(room=ctx.room.name).warning("Max call duration reached; ending job")
-    # Hang up the elder's SIP/PSTN leg first: shutdown() disconnects the agent but
+    # Hang up the contact's SIP/PSTN leg first: shutdown() disconnects the agent but
     # leaves the room (and the billable carrier leg) up until empty_timeout. Awaiting
     # matters — delete_room enqueues work that shutdown would otherwise cancel. Mirrors
     # check_in._do_end_call / voicemail_action.leave_voicemail (delete_room then shutdown).
@@ -264,6 +268,53 @@ async def _run_test_session(ctx: JobContext, settings: Settings, meta: CallMetad
     _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
     log.info("Test participant present; beginning conversation")
     await session.generate_reply(instructions=cfg.prompts.checkin_flow_instructions)
+
+
+async def _handle_crisis(
+    session: Any, call_id: str, settings: Settings, category: CrisisCategory
+) -> None:
+    """Escalate a deterministically-detected crisis and speak the emergency resource.
+
+    Best-effort: a failed escalation still speaks a safe fallback so the contact always
+    hears help. The server-side raise_crisis records the urgent flag and notifies family.
+    """
+    script: str | None = None
+    try:
+        resp = await api_client.raise_crisis(
+            call_id, settings, category=category, detection_source="safety_net"
+        )
+        if isinstance(resp, dict):
+            spoken = resp.get("spoken_script")
+            script = spoken if isinstance(spoken, str) and spoken else None
+    except Exception:
+        logger.bind(call_id=call_id).warning("Crisis safety-net escalation failed")
+    spoken_text = script or (
+        "I'm very concerned about your safety. If this is an emergency, please call 911 right now."
+    )
+    try:
+        await session.say(spoken_text, allow_interruptions=False)
+    except Exception:
+        logger.bind(call_id=call_id).warning("Failed to speak crisis resource")
+
+
+def _arm_crisis_safety_net(session: Any, *, call_id: str, settings: Settings) -> None:
+    """Subscribe a deterministic CrisisWatcher to STT and escalate on the first match.
+
+    The life-safety net (FR-002): it fires server-side escalation + spoken resource even
+    if the LLM never calls raise_crisis. ``feed`` is sync (runs in the event handler); the
+    async escalation is spawned and strong-referenced so it is not GC'd mid-flight.
+    """
+    watcher = CrisisWatcher()
+
+    def _on_transcript(ev: Any) -> None:
+        category = watcher.feed(ev.transcript)
+        if category is None:
+            return
+        task = asyncio.create_task(_handle_crisis(session, call_id, settings, category))
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+    session.on("user_input_transcribed", _on_transcript)
 
 
 async def entrypoint(ctx: JobContext) -> None:
@@ -343,6 +394,9 @@ async def entrypoint(ctx: JobContext) -> None:
         # Honour admin-configured voicemail phrases; empty -> built-in §7 patterns.
         watcher = VoicemailWatcher(matcher=build_matcher(cfg.voicemail_detection.trigger_phrases))
         session.on("user_input_transcribed", lambda ev: watcher.feed(ev.transcript))
+        # Deterministic crisis safety net for the whole call (US1 / FR-002): escalates +
+        # speaks the resource even if the LLM misses the crisis.
+        _arm_crisis_safety_net(session, call_id=call_id, settings=settings)
         log.info("Participant present; running voicemail detection window")
         await _run_detection_window(
             ctx, session, watcher, call_id=call_id, settings=settings, cfg=cfg

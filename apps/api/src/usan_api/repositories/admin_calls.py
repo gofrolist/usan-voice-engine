@@ -7,7 +7,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call, Elder
+from usan_api.db.models import Call, Contact
 
 MAX_ADMIN_CALLS_LIMIT = 500
 
@@ -15,7 +15,7 @@ MAX_ADMIN_CALLS_LIMIT = 500
 async def list_calls(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID | None = None,
+    contact_id: uuid.UUID | None = None,
     status: CallStatus | None = None,
     direction: CallDirection | None = None,
     origin: str | None = None,
@@ -24,7 +24,7 @@ async def list_calls(
     limit: int = 50,
     offset: int = 0,
 ) -> list[tuple[Call, str | None, str | None]]:
-    """Admin calls list read model: Call + elder name/phone via outerjoin (spec §4.1).
+    """Admin calls list read model: Call + contact name/phone via outerjoin (spec §4.1).
 
     `origin` translates to idempotency_key prefix predicates over the reserved
     sched:/batch: namespace (A1); 'adhoc' is direction='outbound' AND (key IS NULL OR
@@ -36,9 +36,11 @@ async def list_calls(
     """
     limit = max(1, min(limit, MAX_ADMIN_CALLS_LIMIT))
     offset = max(0, offset)
-    stmt = select(Call, Elder.name, Elder.phone_e164).outerjoin(Elder, Call.elder_id == Elder.id)
-    if elder_id is not None:
-        stmt = stmt.where(Call.elder_id == elder_id)
+    stmt = select(Call, Contact.name, Contact.phone_e164).outerjoin(
+        Contact, Call.contact_id == Contact.id
+    )
+    if contact_id is not None:
+        stmt = stmt.where(Call.contact_id == contact_id)
     if status is not None:
         stmt = stmt.where(Call.status == status)
     if direction is not None:

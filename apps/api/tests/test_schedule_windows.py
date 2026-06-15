@@ -61,7 +61,7 @@ def test_effective_window_is_timezone_invariant():
 
 
 def test_next_run_at_inside_window_returns_after():
-    # UTC elder, window 09:00-17:00 all days; 12:00 local is inside -> unchanged
+    # UTC contact, window 09:00-17:00 all days; 12:00 local is inside -> unchanged
     after = datetime(2026, 6, 10, 12, 0, tzinfo=UTC)
     result = next_run_at(after, "UTC", window_start=time(9), window_end=time(17), days_mask=127)
     assert result == after

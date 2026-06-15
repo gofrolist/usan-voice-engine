@@ -27,10 +27,10 @@ _OP = {"Authorization": "Bearer " + "o" * 32}
 NOW = datetime(2026, 6, 10, 16, 0, tzinfo=UTC)
 
 
-def _seed_elder(client, *, name: str = "Rose Elder") -> str:
+def _seed_contact(client, *, name: str = "Rose Contact") -> str:
     phone = f"+1555{str(uuid.uuid4().int)[:7].zfill(7)}"
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={"name": name, "phone_e164": phone, "timezone": "America/New_York"},
         headers=_OP,
     )
@@ -38,10 +38,10 @@ def _seed_elder(client, *, name: str = "Rose Elder") -> str:
     return r.json()["id"]
 
 
-def _batch_body(elder_ids: list[str], **overrides: Any) -> dict[str, Any]:
+def _batch_body(contact_ids: list[str], **overrides: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
         "name": "June campaign",
-        "targets": [{"elder_id": eid} for eid in elder_ids],
+        "targets": [{"contact_id": eid} for eid in contact_ids],
     }
     body.update(overrides)
     return body
@@ -61,7 +61,7 @@ async def _run_db(async_database_url: str, fn) -> Any:
 
 async def _seed_call(
     db: AsyncSession,
-    elder_id: str,
+    contact_id: str,
     *,
     status: CallStatus,
     scheduled_at: datetime | None = None,
@@ -69,7 +69,7 @@ async def _seed_call(
     attempt: int = 1,
 ) -> uuid.UUID:
     call = Call(
-        elder_id=uuid.UUID(elder_id),
+        contact_id=uuid.UUID(contact_id),
         direction=CallDirection.OUTBOUND,
         status=status,
         scheduled_at=scheduled_at,
@@ -90,8 +90,8 @@ async def _call_status(db: AsyncSession, call_id: uuid.UUID) -> CallStatus:
 
 
 def test_create_batch_201_inserts_targets_one_txn(client):
-    elder_ids = [_seed_elder(client) for _ in range(3)]
-    r = client.post("/v1/batches", json=_batch_body(elder_ids), headers=_OP)
+    contact_ids = [_seed_contact(client) for _ in range(3)]
+    r = client.post("/v1/batches", json=_batch_body(contact_ids), headers=_OP)
     assert r.status_code == 201
     body = r.json()
     assert body["status"] == "scheduled"
@@ -107,45 +107,45 @@ def test_create_batch_201_inserts_targets_one_txn(client):
     assert detail.status_code == 200
     targets = detail.json()["targets"]
     assert [t["target_index"] for t in targets] == [0, 1, 2]
-    assert [t["elder_id"] for t in targets] == elder_ids
+    assert [t["contact_id"] for t in targets] == contact_ids
     assert all(t["status"] == "pending" for t in targets)
 
 
-def test_create_batch_422_unknown_elder_with_target_detail(client):
-    elder_ids = [_seed_elder(client), str(uuid.uuid4()), _seed_elder(client)]
-    r = client.post("/v1/batches", json=_batch_body(elder_ids), headers=_OP)
+def test_create_batch_422_unknown_contact_with_target_detail(client):
+    contact_ids = [_seed_contact(client), str(uuid.uuid4()), _seed_contact(client)]
+    r = client.post("/v1/batches", json=_batch_body(contact_ids), headers=_OP)
     assert r.status_code == 422
-    assert r.json()["detail"] == [{"target_index": 1, "error": "elder not found"}]
+    assert r.json()["detail"] == [{"target_index": 1, "error": "contact not found"}]
     # All-or-nothing: no batch row persisted.
     assert client.get("/v1/batches", headers=_OP).json() == []
 
 
 def test_create_batch_422_per_target_vars_cap(client):
-    elder_id = _seed_elder(client)
-    body = _batch_body([elder_id])
+    contact_id = _seed_contact(client)
+    body = _batch_body([contact_id])
     body["targets"][0]["dynamic_vars"] = {"pad": "x" * 9000}  # > 8 KB canonical cap
     r = client.post("/v1/batches", json=body, headers=_OP)
     assert r.status_code == 422
 
 
-def test_create_batch_422_duplicate_elder(client):
-    elder_id = _seed_elder(client)
-    r = client.post("/v1/batches", json=_batch_body([elder_id, elder_id]), headers=_OP)
+def test_create_batch_422_duplicate_contact(client):
+    contact_id = _seed_contact(client)
+    r = client.post("/v1/batches", json=_batch_body([contact_id, contact_id]), headers=_OP)
     assert r.status_code == 422
 
 
 def test_create_batch_422_bad_profile_override_batch_and_target(client):
-    elder_ids = [_seed_elder(client) for _ in range(2)]
+    contact_ids = [_seed_contact(client) for _ in range(2)]
 
     r_batch = client.post(
         "/v1/batches",
-        json=_batch_body(elder_ids, profile_override=str(uuid.uuid4())),
+        json=_batch_body(contact_ids, profile_override=str(uuid.uuid4())),
         headers=_OP,
     )
     assert r_batch.status_code == 422
     assert any(item["target_index"] == "batch" for item in r_batch.json()["detail"])
 
-    body = _batch_body(elder_ids)
+    body = _batch_body(contact_ids)
     body["targets"][1]["profile_override"] = str(uuid.uuid4())
     r_target = client.post("/v1/batches", json=body, headers=_OP)
     assert r_target.status_code == 422
@@ -153,8 +153,8 @@ def test_create_batch_422_bad_profile_override_batch_and_target(client):
 
 
 def test_create_batch_replay_200_same_digest(client):
-    elder_ids = [_seed_elder(client) for _ in range(2)]
-    body = _batch_body(elder_ids, idempotency_key="june-batch-1")
+    contact_ids = [_seed_contact(client) for _ in range(2)]
+    body = _batch_body(contact_ids, idempotency_key="june-batch-1")
     first = client.post("/v1/batches", json=body, headers=_OP)
     assert first.status_code == 201
     replay = client.post("/v1/batches", json=body, headers=_OP)
@@ -165,8 +165,8 @@ def test_create_batch_replay_200_same_digest(client):
 
 
 def test_create_batch_409_same_key_different_digest(client):
-    elder_ids = [_seed_elder(client) for _ in range(2)]
-    body = _batch_body(elder_ids, idempotency_key="june-batch-2")
+    contact_ids = [_seed_contact(client) for _ in range(2)]
+    body = _batch_body(contact_ids, idempotency_key="june-batch-2")
     assert client.post("/v1/batches", json=body, headers=_OP).status_code == 201
     body["targets"][0]["dynamic_vars"] = {"first_name": "Rose"}  # one var changed
     r = client.post("/v1/batches", json=body, headers=_OP)
@@ -177,8 +177,8 @@ def test_create_batch_replay_after_cancel_returns_cancelled_batch(client):
     # Digest replay deliberately ignores batch status (spec §4.2/§9): the same
     # key + payload re-POSTed after cancel returns the CANCELLED batch — it must
     # never silently re-run the campaign.
-    elder_ids = [_seed_elder(client) for _ in range(2)]
-    body = _batch_body(elder_ids, idempotency_key="june-batch-3")
+    contact_ids = [_seed_contact(client) for _ in range(2)]
+    body = _batch_body(contact_ids, idempotency_key="june-batch-3")
     created = client.post("/v1/batches", json=body, headers=_OP)
     assert created.status_code == 201
     batch_id = created.json()["id"]
@@ -193,10 +193,12 @@ def test_create_batch_replay_after_cancel_returns_cancelled_batch(client):
 def test_list_batches_counts_and_status_filter(client):
     first = client.post(
         "/v1/batches",
-        json=_batch_body([_seed_elder(client) for _ in range(2)]),
+        json=_batch_body([_seed_contact(client) for _ in range(2)]),
         headers=_OP,
     ).json()
-    second = client.post("/v1/batches", json=_batch_body([_seed_elder(client)]), headers=_OP).json()
+    second = client.post(
+        "/v1/batches", json=_batch_body([_seed_contact(client)]), headers=_OP
+    ).json()
     assert client.post(f"/v1/batches/{second['id']}/cancel", headers=_OP).status_code == 200
 
     r_all = client.get("/v1/batches", headers=_OP)
@@ -211,12 +213,12 @@ def test_list_batches_counts_and_status_filter(client):
 
 
 def test_get_batch_detail_histogram(client, async_database_url):
-    elder_ids = [_seed_elder(client) for _ in range(2)]
-    batch_id = client.post("/v1/batches", json=_batch_body(elder_ids), headers=_OP).json()["id"]
+    contact_ids = [_seed_contact(client) for _ in range(2)]
+    batch_id = client.post("/v1/batches", json=_batch_body(contact_ids), headers=_OP).json()["id"]
 
     async def _finalize_one(db: AsyncSession) -> None:
         targets = await batches_repo.list_targets(db, uuid.UUID(batch_id))
-        call_id = await _seed_call(db, elder_ids[0], status=CallStatus.COMPLETED)
+        call_id = await _seed_call(db, contact_ids[0], status=CallStatus.COMPLETED)
         assert await batches_repo.mark_target_materialized(db, targets[0], call_id=call_id, now=NOW)
         assert await batches_repo.finalize_target(db, targets[0], final_status="completed", now=NOW)
 
@@ -232,16 +234,18 @@ def test_get_batch_detail_histogram(client, async_database_url):
 
 
 def test_cancel_batch_200_marks_pending_and_queued_roots(client, async_database_url):
-    elder_ids = [_seed_elder(client) for _ in range(3)]
-    batch_id = client.post("/v1/batches", json=_batch_body(elder_ids), headers=_OP).json()["id"]
+    contact_ids = [_seed_contact(client) for _ in range(3)]
+    batch_id = client.post("/v1/batches", json=_batch_body(contact_ids), headers=_OP).json()["id"]
 
     async def _seed_states(db: AsyncSession) -> dict[str, uuid.UUID]:
         targets = await batches_repo.list_targets(db, uuid.UUID(batch_id))
-        queued_root = await _seed_call(db, elder_ids[1], status=CallStatus.QUEUED, scheduled_at=NOW)
+        queued_root = await _seed_call(
+            db, contact_ids[1], status=CallStatus.QUEUED, scheduled_at=NOW
+        )
         assert await batches_repo.mark_target_materialized(
             db, targets[1], call_id=queued_root, now=NOW
         )
-        in_progress_root = await _seed_call(db, elder_ids[2], status=CallStatus.IN_PROGRESS)
+        in_progress_root = await _seed_call(db, contact_ids[2], status=CallStatus.IN_PROGRESS)
         assert await batches_repo.mark_target_materialized(
             db, targets[2], call_id=in_progress_root, now=NOW
         )
@@ -277,15 +281,15 @@ def test_cancel_batch_200_marks_pending_and_queued_roots(client, async_database_
 def test_cancel_batch_cancels_chain_tip_not_root(client, async_database_url):
     # A NO_ANSWER root with a QUEUED retry child: cancel must walk the chain via
     # parent_call_id and flip the TIP, leaving the root's truthful outcome alone.
-    elder_id = _seed_elder(client)
-    batch_id = client.post("/v1/batches", json=_batch_body([elder_id]), headers=_OP).json()["id"]
+    contact_id = _seed_contact(client)
+    batch_id = client.post("/v1/batches", json=_batch_body([contact_id]), headers=_OP).json()["id"]
 
     async def _seed_chain(db: AsyncSession) -> dict[str, uuid.UUID]:
         targets = await batches_repo.list_targets(db, uuid.UUID(batch_id))
-        root = await _seed_call(db, elder_id, status=CallStatus.NO_ANSWER)
+        root = await _seed_call(db, contact_id, status=CallStatus.NO_ANSWER)
         child = await _seed_call(
             db,
-            elder_id,
+            contact_id,
             status=CallStatus.QUEUED,
             scheduled_at=NOW,
             parent_call_id=root,
@@ -311,7 +315,7 @@ def test_cancel_batch_cancels_chain_tip_not_root(client, async_database_url):
 
 def test_cancel_idempotent_200_and_completed_409(client, async_database_url):
     batch_id = client.post(
-        "/v1/batches", json=_batch_body([_seed_elder(client)]), headers=_OP
+        "/v1/batches", json=_batch_body([_seed_contact(client)]), headers=_OP
     ).json()["id"]
     first = client.post(f"/v1/batches/{batch_id}/cancel", headers=_OP)
     assert first.status_code == 200
@@ -321,7 +325,7 @@ def test_cancel_idempotent_200_and_completed_409(client, async_database_url):
     assert again.json()["cancelled_at"] == first.json()["cancelled_at"]
 
     completed_id = client.post(
-        "/v1/batches", json=_batch_body([_seed_elder(client)]), headers=_OP
+        "/v1/batches", json=_batch_body([_seed_contact(client)]), headers=_OP
     ).json()["id"]
 
     async def _complete(db: AsyncSession) -> None:
@@ -338,11 +342,11 @@ def test_cancel_idempotent_200_and_completed_409(client, async_database_url):
 
 
 def test_batch_mutations_write_audit_log_lines(client):
-    elder_id = _seed_elder(client)
+    contact_id = _seed_contact(client)
     records: list[dict] = []
     handler_id = logger.add(lambda m: records.append(m.record), level="INFO")
     try:
-        batch_id = client.post("/v1/batches", json=_batch_body([elder_id]), headers=_OP).json()[
+        batch_id = client.post("/v1/batches", json=_batch_body([contact_id]), headers=_OP).json()[
             "id"
         ]
         assert client.post(f"/v1/batches/{batch_id}/cancel", headers=_OP).status_code == 200
@@ -361,13 +365,13 @@ def test_batch_mutations_write_audit_log_lines(client):
 def test_batch_log_lines_never_bind_name(client):
     # spec §8: call_batches.name is PHI-free BY CONVENTION ONLY — the log layer
     # must never bind it, so a name that does contain PHI never reaches the logs.
-    elder_id = _seed_elder(client)
+    contact_id = _seed_contact(client)
     batch_name = "Sentinel Sweep Confidential"
     records: list[dict] = []
     handler_id = logger.add(lambda m: records.append(m.record), level="INFO")
     try:
         batch_id = client.post(
-            "/v1/batches", json=_batch_body([elder_id], name=batch_name), headers=_OP
+            "/v1/batches", json=_batch_body([contact_id], name=batch_name), headers=_OP
         ).json()["id"]
         assert client.post(f"/v1/batches/{batch_id}/cancel", headers=_OP).status_code == 200
     finally:

@@ -11,7 +11,7 @@ from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
 from usan_api.repositories import admin_calls as admin_calls_repo
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=UTC)
 
@@ -26,23 +26,23 @@ async def session_factory(async_database_url):
 @pytest.fixture(autouse=True)
 async def _truncate(session_factory):
     async with session_factory() as db:
-        await db.execute(text("TRUNCATE calls, elders CASCADE"))
+        await db.execute(text("TRUNCATE calls, contacts CASCADE"))
         await db.commit()
 
 
-async def _seed_elder(factory, *, name: str = "Calls Elder") -> uuid.UUID:
+async def _seed_contact(factory, *, name: str = "Calls Contact") -> uuid.UUID:
     phone = f"+1555{str(uuid.uuid4().int)[:7].zfill(7)}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(
+        contact = await contacts_repo.create_contact(
             db, name=name, phone_e164=phone, timezone="America/New_York"
         )
         await db.commit()
-        return elder.id
+        return contact.id
 
 
 async def _create_call(
     factory,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     *,
     direction: CallDirection = CallDirection.OUTBOUND,
     status: CallStatus = CallStatus.QUEUED,
@@ -51,7 +51,7 @@ async def _create_call(
     async with factory() as db:
         call = await calls_repo.create_call(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=direction,
             status=status,
             idempotency_key=idempotency_key,
@@ -61,7 +61,7 @@ async def _create_call(
 
 
 async def test_orders_newest_first_id_tiebreaker(session_factory):
-    elder_id = await _seed_elder(session_factory)
+    contact_id = await _seed_contact(session_factory)
 
     # Three calls in ONE flush share created_at (func.now() is the txn
     # timestamp), so ordering must fall back to the id DESC tiebreaker.
@@ -70,7 +70,7 @@ async def test_orders_newest_first_id_tiebreaker(session_factory):
             (
                 await calls_repo.create_call(
                     db,
-                    elder_id=elder_id,
+                    contact_id=contact_id,
                     direction=CallDirection.OUTBOUND,
                     status=CallStatus.QUEUED,
                 )
@@ -80,7 +80,7 @@ async def test_orders_newest_first_id_tiebreaker(session_factory):
         await db.commit()
 
     # A fourth call in a later txn has a strictly later created_at: sorts first.
-    newest = await _create_call(session_factory, elder_id)
+    newest = await _create_call(session_factory, contact_id)
 
     # Python UUID ordering matches Postgres uuid byte ordering, so id DESC is
     # computable client-side.
@@ -91,21 +91,21 @@ async def test_orders_newest_first_id_tiebreaker(session_factory):
 
 
 async def test_origin_filter_matrix(session_factory):
-    elder_id = await _seed_elder(session_factory)
+    contact_id = await _seed_contact(session_factory)
     sched_id = await _create_call(
-        session_factory, elder_id, idempotency_key=f"sched:{elder_id}:2026-06-10"
+        session_factory, contact_id, idempotency_key=f"sched:{contact_id}:2026-06-10"
     )
     batch_id = await _create_call(
-        session_factory, elder_id, idempotency_key=f"batch:{uuid.uuid4()}:0"
+        session_factory, contact_id, idempotency_key=f"batch:{uuid.uuid4()}:0"
     )
-    operator_id = await _create_call(session_factory, elder_id, idempotency_key="operator-key-1")
+    operator_id = await _create_call(session_factory, contact_id, idempotency_key="operator-key-1")
     # NULL-key outbound: the retry-child shape — matches adhoc (chain root carries
     # provenance; documented spec §4.1 caveat).
-    null_key_id = await _create_call(session_factory, elder_id, idempotency_key=None)
+    null_key_id = await _create_call(session_factory, contact_id, idempotency_key=None)
     # Inbound calls are always NULL-key; the direction guard keeps them out of adhoc.
     async with session_factory() as db:
         inbound = await calls_repo.create_inbound_call(
-            db, elder_id=elder_id, livekit_room="room-inbound-origin"
+            db, contact_id=contact_id, livekit_room="room-inbound-origin"
         )
         await db.commit()
         inbound_id = inbound.id
@@ -130,9 +130,9 @@ async def test_origin_filter_matrix(session_factory):
         }
 
 
-async def test_status_direction_elder_filters(session_factory):
-    e1 = await _seed_elder(session_factory)
-    e2 = await _seed_elder(session_factory)
+async def test_status_direction_contact_filters(session_factory):
+    e1 = await _seed_contact(session_factory)
+    e2 = await _seed_contact(session_factory)
     completed = await _create_call(session_factory, e1, status=CallStatus.COMPLETED)
     queued = await _create_call(session_factory, e1, status=CallStatus.QUEUED)
     inbound = await _create_call(
@@ -146,18 +146,18 @@ async def test_status_direction_elder_filters(session_factory):
         by_direction = await admin_calls_repo.list_calls(db, direction=CallDirection.INBOUND)
         assert [call.id for call, _, _ in by_direction] == [inbound]
 
-        by_elder = await admin_calls_repo.list_calls(db, elder_id=e1)
-        assert {call.id for call, _, _ in by_elder} == {completed, queued}
+        by_contact = await admin_calls_repo.list_calls(db, contact_id=e1)
+        assert {call.id for call, _, _ in by_contact} == {completed, queued}
 
-        combined = await admin_calls_repo.list_calls(db, elder_id=e2, status=CallStatus.QUEUED)
+        combined = await admin_calls_repo.list_calls(db, contact_id=e2, status=CallStatus.QUEUED)
         assert combined == []
 
 
 async def test_created_range_to_exclusive(session_factory):
-    elder_id = await _seed_elder(session_factory)
-    early = await _create_call(session_factory, elder_id)
-    mid = await _create_call(session_factory, elder_id)
-    late = await _create_call(session_factory, elder_id)
+    contact_id = await _seed_contact(session_factory)
+    early = await _create_call(session_factory, contact_id)
+    mid = await _create_call(session_factory, contact_id)
+    late = await _create_call(session_factory, contact_id)
     boundary = NOW + timedelta(minutes=1)
     async with session_factory() as db:
         for call_id, created_at in (
@@ -186,8 +186,8 @@ async def test_created_range_to_exclusive(session_factory):
 async def test_limit_clamp_and_offset(session_factory):
     assert admin_calls_repo.MAX_ADMIN_CALLS_LIMIT == 500  # spec §4.1 bounded read
 
-    elder_id = await _seed_elder(session_factory)
-    ids = [await _create_call(session_factory, elder_id) for _ in range(3)]
+    contact_id = await _seed_contact(session_factory)
+    ids = [await _create_call(session_factory, contact_id) for _ in range(3)]
     # Force identical created_at so ordering must fall back to the id tiebreaker.
     async with session_factory() as db:
         await db.execute(update(Call).where(Call.id.in_(ids)).values(created_at=NOW))
@@ -204,25 +204,25 @@ async def test_limit_clamp_and_offset(session_factory):
         assert [call.id for call, _, _ in rest] == expected[1:]
 
 
-async def test_elder_join_and_deleted_elder(session_factory):
+async def test_contact_join_and_deleted_contact(session_factory):
     phone = f"+1555{str(uuid.uuid4().int)[:7].zfill(7)}"
     async with session_factory() as db:
-        elder = await elders_repo.create_elder(
-            db, name="Join Elder", phone_e164=phone, timezone="America/New_York"
+        contact = await contacts_repo.create_contact(
+            db, name="Join Contact", phone_e164=phone, timezone="America/New_York"
         )
         await db.commit()
-        elder_id = elder.id
-    call_id = await _create_call(session_factory, elder_id)
+        contact_id = contact.id
+    call_id = await _create_call(session_factory, contact_id)
 
     async with session_factory() as db:
         rows = await admin_calls_repo.list_calls(db)
         assert [(call.id, name, phone_e164) for call, name, phone_e164 in rows] == [
-            (call_id, "Join Elder", phone)
+            (call_id, "Join Contact", phone)
         ]
 
-    # ON DELETE SET NULL: the call survives the elder's deletion with NULL joins.
+    # ON DELETE SET NULL: the call survives the contact's deletion with NULL joins.
     async with session_factory() as db:
-        await db.execute(text("DELETE FROM elders"))
+        await db.execute(text("DELETE FROM contacts"))
         await db.commit()
 
     async with session_factory() as db:
@@ -230,6 +230,6 @@ async def test_elder_join_and_deleted_elder(session_factory):
         assert len(rows) == 1
         call, name, phone_e164 = rows[0]
         assert call.id == call_id
-        assert call.elder_id is None
+        assert call.contact_id is None
         assert name is None
         assert phone_e164 is None

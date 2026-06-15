@@ -19,7 +19,7 @@ from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
 
 # Plain-language resolution order (highest precedence first). Mirrors
 # repositories.agent_profiles.resolve_agent_config's precedence walk
-# (override -> elder/contact assignment -> per-direction default -> built-in
+# (override -> contact/contact assignment -> per-direction default -> built-in
 # fallback). Names only — no values (FR-017).
 RESOLUTION_ORDER: tuple[str, ...] = (
     "Per-call profile override",

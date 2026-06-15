@@ -1,4 +1,4 @@
-"""Repository for `call_schedules` rows (recurring per-elder wellness calls).
+"""Repository for `call_schedules` rows (recurring per-contact wellness calls).
 
 House rules: functions take the request session, `flush()` (+`refresh()` for
 returned rows), and never commit — routers and the scheduler poller own the
@@ -22,7 +22,7 @@ MAX_SCHEDULES_LIMIT = 500
 async def create_schedule(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     window_start_local: time,
     window_end_local: time,
     days_of_week: int,
@@ -30,12 +30,16 @@ async def create_schedule(
     dynamic_vars: dict[str, Any],
     profile_override: uuid.UUID | None,
     next_run_at: datetime,
+    slot: str = "morning",
 ) -> CallSchedule:
-    """Insert a schedule. UNIQUE elder_id raises IntegrityError on a duplicate
-    (one schedule per elder — the router maps it to 409).
+    """Insert a schedule. UNIQUE (contact_id, slot) raises IntegrityError on a
+    duplicate (one schedule per contact per morning|evening slot — the router maps it
+    to 409). ``slot`` defaults to 'morning' so pre-US5 single-slot callers are
+    unchanged.
     """
     row = CallSchedule(
-        elder_id=elder_id,
+        contact_id=contact_id,
+        slot=slot,
         window_start_local=window_start_local,
         window_end_local=window_end_local,
         days_of_week=days_of_week,
@@ -54,30 +58,50 @@ async def get_schedule(db: AsyncSession, schedule_id: uuid.UUID) -> CallSchedule
     return await db.get(CallSchedule, schedule_id)
 
 
-async def get_by_elder(db: AsyncSession, elder_id: uuid.UUID) -> CallSchedule | None:
-    result = await db.execute(select(CallSchedule).where(CallSchedule.elder_id == elder_id))
+async def get_by_contact(db: AsyncSession, contact_id: uuid.UUID) -> list[CallSchedule]:
+    """All of an contact's schedules — one row per slot (US5), ordered by slot for a
+    stable read."""
+    result = await db.execute(
+        select(CallSchedule)
+        .where(CallSchedule.contact_id == contact_id)
+        .order_by(CallSchedule.slot)
+    )
+    return list(result.scalars().all())
+
+
+async def get_by_contact_slot(
+    db: AsyncSession, *, contact_id: uuid.UUID, slot: str
+) -> CallSchedule | None:
+    """The contact's schedule for one slot — the router's per-(contact, slot) 409
+    pre-check; the composite UNIQUE(contact_id, slot) is the race backstop."""
+    result = await db.execute(
+        select(CallSchedule).where(CallSchedule.contact_id == contact_id, CallSchedule.slot == slot)
+    )
     return result.scalar_one_or_none()
 
 
 async def list_schedules(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID | None = None,
+    contact_id: uuid.UUID | None = None,
+    slot: str | None = None,
     last_result: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[CallSchedule]:
-    """Most-recent schedules, optionally filtered by elder/last_result.
+    """Most-recent schedules, optionally filtered by contact/slot/last_result.
 
     `?last_result=skipped_window` is the operator's "who missed today's call?"
-    view (spec §4.1). Newest first with an `id` tiebreaker; `limit` clamped to
-    1..MAX_SCHEDULES_LIMIT.
+    view (spec §4.1); `?slot=evening` narrows to one slot (US5). Newest first with
+    an `id` tiebreaker; `limit` clamped to 1..MAX_SCHEDULES_LIMIT.
     """
     limit = max(1, min(limit, MAX_SCHEDULES_LIMIT))
     offset = max(0, offset)
     stmt = select(CallSchedule)
-    if elder_id is not None:
-        stmt = stmt.where(CallSchedule.elder_id == elder_id)
+    if contact_id is not None:
+        stmt = stmt.where(CallSchedule.contact_id == contact_id)
+    if slot is not None:
+        stmt = stmt.where(CallSchedule.slot == slot)
     if last_result is not None:
         stmt = stmt.where(CallSchedule.last_result == last_result)
     stmt = (

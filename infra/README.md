@@ -114,25 +114,25 @@ spawns a metadata-less agent job (treated as inbound). The agent reads the SIP
 caller-ID (`sip.phoneNumber`), POSTs it to `POST /v1/calls/inbound` (worker-token
 authed), and the API looks the caller up by `phone_e164`:
 
-- **Known elder** → an inbound `calls` row (`direction=inbound`, `in_progress`,
-  `answered_at` set) is created, `dynamic_vars` (`elder_name` + last check-in) are
+- **Known contact** → an inbound `calls` row (`direction=inbound`, `in_progress`,
+  `answered_at` set) is created, `dynamic_vars` (`contact_name` + last check-in) are
   returned, and the agent runs the full tool-driven check-in (wellness + medication
   logging, transcript flush) opening with a greeting by name.
-- **Unknown/absent number** → a call row with `elder_id = NULL` is recorded and the
-  agent gives the generic greeting only (no per-elder tools).
+- **Unknown/absent number** → a call row with `contact_id = NULL` is recorded and the
+  agent gives the generic greeting only (no per-contact tools).
 
 DNC is **not** checked on inbound (DNC governs outbound dialing only).
 
 ### Smoke test
 
 With Telnyx pointing inbound SIP at your livekit-sip endpoint and the dispatch rule
-applied (see "LiveKit side" above), and an elder whose `phone_e164` matches the
+applied (see "LiveKit side" above), and an contact whose `phone_e164` matches the
 number you will call from:
 
 ```bash
-# Register the elder you will call in as (E.164 must match your caller-ID)
-curl -s -X POST http://localhost:8000/v1/elders -H 'content-type: application/json' \
-  -d '{"name":"Test Elder","phone_e164":"+1YOURPHONE","timezone":"America/New_York"}'
+# Register the contact you will call in as (E.164 must match your caller-ID)
+curl -s -X POST http://localhost:8000/v1/contacts -H 'content-type: application/json' \
+  -d '{"name":"Test Contact","phone_e164":"+1YOURPHONE","timezone":"America/New_York"}'
 ```
 
 1. Dial your Telnyx number from that phone.
@@ -147,7 +147,7 @@ curl -s http://localhost:8000/v1/calls/<CALL_ID>   # direction=inbound, status c
 ```
 
 Calling from an unknown number instead yields the generic greeting and a call row
-with `elder_id: null`.
+with `contact_id: null`.
 
 ## Outbound calling (Plan 2a)
 
@@ -190,15 +190,15 @@ livekit-cli sip create-dispatch \
 ### 3. Place an outbound call
 
 ```bash
-# Add an elder
-curl -s -X POST http://localhost:8000/v1/elders \
+# Add an contact
+curl -s -X POST http://localhost:8000/v1/contacts \
   -H 'content-type: application/json' \
-  -d '{"name":"Test Elder","phone_e164":"+1YOURPHONE","timezone":"America/New_York"}'
+  -d '{"name":"Test Contact","phone_e164":"+1YOURPHONE","timezone":"America/New_York"}'
 
-# Enqueue a call (use the returned elder id)
+# Enqueue a call (use the returned contact id)
 curl -s -X POST http://localhost:8000/v1/calls \
   -H 'content-type: application/json' \
-  -d '{"elder_id":"<ELDER_ID>","idempotency_key":"smoke-1","dynamic_vars":{}}'
+  -d '{"contact_id":"<CONTACT_ID>","idempotency_key":"smoke-1","dynamic_vars":{}}'
 
 # Poll status
 curl -s http://localhost:8000/v1/calls/<CALL_ID>
@@ -255,7 +255,7 @@ where compose substitutes the key). Confirm wiring:
 ```bash
 # place a call, then watch it advance
 curl -s -X POST http://localhost:8000/v1/calls -H 'content-type: application/json' \
-  -d "{\"elder_id\":\"<ELDER_ID>\",\"idempotency_key\":\"lc-1\",\"dynamic_vars\":{}}"
+  -d "{\"contact_id\":\"<CONTACT_ID>\",\"idempotency_key\":\"lc-1\",\"dynamic_vars\":{}}"
 # poll a few times — status moves dialing -> in_progress/busy/no_answer -> completed
 curl -s http://localhost:8000/v1/calls/<CALL_ID>
 docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f api | grep -i webhook
@@ -299,7 +299,7 @@ Each retry is a new `calls` row linked to its predecessor by `parent_call_id`
 guarantees at most one retry per attempt. DNC is re-checked at dial time.
 
 **TCPA quiet hours:** retries are never placed before 09:00 or at/after 21:00 in
-the elder's local timezone. An invalid elder timezone fails CLOSED (the retry is
+the contact's local timezone. An invalid contact timezone fails CLOSED (the retry is
 not scheduled and an ERROR is logged) rather than risking an out-of-hours call.
 
 **Initial calls** (`POST /v1/calls`) are NOT quiet-hours gated and dial

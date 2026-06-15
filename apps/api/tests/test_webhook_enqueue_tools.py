@@ -4,7 +4,7 @@ Pins spec §2.1's integration rows for the tool-side creators: the repository
 creators fan the event into the transactional outbox in the SAME flush-only
 transaction (the router's existing ``db.commit()`` makes business row and
 event durable together, zero call-site edits), and the flag payload is the
-§6.4 deliberate reduction — NO ``elder_id``, NO ``category``, NO ``reason``
+§6.4 deliberate reduction — NO ``contact_id``, NO ``category``, NO ``reason``
 even though the flag row carries all three.
 """
 
@@ -24,7 +24,7 @@ from usan_api.db.models import FollowUpFlag, WebhookDelivery
 from usan_api.db.models import WebhookEndpoint as _Endpoint
 from usan_api.repositories import callback_requests as callbacks_repo
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import follow_up_flags as flags_repo
 
 _TABLES = "webhook_deliveries, webhook_endpoints, follow_up_flags, callback_requests"
@@ -64,20 +64,20 @@ async def _seed_endpoint(factory, *, events: list[str]) -> uuid.UUID:
         return ep.id
 
 
-async def _seed_call_and_elder(factory) -> tuple[uuid.UUID, uuid.UUID]:
+async def _seed_call_and_contact(factory) -> tuple[uuid.UUID, uuid.UUID]:
     # Unique phone per call: this module shares the long-lived test Postgres
-    # with modules that never truncate elders/calls.
+    # with modules that never truncate contacts/calls.
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(db, name="A", phone_e164=phone, timezone="UTC")
         call = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.IN_PROGRESS,
         )
         await db.commit()
-        return call.id, elder.id
+        return call.id, contact.id
 
 
 async def _deliveries(db, event: str) -> list[WebhookDelivery]:
@@ -91,13 +91,13 @@ async def _deliveries(db, event: str) -> list[WebhookDelivery]:
 
 async def test_create_flag_enqueues_in_same_txn(session_factory):
     await _seed_endpoint(session_factory, events=["flag.created"])
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
 
     async with session_factory() as db:
         row = await flags_repo.create_follow_up_flag(
             db,
             call_id=call_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             severity="urgent",
             category="medical",
             reason="reported chest pain",
@@ -110,23 +110,23 @@ async def test_create_flag_enqueues_in_same_txn(session_factory):
     assert len(rows) == 1
     data = rows[0].payload["data"]
     # §6.4 re-pinned at the integration level: exactly these four keys — the
-    # flag row carries elder_id/category/reason, the payload must not.
+    # flag row carries contact_id/category/reason, the payload must not.
     assert set(data.keys()) == {"flag_id", "call_id", "severity", "created_at"}
     assert data["flag_id"] == flag_id
     assert data["call_id"] == str(call_id)
     assert data["severity"] == "urgent"
-    assert str(elder_id) not in json.dumps(rows[0].payload)
+    assert str(contact_id) not in json.dumps(rows[0].payload)
 
 
 async def test_create_callback_enqueues_in_same_txn(session_factory):
     await _seed_endpoint(session_factory, events=["callback.created"])
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
 
     async with session_factory() as db:
         row = await callbacks_repo.create_callback_request(
             db,
             call_id=call_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             requested_time_text="SENTINEL_TIME_TEXT tomorrow morning",
             requested_at=datetime(2026, 6, 11, 9, 0, tzinfo=UTC),
             notes="SENTINEL_NOTES please call after breakfast",
@@ -138,10 +138,16 @@ async def test_create_callback_enqueues_in_same_txn(session_factory):
         rows = await _deliveries(db, "callback.created")
     assert len(rows) == 1
     data = rows[0].payload["data"]
-    assert set(data.keys()) == {"callback_id", "call_id", "elder_id", "requested_at", "created_at"}
+    assert set(data.keys()) == {
+        "callback_id",
+        "call_id",
+        "contact_id",
+        "requested_at",
+        "created_at",
+    }
     assert data["callback_id"] == callback_id
     assert data["call_id"] == str(call_id)
-    assert data["elder_id"] == str(elder_id)
+    assert data["contact_id"] == str(contact_id)
     assert data["requested_at"].startswith("2026-06-11T09:00")
     # §6.5: the free-text fields never reach the serialized payload.
     serialized = json.dumps(rows[0].payload)
@@ -151,13 +157,13 @@ async def test_create_callback_enqueues_in_same_txn(session_factory):
 
 async def test_flag_rollback_discards_both(session_factory):
     await _seed_endpoint(session_factory, events=["flag.created"])
-    call_id, elder_id = await _seed_call_and_elder(session_factory)
+    call_id, contact_id = await _seed_call_and_contact(session_factory)
 
     async with session_factory() as db:
         row = await flags_repo.create_follow_up_flag(
             db,
             call_id=call_id,
-            elder_id=elder_id,
+            contact_id=contact_id,
             severity="routine",
             category="other",
             reason=None,
@@ -209,7 +215,7 @@ def test_tool_endpoint_commit_covers_enqueue(client, monkeypatch, async_database
     monkeypatch.setattr(dialer, "schedule_dial", lambda call_id, settings: None)
 
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={
             "name": "Ada",
             "phone_e164": f"+1555{str(uuid.uuid4().int)[:7]}",
@@ -219,10 +225,14 @@ def test_tool_endpoint_commit_covers_enqueue(client, monkeypatch, async_database
         headers=OPERATOR_HEADERS,
     )
     assert r.status_code == 201
-    elder_id = r.json()["id"]
+    contact_id = r.json()["id"]
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"c5-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"c5-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=OPERATOR_HEADERS,
     )
     assert r.status_code == 202

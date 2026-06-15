@@ -15,7 +15,7 @@ def test_tool_catalog_requires_admin_session(client):
     assert r.status_code == 401
 
 
-def test_tool_catalog_returns_seven_tools_in_order(client, admin_session):
+def test_tool_catalog_returns_fifteen_tools_in_order(client, admin_session):
     r = client.get("/v1/admin/tool-catalog")
     assert r.status_code == 200
     body = r.json()
@@ -25,8 +25,16 @@ def test_tool_catalog_returns_seven_tools_in_order(client, admin_session):
         "log_medication",
         "get_today_meds",
         "flag_for_followup",
+        "raise_crisis",
         "schedule_callback",
+        "close_family_task",
+        "record_personal_fact",
+        "record_survey",
+        "get_activity",
         "send_sms",
+        "send_info_sms",
+        "register_opt_out",
+        "set_spanish_callback",
         "end_call",
     ]
 

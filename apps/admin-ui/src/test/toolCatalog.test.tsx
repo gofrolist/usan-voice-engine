@@ -21,7 +21,7 @@ const SAMPLE: ToolSpec[] = [
   {
     name: "log_wellness",
     label: "Log wellness",
-    description: "Record the elder's wellness.",
+    description: "Record the contact's wellness.",
     category: "logging",
     always_on: false,
     requires_config: false,

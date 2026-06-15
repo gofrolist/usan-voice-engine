@@ -1,7 +1,7 @@
 """Admin calls console response schemas (spec §4.1/§4.2).
 
 Reuses ``TranscriptSegment``/``CallOrigin`` from ``schemas/call.py`` and the
-``masked_phone`` field name from ``ElderSummary`` — one name for one concept in
+``masked_phone`` field name from ``ContactSummary`` — one name for one concept in
 the ``types/api.ts`` mirror.
 """
 
@@ -21,9 +21,9 @@ class AdminCallSummary(BaseModel):
     """
 
     id: uuid.UUID
-    elder_id: uuid.UUID | None
-    elder_name: str | None  # names allowed in session-gated bodies (house precedent)
-    masked_phone: str  # mask_phone(): "***" + last 4, "unknown" if elder gone
+    contact_id: uuid.UUID | None
+    contact_name: str | None  # names allowed in session-gated bodies (house precedent)
+    masked_phone: str  # mask_phone(): "***" + last 4, "unknown" if contact gone
     direction: str
     status: str
     origin: CallOrigin | None  # parse_origin(idempotency_key)

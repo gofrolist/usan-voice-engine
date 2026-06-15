@@ -22,7 +22,7 @@ from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, WebhookDelivery
 from usan_api.db.models import WebhookEndpoint as _Endpoint
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.settings import Settings
 
 
@@ -64,13 +64,13 @@ async def endpoint(session_factory) -> uuid.UUID:
 
 async def _seed_call(factory, *, status: CallStatus, room: str | None = None) -> uuid.UUID:
     # Unique phone per call: this module shares the long-lived test Postgres
-    # with modules that never truncate elders/calls.
+    # with modules that never truncate contacts/calls.
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(db, name="A", phone_e164=phone, timezone="UTC")
         call = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=status,
             livekit_room=room,
@@ -288,16 +288,16 @@ async def test_dnc_at_birth_enqueues(session_factory, endpoint):
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     schedule_id = uuid.uuid4()
     async with session_factory() as db:
-        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+        contact = await contacts_repo.create_contact(db, name="A", phone_e164=phone, timezone="UTC")
         adhoc = await calls_repo.create_call(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             direction=CallDirection.OUTBOUND,
             status=CallStatus.DNC_BLOCKED,
         )
         root = await calls_repo.create_materialized_root(
             db,
-            elder_id=elder.id,
+            contact_id=contact.id,
             status=CallStatus.DNC_BLOCKED,
             idempotency_key=f"sched:{schedule_id}:2026-06-10",
             scheduled_at=None,
@@ -353,11 +353,11 @@ async def test_mark_answered_enqueues_started_once(session_factory, endpoint):
 
 
 async def test_create_inbound_call_enqueues_started(session_factory, endpoint):
-    # Inbound calls are answered at birth (spec §2.1 table); elder_id may be
+    # Inbound calls are answered at birth (spec §2.1 table); contact_id may be
     # NULL for an unknown caller and origin is always null on inbound.
     async with session_factory() as db:
         call = await calls_repo.create_inbound_call(
-            db, elder_id=None, livekit_room=f"usan-inbound-{uuid.uuid4()}"
+            db, contact_id=None, livekit_room=f"usan-inbound-{uuid.uuid4()}"
         )
         await db.commit()
         call_id = call.id
@@ -369,7 +369,7 @@ async def test_create_inbound_call_enqueues_started(session_factory, endpoint):
     assert data["call_id"] == str(call_id)
     assert data["direction"] == "inbound"
     assert data["origin"] is None
-    assert data["elder_id"] is None
+    assert data["contact_id"] is None
 
 
 async def test_race_emits_exactly_one_completed(session_factory, endpoint, async_database_url):

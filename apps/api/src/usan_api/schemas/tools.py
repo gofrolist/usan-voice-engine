@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field, field_validator
 class ToolCallRequest(BaseModel):
     """Base for in-call tool requests: the call this tool action belongs to.
 
-    The handler asserts this matches the JWT `call_id` claim and derives elder_id
-    from the call — elder_id is never accepted from the request.
+    The handler asserts this matches the JWT `call_id` claim and derives contact_id
+    from the call — contact_id is never accepted from the request.
     """
 
     call_id: uuid.UUID
@@ -139,3 +139,49 @@ class SendSmsRequest(ToolCallRequest):
 class SmsQueuedResponse(BaseModel):
     id: uuid.UUID
     status: str
+
+
+class SendInfoSmsRequest(ToolCallRequest):
+    # No fields beyond call_id: the body is a fixed, PHI-free list of public emergency/
+    # helpline numbers built server-side from emergency_resources (FR-041). The LLM does
+    # not author it. Reuses SmsQueuedResponse.
+    pass
+
+
+class RegisterOptOutRequest(ToolCallRequest):
+    # No fields beyond call_id: the contact + their number are derived from the JWT-scoped
+    # call, never taken from the request (FR-037).
+    pass
+
+
+class OptOutRecordedResponse(BaseModel):
+    # "opted_out" once the number is on the DNC list; flag_id is the operator-queue entry.
+    status: str
+    flag_id: int
+
+
+class SetSpanishCallbackRequest(ToolCallRequest):
+    # No fields beyond call_id: the contact is derived from the JWT-scoped call. The tool
+    # records the Spanish language preference and creates a Spanish callback (FR-040).
+    pass
+
+
+class SpanishCallbackScheduledResponse(BaseModel):
+    # "scheduled" once the language preference is recorded and the callback row created.
+    status: str
+    callback_id: int
+
+
+class CloseFamilyTaskRequest(ToolCallRequest):
+    # Contract (contracts/tools-api.md): {task_id} marks one task open->delivered.
+    # task_id is OPTIONAL: the open_family_tasks builtin gives the LLM the task TEXT,
+    # not ids, so omitting it marks ALL of this call's contact's open (non-safety-review)
+    # tasks delivered — exactly the set that was injected into the prompt. contact_id is
+    # NEVER taken from the request; it is derived from the JWT-scoped call.
+    task_id: int | None = Field(default=None, gt=0)
+
+
+class CloseFamilyTaskResponse(BaseModel):
+    # "delivered" when >=1 task was moved open->delivered, else "noop".
+    status: str
+    delivered: int

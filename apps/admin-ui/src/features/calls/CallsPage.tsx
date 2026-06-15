@@ -71,9 +71,9 @@ function localMidnightIso(date: string): string {
 
 export function CallsPage() {
   const navigate = useNavigate();
-  // elder_id is deep-linked from queue rows and call detail; no picker this phase.
+  // contact_id is deep-linked from queue rows and call detail; no picker this phase.
   const [searchParams] = useSearchParams();
-  const elderId = searchParams.get("elder_id") ?? undefined;
+  const contactId = searchParams.get("contact_id") ?? undefined;
 
   const [status, setStatus] = useState("");
   const [direction, setDirection] = useState("");
@@ -88,19 +88,19 @@ export function CallsPage() {
     setOffset(0);
   };
 
-  // The elder filter is URL-driven, so it bypasses setFilter — when a deep link
+  // The contact filter is URL-driven, so it bypasses setFilter — when a deep link
   // changes it while the page stays mounted, paging must restart too or the new
-  // elder's (shorter) result set can land beyond its last page. Render-time
+  // contact's (shorter) result set can land beyond its last page. Render-time
   // state adjustment (React's "storing information from previous renders"
   // pattern) so no fetch ever fires with the stale offset.
-  const [prevElderId, setPrevElderId] = useState(elderId);
-  if (elderId !== prevElderId) {
-    setPrevElderId(elderId);
+  const [prevContactId, setPrevContactId] = useState(contactId);
+  if (contactId !== prevContactId) {
+    setPrevContactId(contactId);
     setOffset(0);
   }
 
   const filters: CallsFilters = {
-    elderId,
+    contactId,
     status: status || undefined,
     direction: direction || undefined,
     origin: origin || undefined,
@@ -238,7 +238,7 @@ export function CallsPage() {
                 >
                   <Td className="whitespace-nowrap text-xs">{fmtDate(c.created_at)}</Td>
                   <Td>
-                    <div className="font-medium text-slate-900">{c.elder_name ?? "—"}</div>
+                    <div className="font-medium text-slate-900">{c.contact_name ?? "—"}</div>
                     <div className="font-mono text-xs text-slate-500">{c.masked_phone}</div>
                   </Td>
                   <Td className="text-xs">{c.direction}</Td>

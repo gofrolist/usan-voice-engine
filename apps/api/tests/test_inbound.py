@@ -28,9 +28,9 @@ def _worker_auth() -> dict:
     return {"Authorization": f"Bearer {_worker_token()}"}
 
 
-def _create_elder(client, phone: str) -> str:
+def _create_contact(client, phone: str) -> str:
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={"name": "Ada", "phone_e164": phone, "timezone": "UTC", "metadata": {}},
         headers=_OP,
     )
@@ -42,9 +42,9 @@ def _phone() -> str:
     return f"+1555{str(uuid.uuid4().int)[:7]}"
 
 
-def test_inbound_known_elder_creates_call_and_returns_vars(client):
+def test_inbound_known_contact_creates_call_and_returns_vars(client):
     phone = _phone()
-    elder_id = _create_elder(client, phone)
+    contact_id = _create_contact(client, phone)
     r = client.post(
         "/v1/calls/inbound",
         json={"phone_e164": phone, "livekit_room": "usan-inbound-1"},
@@ -52,19 +52,19 @@ def test_inbound_known_elder_creates_call_and_returns_vars(client):
     )
     assert r.status_code == 200
     data = r.json()
-    assert data["elder_known"] is True
-    assert data["dynamic_vars"]["elder_name"] == "Ada"
+    assert data["contact_known"] is True
+    assert data["dynamic_vars"]["contact_name"] == "Ada"
     call = client.get(f"/v1/calls/{data['call_id']}", headers=_OP).json()
     assert call["direction"] == "inbound"
     assert call["status"] == "in_progress"
-    assert call["elder_id"] == elder_id
+    assert call["contact_id"] == contact_id
 
 
-def test_inbound_matches_elder_when_caller_id_lacks_country_code(client):
+def test_inbound_matches_contact_when_caller_id_lacks_country_code(client):
     # Telnyx delivers the caller-ID as a bare US national number (no +1), but the
-    # elder is stored E.164. The lookup must normalize and still match by name.
+    # contact is stored E.164. The lookup must normalize and still match by name.
     national = "555" + str(uuid.uuid4().int)[:7]  # 10-digit national number
-    elder_id = _create_elder(client, "+1" + national)
+    contact_id = _create_contact(client, "+1" + national)
     r = client.post(
         "/v1/calls/inbound",
         json={"phone_e164": national, "livekit_room": "usan-inbound-natl"},
@@ -72,13 +72,13 @@ def test_inbound_matches_elder_when_caller_id_lacks_country_code(client):
     )
     assert r.status_code == 200
     data = r.json()
-    assert data["elder_known"] is True
-    assert data["dynamic_vars"]["elder_name"] == "Ada"
+    assert data["contact_known"] is True
+    assert data["dynamic_vars"]["contact_name"] == "Ada"
     call = client.get(f"/v1/calls/{data['call_id']}", headers=_OP).json()
-    assert call["elder_id"] == elder_id
+    assert call["contact_id"] == contact_id
 
 
-def test_inbound_unknown_caller_creates_call_without_elder(client):
+def test_inbound_unknown_caller_creates_call_without_contact(client):
     r = client.post(
         "/v1/calls/inbound",
         json={"phone_e164": "+19998887777", "livekit_room": "usan-inbound-2"},
@@ -86,11 +86,11 @@ def test_inbound_unknown_caller_creates_call_without_elder(client):
     )
     assert r.status_code == 200
     data = r.json()
-    assert data["elder_known"] is False
+    assert data["contact_known"] is False
     assert data["dynamic_vars"] == {}
     call = client.get(f"/v1/calls/{data['call_id']}", headers=_OP).json()
     assert call["direction"] == "inbound"
-    assert call["elder_id"] is None
+    assert call["contact_id"] is None
 
 
 def test_inbound_no_phone_is_unknown(client):
@@ -100,7 +100,7 @@ def test_inbound_no_phone_is_unknown(client):
         headers=_worker_auth(),
     )
     assert r.status_code == 200
-    assert r.json()["elder_known"] is False
+    assert r.json()["contact_known"] is False
 
 
 def test_inbound_requires_worker_token(client):
@@ -111,11 +111,11 @@ def test_inbound_requires_worker_token(client):
     assert r.status_code == 401
 
 
-def test_inbound_known_elder_returns_resolved_vars_and_timezone(client):
+def test_inbound_known_contact_returns_resolved_vars_and_timezone(client):
     phone = _phone()
-    # Create an elder with a med schedule via metadata so today_meds populates.
+    # Create an contact with a med schedule via metadata so today_meds populates.
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={
             "name": "Margaret Doe",
             "phone_e164": phone,
@@ -135,7 +135,7 @@ def test_inbound_known_elder_returns_resolved_vars_and_timezone(client):
     assert data["timezone"] == "US/Eastern"
     rv = data["resolved_vars"]
     assert rv["first_name"] == "Margaret"
-    assert rv["elder_name"] == "Margaret Doe"
+    assert rv["contact_name"] == "Margaret Doe"
     assert rv["call_direction"] == "inbound"
     assert rv["today_meds"] == "Lisinopril"
     # current_time/current_date are agent-side — never in resolved_vars.
@@ -159,7 +159,7 @@ def test_inbound_unknown_caller_returns_empty_resolved_vars(client):
 
 def test_inbound_surfaces_last_check_in_and_call_id_works_with_tools(client):
     phone = _phone()
-    _create_elder(client, phone)
+    _create_contact(client, phone)
     first = client.post(
         "/v1/calls/inbound",
         json={"phone_e164": phone, "livekit_room": "usan-inbound-5a"},
@@ -173,7 +173,7 @@ def test_inbound_surfaces_last_check_in_and_call_id_works_with_tools(client):
         headers={"Authorization": f"Bearer {_service_token(call_id)}"},
     )
     assert w.status_code == 200
-    # A later inbound call from the same elder surfaces the last check-in.
+    # A later inbound call from the same contact surfaces the last check-in.
     second = client.post(
         "/v1/calls/inbound",
         json={"phone_e164": phone, "livekit_room": "usan-inbound-5b"},

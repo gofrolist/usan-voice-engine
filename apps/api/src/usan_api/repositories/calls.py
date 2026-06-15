@@ -8,10 +8,11 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api import quiet_hours, webhook_events
+from usan_api import notifications, quiet_hours, webhook_events
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call, CallBatch, CallBatchTarget, Elder
+from usan_api.db.models import Call, CallBatch, CallBatchTarget, Contact
 from usan_api.repositories import agent_profiles, webhook_outbox
+from usan_api.repositories import follow_up_flags as follow_up_flags_repo
 from usan_api.retry_policy import MAX_CHAIN_ATTEMPTS, next_retry_delay
 from usan_api.schemas.call import RESERVED_KEY_PREFIXES  # single source (spec §2.2 invariant 3)
 
@@ -56,7 +57,7 @@ async def _enqueue_call_started(db: AsyncSession, call: Call) -> None:
 async def create_call(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     direction: CallDirection,
     status: CallStatus,
     idempotency_key: str | None = None,
@@ -65,7 +66,7 @@ async def create_call(
     profile_override: uuid.UUID | None = None,
 ) -> Call:
     call = Call(
-        elder_id=elder_id,
+        contact_id=contact_id,
         direction=direction,
         status=status,
         idempotency_key=idempotency_key,
@@ -257,27 +258,27 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
     """Create the next-attempt child for a call that just reached a retryable
     terminal state (§5.3), in the caller's transaction.
 
-    Returns the child, or None when: the policy says stop, the parent/elder is
-    gone, the elder's timezone is invalid (fail CLOSED — never risk a TCPA-hour
+    Returns the child, or None when: the policy says stop, the parent/contact is
+    gone, the contact's timezone is invalid (fail CLOSED — never risk a TCPA-hour
     call), the chain's owning batch was cancelled (spec §5.6), or a retry child
     already exists (idempotent via the partial UNIQUE index on parent_call_id).
     """
     parent = await db.get(Call, call_id)
-    if parent is None or parent.elder_id is None:
+    if parent is None or parent.contact_id is None:
         return None
-    elder = await db.get(Elder, parent.elder_id)
-    if elder is None:
+    contact = await db.get(Contact, parent.contact_id)
+    if contact is None:
         return None
     # Policy is re-resolved at EVERY consumption site, never snapshotted onto
     # the Call (TCPA dial-time truth, spec §3.3.2) — a compliance-tightening
     # publish must bind retries of already-terminal parents. The resolve needs
-    # elder.agent_profile_id, so the delay computation moved after the elder
-    # load; the early-return order is otherwise preserved (parent/elder missing
+    # contact.agent_profile_id, so the delay computation moved after the contact
+    # load; the early-return order is otherwise preserved (parent/contact missing
     # -> None, then delay-None -> None, then tz clamp, then batch-root walk).
     policy = await agent_profiles.resolve_call_policy(
         db,
         profile_override=parent.profile_override,
-        elder_profile_id=elder.agent_profile_id,
+        contact_profile_id=contact.agent_profile_id,
         direction="outbound",
     )
     delay = next_retry_delay(
@@ -287,17 +288,28 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
         delay_multiplier=policy.delay_multiplier,
     )
     if delay is None:
+        # Retry policy exhausted → this call is terminally MISSED (FR-010). Alert the
+        # family contacts opted in to missed-call alerts; if none is registered, surface
+        # the miss to the operator queue (FR-013 / T088). Idempotent on the call id, so a
+        # finalizer re-entry never double-notifies. Joins the caller's transaction.
+        dispatch = await notifications.dispatch_family_alert(
+            db, contact_id=contact.id, reason="missed_call", dedupe_base=f"missed:{parent.id}"
+        )
+        if not dispatch.had_contacts:
+            await follow_up_flags_repo.ensure_operator_missed_flag(
+                db, call_id=parent.id, contact_id=contact.id
+            )
         return None
     try:
         scheduled_at = quiet_hours.next_allowed(
             _utcnow() + delay,
-            elder.timezone,
+            contact.timezone,
             start_local=policy.start_local,
             end_local=policy.end_local,
         )
     except ValueError:
-        logger.bind(call_id=str(call_id), timezone=elder.timezone).error(
-            "Retry not scheduled: elder timezone is not a valid IANA zone"
+        logger.bind(call_id=str(call_id), timezone=contact.timezone).error(
+            "Retry not scheduled: contact timezone is not a valid IANA zone"
         )
         return None
 
@@ -329,7 +341,7 @@ async def schedule_retry(db: AsyncSession, call_id: uuid.UUID) -> Call | None:
             return None
 
     child = Call(
-        elder_id=parent.elder_id,
+        contact_id=parent.contact_id,
         direction=CallDirection.OUTBOUND,
         status=CallStatus.QUEUED,
         dynamic_vars=dict(parent.dynamic_vars),
@@ -414,20 +426,20 @@ async def count_queued_due(db: AsyncSession, *, now: datetime) -> int:
 
 
 async def count_autonomous_roots(
-    db: AsyncSession, *, elder_id: uuid.UUID, day_start: datetime, day_end: datetime
+    db: AsyncSession, *, contact_id: uuid.UUID, day_start: datetime, day_end: datetime
 ) -> int:
-    """Roots with a reserved-prefix key whose scheduled_at falls inside the elder-local
-    day bounds (daily repetition cap, spec §5.3 step 1; served by idx_calls_elder).
+    """Roots with a reserved-prefix key whose scheduled_at falls inside the contact-local
+    day bounds (daily repetition cap, spec §5.3 step 1; served by idx_calls_contact).
 
     The LIKE patterns derive from RESERVED_KEY_PREFIXES — only materializer-owned
     roots count toward the cap; retry children carry no key and ad-hoc calls carry
-    no reserved prefix, so neither eats the elder's daily autonomous budget.
+    no reserved prefix, so neither eats the contact's daily autonomous budget.
     """
     result = await db.execute(
         select(func.count())
         .select_from(Call)
         .where(
-            Call.elder_id == elder_id,
+            Call.contact_id == contact_id,
             or_(*(Call.idempotency_key.like(f"{prefix}%") for prefix in RESERVED_KEY_PREFIXES)),
             Call.scheduled_at >= day_start,
             Call.scheduled_at < day_end,
@@ -439,7 +451,7 @@ async def count_autonomous_roots(
 async def create_materialized_root(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     status: CallStatus,
     idempotency_key: str,
     scheduled_at: datetime | None,
@@ -455,7 +467,7 @@ async def create_materialized_root(
     callers SAVEPOINT-wrap and take the verified replay path (§5.3 step 5).
     """
     call = Call(
-        elder_id=elder_id,
+        contact_id=contact_id,
         direction=CallDirection.OUTBOUND,
         status=status,
         idempotency_key=idempotency_key,
@@ -494,7 +506,7 @@ async def requeue_for_quiet_hours(
 async def create_inbound_call(
     db: AsyncSession,
     *,
-    elder_id: uuid.UUID | None,
+    contact_id: uuid.UUID | None,
     livekit_room: str,
     sip_call_id: str | None = None,
     dynamic_vars: dict[str, Any] | None = None,
@@ -503,12 +515,12 @@ async def create_inbound_call(
 
     Inbound calls are answered by definition (the caller is on the line), so
     started_at/answered_at are set immediately; the room_finished webhook later
-    marks COMPLETED and computes duration_seconds from answered_at. elder_id may
+    marks COMPLETED and computes duration_seconds from answered_at. contact_id may
     be NULL for an unknown caller — the row still records the inbound attempt.
     """
     now = _utcnow()
     call = Call(
-        elder_id=elder_id,
+        contact_id=contact_id,
         direction=CallDirection.INBOUND,
         status=CallStatus.IN_PROGRESS,
         livekit_room=livekit_room,

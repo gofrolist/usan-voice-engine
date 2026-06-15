@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from usan_api import quiet_hours, schedule_windows, webhook_events
 from usan_api.db.base import CallStatus
-from usan_api.db.models import Call, CallBatch, CallBatchTarget, CallSchedule, Elder
+from usan_api.db.models import Call, CallBatch, CallBatchTarget, CallSchedule, Contact
 from usan_api.db.session import get_session_factory
 from usan_api.observability.custom_metrics import (
     BATCH_EVENTS_TOTAL,
@@ -83,19 +83,23 @@ class MaterializeOutcome:
 
 
 async def _replay_or_conflict(
-    db: AsyncSession, elder: Elder, idempotency_key: str
+    db: AsyncSession, contact: Contact, idempotency_key: str
 ) -> MaterializeOutcome:
     """Verified replay after a unique-key IntegrityError (spec §5.3 step 5).
 
-    Adopt the existing row only when it is OURS: same elder and a chain root
+    Adopt the existing row only when it is OURS: same contact and a chain root
     (``parent_call_id IS NULL``). Anything else is a squatted or foreign key —
     ERROR and refuse; never silently link a foreign call. Either way a key
     never dials twice.
     """
     existing = await calls_repo.get_by_idempotency_key(db, idempotency_key)
-    if existing is not None and existing.elder_id == elder.id and existing.parent_call_id is None:
+    if (
+        existing is not None
+        and existing.contact_id == contact.id
+        and existing.parent_call_id is None
+    ):
         return MaterializeOutcome("replayed", existing)
-    logger.bind(elder_id=str(elder.id)).error(
+    logger.bind(contact_id=str(contact.id)).error(
         "Materialization key conflict: existing row is not ours; refusing to adopt"
     )
     return MaterializeOutcome("key_conflict", None)
@@ -105,7 +109,7 @@ async def materialize_call(
     db: AsyncSession,
     settings: Settings,
     *,
-    elder: Elder,
+    contact: Contact,
     idempotency_key: str,
     scheduled_at: datetime,
     local_day: date,
@@ -118,27 +122,27 @@ async def materialize_call(
     the caller's bookkeeping (schedule advance / target flip) commit atomically
     in the caller. Order: daily cap -> advisory phone lock -> DNC -> create; on
     IntegrityError (unique idempotency_key) SAVEPOINT-rollback (begin_nested),
-    re-fetch and VERIFY OWNERSHIP (same elder, parent_call_id IS NULL) ->
+    re-fetch and VERIFY OWNERSHIP (same contact, parent_call_id IS NULL) ->
     replayed, else key_conflict (ERROR log; never silently adopt a foreign row).
     """
-    day_start, day_end = schedule_windows.day_bounds_utc(local_day, elder.timezone)
+    day_start, day_end = schedule_windows.day_bounds_utc(local_day, contact.timezone)
     roots = await calls_repo.count_autonomous_roots(
-        db, elder_id=elder.id, day_start=day_start, day_end=day_end
+        db, contact_id=contact.id, day_start=day_start, day_end=day_end
     )
-    if roots >= settings.max_autonomous_calls_per_elder_per_day:
+    if roots >= settings.max_autonomous_calls_per_contact_per_day:
         return MaterializeOutcome("skipped_daily_cap", None)
 
     # The same advisory lock the enqueue gate takes (one lock held at a time,
     # spec §5.2): serializes against concurrent add_dnc/enqueues for this number.
-    await dnc_repo.lock_phone(db, elder.phone_e164)
-    if await dnc_repo.is_blocked(db, elder.phone_e164):
+    await dnc_repo.lock_phone(db, contact.phone_e164)
+    if await dnc_repo.is_blocked(db, contact.phone_e164):
         # Terminal DNC_BLOCKED row consuming the key — identical to enqueue_call's
         # gate; begin_nested so a key race here also takes the verified replay path.
         try:
             async with db.begin_nested():
                 call = await calls_repo.create_materialized_root(
                     db,
-                    elder_id=elder.id,
+                    contact_id=contact.id,
                     status=CallStatus.DNC_BLOCKED,
                     idempotency_key=idempotency_key,
                     scheduled_at=None,
@@ -146,14 +150,14 @@ async def materialize_call(
                     profile_override=profile_override,
                 )
         except IntegrityError:
-            return await _replay_or_conflict(db, elder, idempotency_key)
+            return await _replay_or_conflict(db, contact, idempotency_key)
         return MaterializeOutcome("dnc_blocked", call)
 
     try:
         async with db.begin_nested():  # SAVEPOINT: a duplicate key rolls back here only
             call = await calls_repo.create_materialized_root(
                 db,
-                elder_id=elder.id,
+                contact_id=contact.id,
                 status=CallStatus.QUEUED,
                 idempotency_key=idempotency_key,
                 scheduled_at=scheduled_at,
@@ -161,7 +165,7 @@ async def materialize_call(
                 profile_override=profile_override,
             )
     except IntegrityError:
-        return await _replay_or_conflict(db, elder, idempotency_key)
+        return await _replay_or_conflict(db, contact, idempotency_key)
     return MaterializeOutcome("created", call)
 
 
@@ -289,20 +293,20 @@ async def _materialize_one_schedule(
     can mirror it into the materialization counter AFTER that commit (spec §7).
     """
     log = logger.bind(component="schedule_poller", schedule_id=str(schedule.id))
-    elder = await db.get(Elder, schedule.elder_id)
+    contact = await db.get(Contact, schedule.contact_id)
     try:
-        if elder is None:
+        if contact is None:
             # CASCADE FK makes this unreachable while the claim lock is held;
             # fail closed onto the hourly-retry branch rather than crash the cycle.
-            raise ValueError("schedule elder row missing")
+            raise ValueError("schedule contact row missing")
         window = schedule_windows.effective_window(
             schedule.window_start_local, schedule.window_end_local
         )
         if window is None:  # validated non-empty at create; fail closed regardless
             raise ValueError("schedule window never intersects quiet hours")
-        today = schedule_windows.local_date(now, elder.timezone)
+        today = schedule_windows.local_date(now, contact.timezone)
         start_utc, end_utc = schedule_windows.window_bounds_utc(
-            today, elder.timezone, window_start=window[0], window_end=window[1]
+            today, contact.timezone, window_start=window[0], window_end=window[1]
         )
 
         if not schedule.days_of_week & (1 << today.weekday()) or now < start_utc:
@@ -316,7 +320,7 @@ async def _materialize_one_schedule(
             # narrows the dial clamp below, never the cadence here.
             recomputed = schedule_windows.next_run_at(
                 now,
-                elder.timezone,
+                contact.timezone,
                 window_start=schedule.window_start_local,
                 window_end=schedule.window_end_local,
                 days_mask=schedule.days_of_week,
@@ -333,7 +337,7 @@ async def _materialize_one_schedule(
         # occurrence dials or skips, never when the schedule recurs.
         next_occurrence = schedule_windows.next_run_at(
             end_utc,
-            elder.timezone,
+            contact.timezone,
             window_start=schedule.window_start_local,
             window_end=schedule.window_end_local,
             days_mask=schedule.days_of_week,
@@ -354,7 +358,7 @@ async def _materialize_one_schedule(
         policy = await agent_profiles_repo.resolve_call_policy(
             db,
             profile_override=schedule.profile_override,
-            elder_profile_id=elder.agent_profile_id,
+            contact_profile_id=contact.agent_profile_id,
             direction="outbound",
         )
         eff = schedule_windows.effective_window(
@@ -373,7 +377,7 @@ async def _materialize_one_schedule(
             log.warning("Schedule occurrence skipped: policy-narrowed window is empty")
             return "skipped_window"
         eff_start_utc, eff_end_utc = schedule_windows.window_bounds_utc(
-            today, elder.timezone, window_start=eff[0], window_end=eff[1]
+            today, contact.timezone, window_start=eff[0], window_end=eff[1]
         )
         # Clamp-before-skip (§3.3.3 rule 3): evaluate the skip against the
         # policy-clamped dial time and the EFFECTIVE window end — a clamp past
@@ -390,7 +394,7 @@ async def _materialize_one_schedule(
         outcome = await materialize_call(
             db,
             settings,
-            elder=elder,
+            contact=contact,
             idempotency_key=f"sched:{schedule.id}:{today.isoformat()}",
             scheduled_at=dial_at,
             local_day=today,
@@ -451,7 +455,7 @@ async def _record_materialize_outcome(
             next_run_at=next_occurrence,
             enabled=False,
         )
-        log.warning("Schedule auto-disabled: elder number is on the DNC list")
+        log.warning("Schedule auto-disabled: contact number is on the DNC list")
     elif outcome.result == "key_conflict":
         await schedules_repo.record_result(
             db, schedule, result="key_conflict", now=now, next_run_at=next_occurrence
@@ -519,13 +523,13 @@ async def _materialize_one_target(
         batch_id=str(target.batch_id),
         target_index=target.target_index,
     )
-    elder = await db.get(Elder, target.elder_id) if target.elder_id is not None else None
-    if elder is None:
-        # FK SET NULL orphaned the target (spec §3.3): a deleted elder must not
+    contact = await db.get(Contact, target.contact_id) if target.contact_id is not None else None
+    if contact is None:
+        # FK SET NULL orphaned the target (spec §3.3): a deleted contact must not
         # silently shrink the batch — skip observably.
-        await batches_repo.mark_target_skipped(db, target, reason="elder_deleted", now=now)
-        log.warning("Batch target skipped: elder deleted")  # skips log at WARNING (spec §7)
-        return "skipped_elder_deleted"
+        await batches_repo.mark_target_skipped(db, target, reason="contact_deleted", now=now)
+        log.warning("Batch target skipped: contact deleted")  # skips log at WARNING (spec §7)
+        return "skipped_contact_deleted"
     batch = await db.get(CallBatch, target.batch_id)
     profile_override = target.profile_override  # target override wins over batch default (§5.3)
     if profile_override is None and batch is not None:
@@ -536,12 +540,12 @@ async def _materialize_one_target(
     policy = await agent_profiles_repo.resolve_call_policy(
         db,
         profile_override=profile_override,
-        elder_profile_id=elder.agent_profile_id,
+        contact_profile_id=contact.agent_profile_id,
         direction="outbound",
     )
     try:
         dial_at = quiet_hours.next_allowed(
-            now, elder.timezone, start_local=policy.start_local, end_local=policy.end_local
+            now, contact.timezone, start_local=policy.start_local, end_local=policy.end_local
         )
         if (
             batch is not None
@@ -554,7 +558,7 @@ async def _materialize_one_target(
             # fight and push the dial back inside the policy-forbidden zone.
             pushed = schedule_windows.next_run_at(
                 dial_at,
-                elder.timezone,
+                contact.timezone,
                 window_start=batch.window_start_local,
                 window_end=batch.window_end_local,
                 days_mask=batch.days_of_week if batch.days_of_week is not None else _EVERY_DAY_MASK,
@@ -571,7 +575,7 @@ async def _materialize_one_target(
         # The PUSHED dial day: the daily cap counts the day the call will actually
         # happen, never `now`'s day — a window-pushed target must not dodge the
         # harassment cap (spec §5.3 step 1).
-        local_day = schedule_windows.local_date(dial_at, elder.timezone)
+        local_day = schedule_windows.local_date(dial_at, contact.timezone)
     except ValueError:
         # Invalid timezone (or a window that can no longer fire): fail CLOSED —
         # never risk a TCPA-hour dial on corrupt state.
@@ -581,7 +585,7 @@ async def _materialize_one_target(
     outcome = await materialize_call(
         db,
         settings,
-        elder=elder,
+        contact=contact,
         idempotency_key=f"batch:{target.batch_id}:{target.target_index}",
         scheduled_at=dial_at,
         local_day=local_day,

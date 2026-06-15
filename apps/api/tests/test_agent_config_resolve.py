@@ -57,14 +57,14 @@ async def test_get_default_profile_returns_active_default(session_factory):
         assert await repo.get_default_profile(db, "inbound") is None
 
 
-async def test_resolve_uses_direction_default_when_no_override_or_elder(session_factory):
+async def test_resolve_uses_direction_default_when_no_override_or_contact(session_factory):
     async with session_factory() as db:
         pid = await _published(db, voice_id="default-voice")
         await repo.set_default(db, pid, direction="outbound")
         await db.commit()
     async with session_factory() as db:
         resolved = await repo.resolve_agent_config(
-            db, profile_override=None, elder_profile_id=None, direction="outbound"
+            db, profile_override=None, contact_profile_id=None, direction="outbound"
         )
         assert resolved is not None
         assert resolved.source == "resolved"
@@ -73,29 +73,29 @@ async def test_resolve_uses_direction_default_when_no_override_or_elder(session_
         assert resolved.config.voice.cartesia_voice_id == "default-voice"
 
 
-async def test_resolve_prefers_override_then_elder_then_default(session_factory):
+async def test_resolve_prefers_override_then_contact_then_default(session_factory):
     async with session_factory() as db:
         override = await _published(db, voice_id="override-voice")
-        elder = await _published(db, voice_id="elder-voice")
+        contact = await _published(db, voice_id="contact-voice")
         default = await _published(db, voice_id="default-voice")
         await repo.set_default(db, default, direction="outbound")
         await db.commit()
     async with session_factory() as db:
         r = await repo.resolve_agent_config(
-            db, profile_override=override, elder_profile_id=elder, direction="outbound"
+            db, profile_override=override, contact_profile_id=contact, direction="outbound"
         )
         assert r is not None
         assert r.config.voice.cartesia_voice_id == "override-voice"
     async with session_factory() as db:
         r = await repo.resolve_agent_config(
-            db, profile_override=None, elder_profile_id=elder, direction="outbound"
+            db, profile_override=None, contact_profile_id=contact, direction="outbound"
         )
         assert r is not None
-        assert r.config.voice.cartesia_voice_id == "elder-voice"
+        assert r.config.voice.cartesia_voice_id == "contact-voice"
 
 
 async def test_resolve_falls_through_unpublished_candidate(session_factory):
-    # An override pointing at a never-published profile must fall through to elder/default.
+    # An override pointing at a never-published profile must fall through to contact/default.
     async with session_factory() as db:
         unpublished = await repo.create_profile(
             db, name=_name(), description=None, actor_email="op"
@@ -106,7 +106,7 @@ async def test_resolve_falls_through_unpublished_candidate(session_factory):
         uid = unpublished.id
     async with session_factory() as db:
         r = await repo.resolve_agent_config(
-            db, profile_override=uid, elder_profile_id=None, direction="outbound"
+            db, profile_override=uid, contact_profile_id=None, direction="outbound"
         )
         assert r is not None
         assert r.config.voice.cartesia_voice_id == "default-voice"
@@ -122,7 +122,7 @@ async def test_resolve_skips_archived_candidate(session_factory):
         aid = archived
     async with session_factory() as db:
         r = await repo.resolve_agent_config(
-            db, profile_override=aid, elder_profile_id=None, direction="outbound"
+            db, profile_override=aid, contact_profile_id=None, direction="outbound"
         )
         assert r is not None
         assert r.config.voice.cartesia_voice_id == "default-voice"
@@ -131,7 +131,7 @@ async def test_resolve_skips_archived_candidate(session_factory):
 async def test_resolve_returns_none_when_nothing_resolvable(session_factory):
     async with session_factory() as db:
         r = await repo.resolve_agent_config(
-            db, profile_override=None, elder_profile_id=None, direction="outbound"
+            db, profile_override=None, contact_profile_id=None, direction="outbound"
         )
         assert r is None
 
@@ -156,6 +156,6 @@ async def test_resolve_degrades_when_default_config_invalid(session_factory):
         await db.commit()
     async with session_factory() as db:
         resolved = await repo.resolve_agent_config(
-            db, profile_override=None, elder_profile_id=None, direction="outbound"
+            db, profile_override=None, contact_profile_id=None, direction="outbound"
         )
         assert resolved is None  # invalid default falls through; nothing else resolves

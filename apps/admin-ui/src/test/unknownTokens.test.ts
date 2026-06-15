@@ -11,7 +11,7 @@ describe("tokenNames", () => {
   });
 
   it("ignores single-brace slots and stray braces", () => {
-    expect(tokenNames("Hi {elder_name} and {")).toEqual([]);
+    expect(tokenNames("Hi {contact_name} and {")).toEqual([]);
   });
 });
 

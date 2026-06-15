@@ -177,3 +177,58 @@ def test_webhook_poller_starts_even_with_flag_off(monkeypatch, webhook_poller_st
         assert webhook_poller_state["started"] is True  # flag-off still starts the task
 
     assert webhook_poller_state["stop"].is_set()  # shutdown set the stop event
+
+
+def test_lifespan_starts_clara_pollers_when_enabled(monkeypatch):
+    # M8: the three Clara Care Parity pollers start when their flags are enabled.
+    from usan_api import callback_dialer, family_report_job, notification_outbox
+
+    _set_env(monkeypatch)
+    monkeypatch.setenv("NOTIFICATION_OUTBOX_ENABLED", "true")
+    monkeypatch.setenv("CALLBACK_DIALER_POLLER_ENABLED", "true")
+    monkeypatch.setenv("FAMILY_REPORT_POLLER_ENABLED", "true")
+    monkeypatch.setenv("RETRY_POLLER_ENABLED", "false")
+    started = {"outbox": False, "callback": False, "report": False}
+
+    def _faker(key: str):
+        async def _run(settings, stop):
+            started[key] = True
+            await stop.wait()
+
+        return _run
+
+    monkeypatch.setattr(notification_outbox, "run_poller", _faker("outbox"))
+    monkeypatch.setattr(callback_dialer, "run_poller", _faker("callback"))
+    monkeypatch.setattr(family_report_job, "run_poller", _faker("report"))
+    get_settings.cache_clear()
+
+    app = create_app()
+    with TestClient(app) as c:
+        assert c.get("/health").status_code == 200
+        assert started == {"outbox": True, "callback": True, "report": True}
+
+
+def test_lifespan_skips_clara_pollers_by_default(monkeypatch):
+    # Ship-inert: with the flags at their defaults (off), none of the three start.
+    from usan_api import callback_dialer, family_report_job, notification_outbox
+
+    _set_env(monkeypatch)
+    monkeypatch.setenv("RETRY_POLLER_ENABLED", "false")
+    started = {"v": False}
+
+    def _faker():
+        async def _run(settings, stop):
+            started["v"] = True
+            await stop.wait()
+
+        return _run
+
+    monkeypatch.setattr(notification_outbox, "run_poller", _faker())
+    monkeypatch.setattr(callback_dialer, "run_poller", _faker())
+    monkeypatch.setattr(family_report_job, "run_poller", _faker())
+    get_settings.cache_clear()
+
+    app = create_app()
+    with TestClient(app) as c:
+        assert c.get("/health").status_code == 200
+    assert started["v"] is False

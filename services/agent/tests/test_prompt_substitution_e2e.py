@@ -8,7 +8,7 @@ from usan_agent.prompt_vars import build_vars, substitute
 def test_greeting_and_system_prompt_render_end_to_end():
     resolved = {
         "first_name": "Margaret",
-        "elder_name": "Margaret Doe",
+        "contact_name": "Margaret Doe",
         "call_direction": "outbound",
         "last_check_in": "on 2026-06-05, mood 4/5",
         "last_check_in_line": "For context, their last check-in was on 2026-06-05, mood 4/5.",

@@ -3,7 +3,7 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from usan_api.db.models import Elder
+from usan_api.db.models import Contact
 from usan_api.repositories import agent_profiles as repo
 from usan_api.repositories.agent_profiles import CloneSourceNotFoundError, ProfileInUseError
 from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG
@@ -190,17 +190,17 @@ async def test_has_unpublished_draft_transitions(session_factory):
         assert await repo.has_unpublished_draft(db, p3) is True  # draft diverged
 
 
-async def test_archive_blocked_when_assigned_to_elder(session_factory):
+async def test_archive_blocked_when_assigned_to_contact(session_factory):
     async with session_factory() as db:
         p = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
         pid = p.id
-        elder = Elder(
-            name="Test Elder",
+        contact = Contact(
+            name="Test Contact",
             phone_e164=f"+1555{uuid.uuid4().int % 10_000_000:07d}",
             timezone="America/New_York",
             agent_profile_id=pid,
         )
-        db.add(elder)
+        db.add(contact)
         await db.commit()
 
     async with session_factory() as db:

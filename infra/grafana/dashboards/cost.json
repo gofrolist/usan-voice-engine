@@ -124,8 +124,8 @@
     {
       "id": 4,
       "type": "table",
-      "title": "Cost per elder (top 20)",
-      "description": "Attributable calls only — calls with no elder_id (inbound/anonymous or post-delete) are excluded. Keyed on external_id, not name (PHI). Behind operator-CIDR + auth.",
+      "title": "Cost per contact (top 20)",
+      "description": "Attributable calls only — calls with no contact_id (inbound/anonymous or post-delete) are excluded. Keyed on external_id, not name (PHI). Behind operator-CIDR + auth.",
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 17 },
       "datasource": { "type": "postgres", "uid": "postgres-ro" },
       "targets": [
@@ -135,7 +135,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT COALESCE(e.external_id, left(e.id::text, 8)) AS elder,\n  COUNT(cm.call_id) AS calls,\n  SUM(cm.cost_total_usd) AS total_usd,\n  AVG(cm.cost_total_usd) AS avg_per_call_usd\nFROM call_metrics cm\nJOIN calls c  ON c.id = cm.call_id\nJOIN elders e ON e.id = c.elder_id\nWHERE $__timeFilter(cm.created_at)\nGROUP BY 1\nORDER BY total_usd DESC NULLS LAST\nLIMIT 20"
+          "rawSql": "SELECT COALESCE(e.external_id, left(e.id::text, 8)) AS contact,\n  COUNT(cm.call_id) AS calls,\n  SUM(cm.cost_total_usd) AS total_usd,\n  AVG(cm.cost_total_usd) AS avg_per_call_usd\nFROM call_metrics cm\nJOIN calls c  ON c.id = cm.call_id\nJOIN contacts e ON e.id = c.contact_id\nWHERE $__timeFilter(cm.created_at)\nGROUP BY 1\nORDER BY total_usd DESC NULLS LAST\nLIMIT 20"
         }
       ],
       "fieldConfig": {

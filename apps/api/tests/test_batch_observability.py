@@ -23,7 +23,7 @@ from sqlalchemy.pool import NullPool
 from tests.conftest import OPERATOR_HEADERS, counter_value, gauge_value
 from usan_api import livekit_dispatch, retry_orchestrator, schedule_orchestrator
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call, CallBatchTarget, CallSchedule, Elder
+from usan_api.db.models import Call, CallBatchTarget, CallSchedule, Contact
 from usan_api.observability import custom_metrics
 from usan_api.observability.custom_metrics import (
     BATCH_EVENTS_TOTAL,
@@ -35,8 +35,8 @@ from usan_api.observability.custom_metrics import (
 )
 from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import call_schedules as schedules_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import dnc as dnc_repo
-from usan_api.repositories import elders as elders_repo
 from usan_api.schemas.batch import BatchTargetIn
 from usan_api.settings import Settings
 
@@ -105,11 +105,11 @@ def test_metric_objects_and_bounded_labels():
         assert exposed in body
 
     # The module documents the structurally-impossible label combos (spec §7):
-    # skipped_elder_deleted x schedule, rescheduled x batch — and that
+    # skipped_contact_deleted x schedule, rescheduled x batch — and that
     # skipped_window x batch IS emitted since the per-profile policy unlock
     # (policy ∩ window = ∅, small-unlocks spec §3.3.3 rule 2).
     doc = custom_metrics.__doc__ or ""
-    assert "skipped_elder_deleted" in doc
+    assert "skipped_contact_deleted" in doc
     assert "skipped_window" in doc
     assert "rescheduled" in doc
 
@@ -129,16 +129,18 @@ async def clean_calls(session_factory):
 
 
 async def _seed_call(
-    factory, *, status, scheduled_at=None, updated_at=None, tz="UTC", room=None, elder_id=None
+    factory, *, status, scheduled_at=None, updated_at=None, tz="UTC", room=None, contact_id=None
 ):
-    """Insert one call (own elder unless given); optionally force updated_at afterwards."""
+    """Insert one call (own contact unless given); optionally force updated_at afterwards."""
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        if elder_id is None:
-            elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone=tz)
-            elder_id = elder.id
+        if contact_id is None:
+            contact = await contacts_repo.create_contact(
+                db, name="A", phone_e164=phone, timezone=tz
+            )
+            contact_id = contact.id
         call = Call(
-            elder_id=elder_id,
+            contact_id=contact_id,
             direction=CallDirection.OUTBOUND,
             status=status,
             scheduled_at=scheduled_at,
@@ -233,7 +235,7 @@ async def test_dial_requeue_increments_quiet_hours_counter(
 # Wednesday 2026-06-10 15:00Z = 11:00 EDT — inside the default 09:00-17:00 NY window.
 SCHED_NOW = datetime(2026, 6, 10, 15, 0, tzinfo=UTC)
 _TRUNCATE_SQL = (
-    "TRUNCATE call_batch_targets, call_batches, call_schedules, calls, dnc_list, elders CASCADE"
+    "TRUNCATE call_batch_targets, call_batches, call_schedules, calls, dnc_list, contacts CASCADE"
 )
 
 
@@ -244,17 +246,19 @@ async def clean_scheduler_tables(session_factory):
         await db.commit()
 
 
-async def _seed_elder(factory, *, timezone: str = "America/New_York") -> Elder:
+async def _seed_contact(factory, *, timezone: str = "America/New_York") -> Contact:
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     async with factory() as db:
-        elder = await elders_repo.create_elder(db, name="S", phone_e164=phone, timezone=timezone)
+        contact = await contacts_repo.create_contact(
+            db, name="S", phone_e164=phone, timezone=timezone
+        )
         await db.commit()
-    return elder
+    return contact
 
 
 async def _seed_schedule(
     factory,
-    elder_id: uuid.UUID,
+    contact_id: uuid.UUID,
     *,
     window_start: time = time(9, 0),
     window_end: time = time(17, 0),
@@ -262,7 +266,7 @@ async def _seed_schedule(
     async with factory() as db:
         row = await schedules_repo.create_schedule(
             db,
-            elder_id=elder_id,
+            contact_id=contact_id,
             window_start_local=window_start,
             window_end_local=window_end,
             days_of_week=127,
@@ -275,7 +279,7 @@ async def _seed_schedule(
         return row.id
 
 
-async def _seed_running_batch(factory, elder_ids: list[uuid.UUID]) -> uuid.UUID:
+async def _seed_running_batch(factory, contact_ids: list[uuid.UUID]) -> uuid.UUID:
     async with factory() as db:
         batch = await batches_repo.create_batch_with_targets(
             db,
@@ -288,7 +292,7 @@ async def _seed_running_batch(factory, elder_ids: list[uuid.UUID]) -> uuid.UUID:
             days_of_week=None,
             max_concurrency=None,
             profile_override=None,
-            targets=[BatchTargetIn(elder_id=eid) for eid in elder_ids],
+            targets=[BatchTargetIn(contact_id=eid) for eid in contact_ids],
         )
         batch.status = "running"
         batch.started_at = SCHED_NOW
@@ -313,23 +317,23 @@ async def test_materialization_results_increment_counter(session_factory, clean_
     """Every D8 materialization decision lands in
     usan_materialized_calls_total{source,result}, incremented after the commit
     that made it true: created/skipped_window/dnc_blocked on the first poll,
-    replayed on the re-claim, and a deleted-elder batch target as
-    source="batch", result="skipped_elder_deleted"."""
+    replayed on the re-claim, and a deleted-contact batch target as
+    source="batch", result="skipped_contact_deleted"."""
     before = {
         r: _materialized("schedule", r)
         for r in ("created", "replayed", "skipped_window", "dnc_blocked")
     }
-    before_batch = _materialized("batch", "skipped_elder_deleted")
+    before_batch = _materialized("batch", "skipped_contact_deleted")
 
-    created_elder = await _seed_elder(session_factory)
-    sid = await _seed_schedule(session_factory, created_elder.id)
-    window_elder = await _seed_elder(session_factory)
+    created_contact = await _seed_contact(session_factory)
+    sid = await _seed_schedule(session_factory, created_contact.id)
+    window_contact = await _seed_contact(session_factory)
     # 09:00-10:30 NY: SCHED_NOW (11:00 EDT) is past the window end.
-    await _seed_schedule(session_factory, window_elder.id, window_end=time(10, 30))
-    dnc_elder = await _seed_elder(session_factory)
-    await _seed_schedule(session_factory, dnc_elder.id)
+    await _seed_schedule(session_factory, window_contact.id, window_end=time(10, 30))
+    dnc_contact = await _seed_contact(session_factory)
+    await _seed_schedule(session_factory, dnc_contact.id)
     async with session_factory() as db:
-        await dnc_repo.add_entry(db, dnc_elder.phone_e164, "asked to stop")
+        await dnc_repo.add_entry(db, dnc_contact.phone_e164, "asked to stop")
         await db.commit()
 
     await schedule_orchestrator.poll_once(session_factory, _settings(), now=SCHED_NOW)
@@ -351,14 +355,14 @@ async def test_materialization_results_increment_counter(session_factory, clean_
     assert _materialized("schedule", "replayed") == before["replayed"] + 1
     assert _materialized("schedule", "created") == before["created"] + 1  # never re-counted
 
-    # Batch plane: a deleted elder's target skips with source="batch".
-    gone = await _seed_elder(session_factory)
+    # Batch plane: a deleted contact's target skips with source="batch".
+    gone = await _seed_contact(session_factory)
     await _seed_running_batch(session_factory, [gone.id])
     async with session_factory() as db:
-        await db.execute(delete(Elder).where(Elder.id == gone.id))
+        await db.execute(delete(Contact).where(Contact.id == gone.id))
         await db.commit()
     await schedule_orchestrator.poll_once(session_factory, _settings(), now=SCHED_NOW)
-    assert _materialized("batch", "skipped_elder_deleted") == before_batch + 1
+    assert _materialized("batch", "skipped_contact_deleted") == before_batch + 1
 
 
 def test_batch_events_increment_on_transitions(client, async_database_url):
@@ -376,13 +380,13 @@ def test_batch_events_increment_on_transitions(client, async_database_url):
     asyncio.run(_with_factory(async_database_url, _scrub))
 
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
-    created_elder = client.post(
-        "/v1/elders",
+    created_contact = client.post(
+        "/v1/contacts",
         json={"name": "Rose", "phone_e164": phone, "timezone": "America/New_York"},
         headers=OPERATOR_HEADERS,
     )
-    assert created_elder.status_code == 201
-    elder_id = created_elder.json()["id"]
+    assert created_contact.status_code == 201
+    contact_id = created_contact.json()["id"]
 
     before = {
         e: counter_value(BATCH_EVENTS_TOTAL, event=e)
@@ -390,7 +394,7 @@ def test_batch_events_increment_on_transitions(client, async_database_url):
     }
     created = client.post(
         "/v1/batches",
-        json={"name": "June campaign", "targets": [{"elder_id": elder_id}]},
+        json={"name": "June campaign", "targets": [{"contact_id": contact_id}]},
         headers=OPERATOR_HEADERS,
     )
     assert created.status_code == 201
@@ -420,7 +424,7 @@ def test_batch_events_increment_on_transitions(client, async_database_url):
 
     second = client.post(
         "/v1/batches",
-        json={"name": "second", "targets": [{"elder_id": elder_id}]},
+        json={"name": "second", "targets": [{"contact_id": contact_id}]},
         headers=OPERATOR_HEADERS,
     )
     assert second.status_code == 201
@@ -441,14 +445,14 @@ async def test_finalizer_increments_final_status(session_factory, clean_schedule
     """Settled chains land in usan_batch_targets_finalized_total{final_status}:
     a completed chain, and — closing the §9 DNC-batch flow through the metric —
     a settled DNC_BLOCKED chain (D9 finalizer-matrix case f)."""
-    completed_elder = await _seed_elder(session_factory)
-    dnc_elder = await _seed_elder(session_factory)
-    batch_id = await _seed_running_batch(session_factory, [completed_elder.id, dnc_elder.id])
+    completed_contact = await _seed_contact(session_factory)
+    dnc_contact = await _seed_contact(session_factory)
+    batch_id = await _seed_running_batch(session_factory, [completed_contact.id, dnc_contact.id])
     completed_root = await _seed_call(
-        session_factory, status=CallStatus.COMPLETED, elder_id=completed_elder.id
+        session_factory, status=CallStatus.COMPLETED, contact_id=completed_contact.id
     )
     dnc_root = await _seed_call(
-        session_factory, status=CallStatus.DNC_BLOCKED, elder_id=dnc_elder.id
+        session_factory, status=CallStatus.DNC_BLOCKED, contact_id=dnc_contact.id
     )
     async with session_factory() as db:
         targets = await batches_repo.list_targets(db, batch_id)
@@ -505,8 +509,8 @@ async def test_increments_happen_after_commit(session_factory, clean_scheduler_t
     """Phase-3 discipline (spec §7): the counter mirrors COMMITTED transitions
     only. A materialization whose commit crashes must not count; the recovery
     re-poll counts the row exactly once — a crash can never double-count."""
-    elder = await _seed_elder(session_factory)
-    await _seed_schedule(session_factory, elder.id)
+    contact = await _seed_contact(session_factory)
+    await _seed_schedule(session_factory, contact.id)
     before_created = _materialized("schedule", "created")
     before_replayed = _materialized("schedule", "replayed")
 

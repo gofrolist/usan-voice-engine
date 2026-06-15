@@ -1,4 +1,4 @@
-"""Request/response schemas for per-elder call schedules (spec §4.1).
+"""Request/response schemas for per-contact call schedules (spec §4.1).
 
 Validation contract: the schema layer 422s anything the materializer could not
 act on — empty/unknown/duplicate day names, an inverted window, or a window
@@ -13,9 +13,9 @@ list by ``ScheduleResponse.from_model``.
 import json
 import uuid
 from datetime import date, datetime, time
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from usan_api.db.models import CallSchedule
 from usan_api.schedule_windows import (
@@ -31,6 +31,10 @@ from usan_api.schemas.call import MAX_DYNAMIC_VARS_BYTES
 
 # The GET /v1/schedules ?limit= clamp lives with the read it bounds:
 # repositories/call_schedules.MAX_SCHEDULES_LIMIT (spec §4.1).
+
+# US5: the closed morning|evening slot set; the DB CHECK (migration 0022) is the
+# matching backstop. An contact may have one schedule per slot.
+Slot = Literal["morning", "evening"]
 
 
 def _validated_days(days: list[str]) -> list[str]:
@@ -57,7 +61,8 @@ def _capped_vars(v: dict[str, Any]) -> dict[str, Any]:
 
 
 class CreateScheduleRequest(BaseModel):
-    elder_id: uuid.UUID
+    contact_id: uuid.UUID
+    slot: Slot = "morning"  # US5; default keeps single-slot callers unchanged
     window_start_local: time
     window_end_local: time
     days_of_week: list[str] = Field(default_factory=lambda: list(DAY_NAMES))
@@ -87,7 +92,15 @@ class CreateScheduleRequest(BaseModel):
 
 
 class UpdateScheduleRequest(BaseModel):
-    """All-optional PATCH body; merged-state revalidation happens in the router."""
+    """All-optional PATCH body; merged-state revalidation happens in the router.
+
+    ``extra="forbid"`` so a PATCH carrying ``slot`` (or any unknown key) 422s rather
+    than silently no-opping: ``slot`` is immutable identity (move = delete+create),
+    and a silent ignore would let a caller believe a slot move succeeded. Mirrors the
+    same immutable-identity guard on custom_variables' PATCH body.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     enabled: bool | None = None
     window_start_local: time | None = None
@@ -117,7 +130,8 @@ class UpdateScheduleRequest(BaseModel):
 
 class ScheduleResponse(BaseModel):
     id: uuid.UUID
-    elder_id: uuid.UUID
+    contact_id: uuid.UUID
+    slot: Slot  # closed enum; the DB CHECK (migration 0022) guarantees the value
     enabled: bool
     window_start_local: time
     window_end_local: time
@@ -135,7 +149,8 @@ class ScheduleResponse(BaseModel):
     def from_model(cls, s: CallSchedule) -> ScheduleResponse:
         return cls(
             id=s.id,
-            elder_id=s.elder_id,
+            contact_id=s.contact_id,
+            slot=s.slot,
             enabled=s.enabled,
             window_start_local=s.window_start_local,
             window_end_local=s.window_end_local,

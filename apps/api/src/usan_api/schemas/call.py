@@ -18,7 +18,7 @@ RESERVED_KEY_PREFIXES = ("sched:", "batch:")
 
 
 class CreateCallRequest(BaseModel):
-    elder_id: uuid.UUID
+    contact_id: uuid.UUID
     idempotency_key: str = Field(min_length=1, max_length=255)
     dynamic_vars: dict[str, Any] = Field(default_factory=dict)
     # Validated live (ACTIVE + published) on the create path only; part of the
@@ -95,7 +95,7 @@ class TranscriptSegment(BaseModel):
 
 class CallResponse(BaseModel):
     id: uuid.UUID
-    elder_id: uuid.UUID | None
+    contact_id: uuid.UUID | None
     direction: str
     status: str
     idempotency_key: str | None
@@ -124,7 +124,7 @@ class CallResponse(BaseModel):
     ) -> CallResponse:
         return cls(
             id=call.id,
-            elder_id=call.elder_id,
+            contact_id=call.contact_id,
             direction=call.direction.value,
             status=call.status.value,
             idempotency_key=call.idempotency_key,
@@ -149,9 +149,9 @@ class InboundCallRequest(BaseModel):
 
 class InboundCallResponse(BaseModel):
     call_id: uuid.UUID
-    elder_known: bool
+    contact_known: bool
     dynamic_vars: dict[str, Any]
-    # Phase 2 (contract C): the 8 server-resolved data built-ins + the elder's IANA
+    # Phase 2 (contract C): the 8 server-resolved data built-ins + the contact's IANA
     # timezone, passed to the agent out-of-band. Additive with defaults so older
     # agent builds that ignore them keep working.
     resolved_vars: dict[str, str] = Field(default_factory=dict)

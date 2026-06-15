@@ -13,15 +13,23 @@ from usan_api.schemas.tool_catalog import (
 )
 
 
-def test_catalog_has_exactly_seven_tools_in_order():
+def test_catalog_has_exactly_fifteen_tools_in_order():
     names = [t.name for t in TOOL_CATALOG]
     assert names == [
         "log_wellness",
         "log_medication",
         "get_today_meds",
         "flag_for_followup",
+        "raise_crisis",
         "schedule_callback",
+        "close_family_task",
+        "record_personal_fact",
+        "record_survey",
+        "get_activity",
         "send_sms",
+        "send_info_sms",
+        "register_opt_out",
+        "set_spanish_callback",
         "end_call",
     ]
 
@@ -32,8 +40,15 @@ def test_catalog_categories_and_flags():
     assert by_name["log_medication"].category == "logging"
     assert by_name["get_today_meds"].category == "logging"
     assert by_name["flag_for_followup"].category == "safety"
+    assert by_name["raise_crisis"].category == "safety"
     assert by_name["schedule_callback"].category == "safety"
+    assert by_name["close_family_task"].category == "logging"
+    assert by_name["record_survey"].category == "logging"
+    assert by_name["get_activity"].category == "logging"
     assert by_name["send_sms"].category == "messaging"
+    assert by_name["send_info_sms"].category == "messaging"
+    assert by_name["register_opt_out"].category == "safety"
+    assert by_name["set_spanish_callback"].category == "safety"
     assert by_name["end_call"].category == "lifecycle"
     # end_call is locked-on; send_sms needs >=1 template before it is offered.
     assert by_name["end_call"].always_on is True

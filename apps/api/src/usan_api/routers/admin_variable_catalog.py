@@ -27,7 +27,7 @@ async def get_variable_catalog(db: AsyncSession = Depends(get_db)) -> VariableCa
     Phase A4 (spec §3.2): the 10 builtins in canonical order, then declared
     customs alphabetical, mapped to ``tier="custom"`` with ``default=""`` —
     **definitions carry no values**; values arrive per call via
-    ``Call.dynamic_vars``. The catalog stays global (not per-elder PHI, not a
+    ``Call.dynamic_vars``. The catalog stays global (not per-contact PHI, not a
     per-version snapshot); it is the single source of truth the frontend uses
     to render the insert-variable chips and flag unknown tokens.
     """

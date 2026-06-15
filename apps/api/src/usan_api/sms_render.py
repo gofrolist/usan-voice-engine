@@ -36,11 +36,11 @@ def _sanitize(value: str) -> str:
     return text[:_VALUE_MAX_LEN].strip()
 
 
-def _clock_vars(elder: Any, now: datetime) -> dict[str, str]:
-    """current_time / current_date in the elder's timezone (best-effort)."""
+def _clock_vars(contact: Any, now: datetime) -> dict[str, str]:
+    """current_time / current_date in the contact's timezone (best-effort)."""
     from zoneinfo import ZoneInfo
 
-    tz = getattr(elder, "timezone", "") or "UTC"
+    tz = getattr(contact, "timezone", "") or "UTC"
     try:
         local = now.astimezone(ZoneInfo(tz))
     except Exception:
@@ -55,21 +55,21 @@ def _clock_vars(elder: Any, now: datetime) -> dict[str, str]:
 
 
 def render_sms_body(
-    template_body: str, *, call: Any, elder: Any, now: datetime | None = None
+    template_body: str, *, call: Any, contact: Any, now: datetime | None = None
 ) -> str:
     """Substitute non-PHI {{tokens}} in ``template_body`` for one call.
 
     ``now`` is injectable for testing; the endpoint calls
-    ``render_sms_body(template.body, call=call, elder=elder)``.
+    ``render_sms_body(template.body, call=call, contact=contact)``.
     """
     when = now or datetime.now(UTC)
     raw_direction = getattr(getattr(call, "direction", None), "value", "outbound")
     direction: Literal["inbound", "outbound"] = (
         "inbound" if raw_direction == "inbound" else "outbound"
     )
-    resolved, _tz = builtin_vars.resolve_builtin_vars(elder, None, direction=direction)
+    resolved, _tz = builtin_vars.resolve_builtin_vars(contact, None, direction=direction)
     values = {k: v for k, v in resolved.items() if k not in PHI_BUILTIN_NAMES}
-    values.update(_clock_vars(elder, when))
+    values.update(_clock_vars(contact, when))
 
     def _replace(match: re.Match[str]) -> str:
         name = match.group(1)

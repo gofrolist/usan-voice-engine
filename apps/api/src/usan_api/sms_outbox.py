@@ -71,7 +71,7 @@ async def _flush_pending_sms(call_id: uuid.UUID) -> None:
                 )
             except Exception as exc:  # noqa: BLE001 - any send failure marks the row failed
                 # Store only the exception TYPE, never str(exc): the error column is
-                # PHI-adjacent (tied to elder phone numbers) and an httpx error string
+                # PHI-adjacent (tied to contact phone numbers) and an httpx error string
                 # can leak URL query strings or response-body fragments. PHI-free, like
                 # the SMS_MESSAGES_TOTAL counter (custom_metrics.py).
                 claimed = await sms_repo.mark_failed(

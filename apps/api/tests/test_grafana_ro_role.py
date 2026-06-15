@@ -22,7 +22,7 @@ async def test_grafana_ro_can_select_reporting_tables(async_database_url):
     engine = create_async_engine(async_database_url)
     allowed = (
         "calls",
-        "elders",
+        "contacts",
         "wellness_logs",
         "medication_logs",
         "turn_metrics",

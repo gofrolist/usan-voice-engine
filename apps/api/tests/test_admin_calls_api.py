@@ -43,10 +43,10 @@ def mock_dispatch(monkeypatch):
     monkeypatch.setattr(dialer, "schedule_dial", lambda call_id, settings: None)
 
 
-def _create_elder(client, *, name: str = "Ada") -> tuple[str, str]:
+def _create_contact(client, *, name: str = "Ada") -> tuple[str, str]:
     phone = f"+1555{str(uuid.uuid4().int)[:7]}"
     r = client.post(
-        "/v1/elders",
+        "/v1/contacts",
         json={"name": name, "phone_e164": phone, "timezone": "UTC", "metadata": {}},
         headers=_OP,
     )
@@ -54,10 +54,14 @@ def _create_elder(client, *, name: str = "Ada") -> tuple[str, str]:
     return r.json()["id"], phone
 
 
-def _enqueue(client, elder_id: str) -> str:
+def _enqueue(client, contact_id: str) -> str:
     r = client.post(
         "/v1/calls",
-        json={"elder_id": elder_id, "idempotency_key": f"op-{uuid.uuid4()}", "dynamic_vars": {}},
+        json={
+            "contact_id": contact_id,
+            "idempotency_key": f"op-{uuid.uuid4()}",
+            "dynamic_vars": {},
+        },
         headers=_OP,
     )
     assert r.status_code == 202
@@ -94,7 +98,7 @@ def _as_viewer(client, async_database_url: str) -> None:
 def _seed_call(
     async_database_url: str,
     *,
-    elder_id: str,
+    contact_id: str,
     direction: CallDirection = CallDirection.OUTBOUND,
     status: CallStatus = CallStatus.QUEUED,
     idempotency_key: str | None = None,
@@ -108,7 +112,7 @@ def _seed_call(
             async with factory() as db:
                 call = await calls_repo.create_call(
                     db,
-                    elder_id=uuid.UUID(elder_id),
+                    contact_id=uuid.UUID(contact_id),
                     direction=direction,
                     status=status,
                     idempotency_key=idempotency_key,
@@ -121,14 +125,14 @@ def _seed_call(
     return asyncio.run(_go())
 
 
-def _seed_inbound_call(async_database_url: str, *, elder_id: str) -> str:
+def _seed_inbound_call(async_database_url: str, *, contact_id: str) -> str:
     async def _go() -> str:
         engine = create_async_engine(async_database_url, poolclass=NullPool)
         try:
             factory = async_sessionmaker(engine, expire_on_commit=False)
             async with factory() as db:
                 call = await calls_repo.create_inbound_call(
-                    db, elder_id=uuid.UUID(elder_id), livekit_room=f"room-in-{uuid.uuid4()}"
+                    db, contact_id=uuid.UUID(contact_id), livekit_room=f"room-in-{uuid.uuid4()}"
                 )
                 await db.commit()
                 return str(call.id)
@@ -138,7 +142,7 @@ def _seed_inbound_call(async_database_url: str, *, elder_id: str) -> str:
     return asyncio.run(_go())
 
 
-def _seed_recorded_call_with_transcript(async_database_url: str, *, elder_id: str) -> str:
+def _seed_recorded_call_with_transcript(async_database_url: str, *, contact_id: str) -> str:
     """A call carrying both PHI surfaces the list must never leak: a gs:// recording
     URI and a transcript segment with sentinel content."""
 
@@ -150,7 +154,7 @@ def _seed_recorded_call_with_transcript(async_database_url: str, *, elder_id: st
                 room = f"room-phi-{uuid.uuid4()}"
                 call = await calls_repo.create_call(
                     db,
-                    elder_id=uuid.UUID(elder_id),
+                    contact_id=uuid.UUID(contact_id),
                     direction=CallDirection.OUTBOUND,
                     status=CallStatus.COMPLETED,
                     livekit_room=room,
@@ -176,13 +180,13 @@ def _seed_recorded_call_with_transcript(async_database_url: str, *, elder_id: st
     return asyncio.run(_go())
 
 
-def _delete_elder(async_database_url: str, elder_id: str) -> None:
+def _delete_contact(async_database_url: str, contact_id: str) -> None:
     async def _go() -> None:
         engine = create_async_engine(async_database_url, poolclass=NullPool)
         try:
             async with engine.begin() as conn:
                 await conn.execute(
-                    text("DELETE FROM elders WHERE id = CAST(:id AS uuid)"), {"id": elder_id}
+                    text("DELETE FROM contacts WHERE id = CAST(:id AS uuid)"), {"id": contact_id}
                 )
         finally:
             await engine.dispose()
@@ -205,9 +209,9 @@ def test_admin_calls_viewer_readable(client, async_database_url):
 
 
 def test_admin_calls_list_shape_phi_free(client, mock_dispatch, admin_session, async_database_url):
-    elder_id, phone = _create_elder(client)
-    bare_id = _enqueue(client, elder_id)
-    recorded_id = _seed_recorded_call_with_transcript(async_database_url, elder_id=elder_id)
+    contact_id, phone = _create_contact(client)
+    bare_id = _enqueue(client, contact_id)
+    recorded_id = _seed_recorded_call_with_transcript(async_database_url, contact_id=contact_id)
 
     r = client.get("/v1/admin/calls")
     assert r.status_code == 200
@@ -216,7 +220,7 @@ def test_admin_calls_list_shape_phi_free(client, mock_dispatch, admin_session, a
 
     for item in (rows[bare_id], rows[recorded_id]):
         assert item["masked_phone"] == "***" + phone[-4:]
-        assert item["elder_name"] == "Ada"
+        assert item["contact_name"] == "Ada"
         assert item["direction"] == "outbound"
         assert item["attempt"] == 1
         assert item["created_at"]
@@ -237,31 +241,31 @@ def test_admin_calls_list_shape_phi_free(client, mock_dispatch, admin_session, a
 def test_admin_calls_list_filters_paging_ordering(
     client, mock_dispatch, admin_session, async_database_url
 ):
-    elder_a, _phone_a = _create_elder(client, name="Elder A")
-    elder_b, _phone_b = _create_elder(client, name="Elder B")
+    contact_a, _phone_a = _create_contact(client, name="Contact A")
+    contact_b, _phone_b = _create_contact(client, name="Contact B")
 
     sched_id = _seed_call(
         async_database_url,
-        elder_id=elder_a,
+        contact_id=contact_a,
         status=CallStatus.COMPLETED,
-        idempotency_key=f"sched:{elder_a}:2026-06-10",
+        idempotency_key=f"sched:{contact_a}:2026-06-10",
     )
     batch_id = _seed_call(
-        async_database_url, elder_id=elder_a, idempotency_key=f"batch:{uuid.uuid4()}:0"
+        async_database_url, contact_id=contact_a, idempotency_key=f"batch:{uuid.uuid4()}:0"
     )
-    operator_id = _enqueue(client, elder_a)
-    null_key_id = _seed_call(async_database_url, elder_id=elder_b)
-    inbound_id = _seed_inbound_call(async_database_url, elder_id=elder_b)
+    operator_id = _enqueue(client, contact_a)
+    null_key_id = _seed_call(async_database_url, contact_id=contact_b)
+    inbound_id = _seed_inbound_call(async_database_url, contact_id=contact_b)
 
     def ids(query: str) -> list[str]:
         r = client.get(f"/v1/admin/calls{query}")
         assert r.status_code == 200, r.text
         return [item["id"] for item in r.json()]
 
-    # status / direction / elder_id narrow.
+    # status / direction / contact_id narrow.
     assert ids("?status=completed") == [sched_id]
     assert ids("?direction=inbound") == [inbound_id]
-    assert set(ids(f"?elder_id={elder_a}")) == {sched_id, batch_id, operator_id}
+    assert set(ids(f"?contact_id={contact_a}")) == {sched_id, batch_id, operator_id}
 
     # The B4 origin matrix through HTTP: adhoc = outbound non-reserved keys + NULL
     # keys, NEVER the inbound NULL-key row.
@@ -308,8 +312,8 @@ def test_admin_calls_list_422s(client, mock_dispatch, admin_session):
     # Naive datetimes are accepted and assumed UTC: a naive created_from filters as
     # its UTC instant (a non-UTC interpretation shifts the boundary by hours and
     # flips at least one of the two assertions below).
-    elder_id, _phone = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
+    contact_id, _phone = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
     rows = {item["id"]: item for item in client.get("/v1/admin/calls").json()}
     created_at = _parse_created_at(rows[call_id]["created_at"])
     naive_before = (created_at - timedelta(seconds=1)).replace(tzinfo=None)
@@ -320,24 +324,24 @@ def test_admin_calls_list_422s(client, mock_dispatch, admin_session):
     assert call_id not in [item["id"] for item in excluded.json()]
 
 
-def test_admin_calls_list_elder_deleted_unknown(
+def test_admin_calls_list_contact_deleted_unknown(
     client, mock_dispatch, admin_session, async_database_url
 ):
-    elder_id, _phone = _create_elder(client)
-    call_id = _enqueue(client, elder_id)
-    _delete_elder(async_database_url, elder_id)
+    contact_id, _phone = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
+    _delete_contact(async_database_url, contact_id)
 
     rows = {item["id"]: item for item in client.get("/v1/admin/calls").json()}
     assert rows[call_id]["masked_phone"] == "unknown"
-    assert rows[call_id]["elder_name"] is None
-    assert rows[call_id]["elder_id"] is None  # FK is ON DELETE SET NULL
+    assert rows[call_id]["contact_name"] is None
+    assert rows[call_id]["contact_id"] is None  # FK is ON DELETE SET NULL
 
 
 def test_admin_calls_list_audit_row_phi_free(
     client, mock_dispatch, admin_session, async_database_url
 ):
-    elder_id, phone = _create_elder(client, name="Audit Sentinel Elder")
-    _enqueue(client, elder_id)
+    contact_id, phone = _create_contact(client, name="Audit Sentinel Contact")
+    _enqueue(client, contact_id)
 
     assert client.get("/v1/admin/calls").status_code == 200
 
@@ -348,7 +352,7 @@ def test_admin_calls_list_audit_row_phi_free(
     assert entry["entity_id"] is None
     # Spec §4.1 detail shape: exactly the seven filter values + count, no limit.
     assert set(entry["detail"].keys()) == {
-        "elder_id",
+        "contact_id",
         "status",
         "direction",
         "origin",
@@ -358,7 +362,7 @@ def test_admin_calls_list_audit_row_phi_free(
         "count",
     }
     blob = (str(entry["detail"]) + str(entry["entity_type"]) + str(entry["entity_id"])).lower()
-    assert "audit sentinel elder" not in blob
+    assert "audit sentinel contact" not in blob
     assert "sentinel" not in blob
     assert phone not in blob
     assert phone[-4:] not in blob
@@ -374,7 +378,7 @@ SIGNED_SENTINEL = "https://storage.example/SIGNED-SENTINEL"
 def _seed_detail_call(
     async_database_url: str,
     *,
-    elder_id: str,
+    contact_id: str,
     idempotency_key: str | None = None,
     recording_uri: str | None = None,
     segments: list[dict[str, Any]] | None = None,
@@ -389,7 +393,7 @@ def _seed_detail_call(
                 room = f"room-detail-{uuid.uuid4()}"
                 call = await calls_repo.create_call(
                     db,
-                    elder_id=uuid.UUID(elder_id),
+                    contact_id=uuid.UUID(contact_id),
                     direction=CallDirection.OUTBOUND,
                     status=CallStatus.COMPLETED,
                     idempotency_key=idempotency_key,
@@ -435,11 +439,11 @@ def test_admin_call_detail_404(client, admin_session):
 
 
 def test_admin_call_detail_transcript_and_fields(client, admin_session, async_database_url):
-    elder_id, phone = _create_elder(client, name="Detail Elder")
+    contact_id, phone = _create_contact(client, name="Detail Contact")
     base = datetime.now(UTC)
     call_id = _seed_detail_call(
         async_database_url,
-        elder_id=elder_id,
+        contact_id=contact_id,
         idempotency_key=f"sched:{uuid.uuid4()}:2026-06-10",
         # Seeded out of conversation order: the user turn at +2s is inserted LAST, so
         # an insertion-order (id-only) read would misplace it — (started_at, id) wins.
@@ -462,7 +466,7 @@ def test_admin_call_detail_transcript_and_fields(client, admin_session, async_da
 
     # B5 summary fields plus the detail extras.
     assert body["id"] == call_id
-    assert body["elder_name"] == "Detail Elder"
+    assert body["contact_name"] == "Detail Contact"
     assert body["masked_phone"] == "***" + phone[-4:]
     assert body["livekit_room"].startswith("room-detail-")
     assert body["parent_call_id"] is None
@@ -488,9 +492,9 @@ def test_admin_call_detail_transcript_and_fields(client, admin_session, async_da
 def test_admin_call_detail_presigned_url_clamped(
     client, admin_session, async_database_url, monkeypatch
 ):
-    elder_id, _phone = _create_elder(client)
+    contact_id, _phone = _create_contact(client)
     call_id = _seed_detail_call(
-        async_database_url, elder_id=elder_id, recording_uri="gs://test-bucket/detail.ogg"
+        async_database_url, contact_id=contact_id, recording_uri="gs://test-bucket/detail.ogg"
     )
     monkeypatch.setenv("GCS_BUCKET", "test-bucket")
     get_settings.cache_clear()
@@ -519,9 +523,9 @@ def test_admin_call_detail_presigned_url_clamped(
 def test_admin_call_detail_signing_failure_200_null(
     client, admin_session, async_database_url, monkeypatch
 ):
-    elder_id, _phone = _create_elder(client)
+    contact_id, _phone = _create_contact(client)
     call_id = _seed_detail_call(
-        async_database_url, elder_id=elder_id, recording_uri="gs://test-bucket/fail.ogg"
+        async_database_url, contact_id=contact_id, recording_uri="gs://test-bucket/fail.ogg"
     )
     monkeypatch.setenv("GCS_BUCKET", "test-bucket")
     get_settings.cache_clear()
@@ -543,11 +547,11 @@ def test_admin_call_detail_signing_failure_200_null(
 def test_admin_call_detail_locked_sink_lines(
     client, admin_session, async_database_url, monkeypatch
 ):
-    elder_id, _phone = _create_elder(client)
+    contact_id, _phone = _create_contact(client)
     base = datetime.now(UTC)
     call_id = _seed_detail_call(
         async_database_url,
-        elder_id=elder_id,
+        contact_id=contact_id,
         recording_uri="gs://test-bucket/sink.ogg",
         segments=[
             {"role": "user", "content": "PHI-SENTINEL-DETAIL", "started_at": base},
@@ -594,8 +598,8 @@ def test_admin_call_detail_locked_sink_lines(
 
 
 def test_admin_call_detail_empty_transcript_no_sink_line(client, admin_session, async_database_url):
-    elder_id, _phone = _create_elder(client)
-    call_id = _seed_detail_call(async_database_url, elder_id=elder_id)
+    contact_id, _phone = _create_contact(client)
+    call_id = _seed_detail_call(async_database_url, contact_id=contact_id)
 
     status_code, records = _capture_logs(client, f"/v1/admin/calls/{call_id}")
     assert status_code == 200
@@ -604,13 +608,13 @@ def test_admin_call_detail_empty_transcript_no_sink_line(client, admin_session, 
 
 
 def test_admin_call_detail_audit_row(client, admin_session, async_database_url):
-    elder_id, phone = _create_elder(client, name="Audit Detail Elder")
+    contact_id, phone = _create_contact(client, name="Audit Detail Contact")
     base = datetime.now(UTC)
     # recording_uri set but no GCS_BUCKET: no URL is signed, yet has_recording=true
     # must still be audited (it reflects the row, not the signing outcome).
     call_id = _seed_detail_call(
         async_database_url,
-        elder_id=elder_id,
+        contact_id=contact_id,
         recording_uri="gs://test-bucket/audit.ogg",
         segments=[
             {"role": "user", "content": "PHI-SENTINEL-AUDIT", "started_at": base},
@@ -630,7 +634,7 @@ def test_admin_call_detail_audit_row(client, admin_session, async_database_url):
     assert entry["detail"] == {"segments": 3, "has_recording": True}
     blob = (str(entry["detail"]) + str(entry["entity_type"]) + str(entry["entity_id"])).lower()
     assert "sentinel" not in blob
-    assert "audit detail elder" not in blob
+    assert "audit detail contact" not in blob
     assert phone not in blob
     assert phone[-4:] not in blob
 
@@ -638,8 +642,8 @@ def test_admin_call_detail_audit_row(client, admin_session, async_database_url):
 def test_admin_call_detail_audit_failure_rolls_back(
     client, admin_session, async_database_url, monkeypatch
 ):
-    elder_id, _phone = _create_elder(client)
-    call_id = _seed_detail_call(async_database_url, elder_id=elder_id)
+    contact_id, _phone = _create_contact(client)
+    call_id = _seed_detail_call(async_database_url, contact_id=contact_id)
 
     from usan_api.routers import admin_calls as admin_calls_router
 
@@ -668,10 +672,10 @@ def test_admin_call_detail_audit_failure_rolls_back(
 def test_admin_call_detail_viewer_readable(client, async_database_url):
     # Policy, not accident (spec §6.4): the viewer role — the nurses doing triage —
     # can read transcripts on the detail page.
-    elder_id, _phone = _create_elder(client)
+    contact_id, _phone = _create_contact(client)
     call_id = _seed_detail_call(
         async_database_url,
-        elder_id=elder_id,
+        contact_id=contact_id,
         segments=[{"role": "user", "content": "viewer-visible", "started_at": datetime.now(UTC)}],
     )
     _as_viewer(client, async_database_url)

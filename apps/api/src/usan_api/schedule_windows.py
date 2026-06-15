@@ -130,7 +130,7 @@ def day_bounds_utc(day: date, tz_name: str) -> tuple[datetime, datetime]:
 
 
 def local_date(at: datetime, tz_name: str) -> date:
-    """Elder-local calendar date of an aware instant; ValueError on unknown tz."""
+    """Contact-local calendar date of an aware instant; ValueError on unknown tz."""
     return at.astimezone(_zone(tz_name)).date()
 
 

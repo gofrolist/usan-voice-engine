@@ -87,7 +87,7 @@ def test_out_from_model_echoes_all_fields():
     row = CustomVariable(
         id=uuid.uuid4(),
         name="pet_name",
-        description="The elder's pet's name.",
+        description="The contact's pet's name.",
         example="Rex",
         phi=True,
         created_at=now,

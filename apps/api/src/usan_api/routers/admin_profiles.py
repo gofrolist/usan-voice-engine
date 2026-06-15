@@ -46,14 +46,14 @@ router = APIRouter(
 async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[ProfileSummary]:
     profiles = await repo.list_profiles(db)
     summaries: list[ProfileSummary] = []
-    # TODO(perf): N+1 — has_unpublished_draft + count_assigned_elders run per profile.
+    # TODO(perf): N+1 — has_unpublished_draft + count_assigned_contacts run per profile.
     # Batch into a single join/group-by query when the profile list grows.
     for p in profiles:
         summaries.append(
             ProfileSummary.from_model(
                 p,
                 has_unpublished_draft=await repo.has_unpublished_draft(db, p),
-                assigned_elder_count=await repo.count_assigned_elders(db, p.id),
+                assigned_contact_count=await repo.count_assigned_contacts(db, p.id),
             )
         )
     return summaries
@@ -90,7 +90,7 @@ async def create_profile(
         await db.rollback()
         raise HTTPException(status_code=409, detail="profile name already exists") from exc
     await db.refresh(profile)
-    return ProfileSummary.from_model(profile, has_unpublished_draft=True, assigned_elder_count=0)
+    return ProfileSummary.from_model(profile, has_unpublished_draft=True, assigned_contact_count=0)
 
 
 @router.get("/{profile_id}", response_model=ProfileDetail)

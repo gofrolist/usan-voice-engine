@@ -23,6 +23,15 @@ _TOKEN_TTL_S = 300
 # whole agent-side path is enum-typed end to end.
 FlagSeverity = Literal["routine", "urgent"]
 FlagCategory = Literal["medical", "emotional", "medication", "safety", "other"]
+# Mirror of apps/api schemas/crisis.CrisisCategory (US1). Enum-typed end to end so the
+# LLM and the deterministic safety net can only raise a valid category.
+CrisisCategory = Literal["suicidal", "medical", "abuse", "confusion", "overdose"]
+# Mirror of apps/api schemas/personalization.FactCategory (US4). Enum-typed so the LLM
+# can only record a fact under a category the personal_facts CHECK constraint accepts.
+FactCategory = Literal["person", "routine", "preference", "important_date", "health_context"]
+# Mirror of apps/api activities_catalog.ActivityKindFilter (US6). Enum-typed so the LLM can
+# only request a kind the get_activity endpoint accepts ("any" means any kind).
+ActivityKind = Literal["any", "breathing", "memory", "game"]
 
 # The config fetch is on the call's critical path (before the agent can speak), so use
 # a tighter timeout than the 10s tool calls — a slow API must not delay answering.
@@ -101,6 +110,27 @@ async def flag_for_followup(
     )
 
 
+async def raise_crisis(
+    call_id: str,
+    settings: Settings,
+    *,
+    category: CrisisCategory,
+    detection_source: str,
+    evidence: str | None = None,
+) -> dict[str, Any]:
+    """Escalate a crisis and return the resource payload (flag_id + resource + script).
+
+    Called by BOTH the LLM tool path and the deterministic safety net (worker). Raises
+    httpx.HTTPStatusError on a non-2xx; callers surface a safe spoken fallback.
+    """
+    return await _post_tool(
+        "raise_crisis",
+        call_id,
+        settings,
+        {"category": category, "detection_source": detection_source, "evidence": evidence},
+    )
+
+
 async def log_medication(
     call_id: str,
     settings: Settings,
@@ -119,6 +149,74 @@ async def log_medication(
 
 async def send_sms(call_id: str, settings: Settings, *, template_key: str) -> None:
     await _post_tool("send_sms", call_id, settings, {"template_key": template_key})
+
+
+async def send_info_sms(call_id: str, settings: Settings) -> dict[str, Any]:
+    """Text the contact the PHI-free helpful-numbers SMS (US7 / FR-041)."""
+    return await _post_tool("send_info_sms", call_id, settings, {})
+
+
+async def register_opt_out(call_id: str, settings: Settings) -> dict[str, Any]:
+    """Record a spoken opt-out: DNC the contact's number, ack, alert ops (US7 / FR-037)."""
+    return await _post_tool("register_opt_out", call_id, settings, {})
+
+
+async def set_spanish_callback(call_id: str, settings: Settings) -> dict[str, Any]:
+    """Record a Spanish preference + schedule a Spanish callback (US8 / FR-040)."""
+    return await _post_tool("set_spanish_callback", call_id, settings, {})
+
+
+async def close_family_task(
+    call_id: str, settings: Settings, *, task_id: int | None = None
+) -> dict[str, Any]:
+    """Mark conveyed family task(s) delivered. ``task_id=None`` closes all open ones."""
+    return await _post_tool("close_family_task", call_id, settings, {"task_id": task_id})
+
+
+async def record_personal_fact(
+    call_id: str,
+    settings: Settings,
+    *,
+    category: str,
+    content: str,
+    structured: dict[str, Any] | None = None,
+) -> None:
+    await _post_tool(
+        "record_personal_fact",
+        call_id,
+        settings,
+        {"category": category, "content": content, "structured": structured or {}},
+    )
+
+
+async def record_survey(
+    call_id: str,
+    settings: Settings,
+    *,
+    loneliness: int | None = None,
+    mood: int | None = None,
+    satisfaction: int | None = None,
+    raw: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Record this month's wellbeing survey (US6). Idempotent server-side (once/month)."""
+    return await _post_tool(
+        "record_survey",
+        call_id,
+        settings,
+        {
+            "loneliness": loneliness,
+            "mood": mood,
+            "satisfaction": satisfaction,
+            "raw": raw or {},
+        },
+    )
+
+
+async def get_activity(
+    call_id: str, settings: Settings, *, kind: ActivityKind = "any"
+) -> dict[str, Any]:
+    """Fetch a mood-boosting activity not used recently and record the use (US6)."""
+    return await _post_tool("get_activity", call_id, settings, {"kind": kind})
 
 
 async def schedule_callback(
@@ -201,9 +299,9 @@ async def start_inbound_call(
     settings: Settings,
     sip_call_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Best-effort: register an inbound call and fetch elder dynamic vars.
+    """Best-effort: register an inbound call and fetch contact dynamic vars.
 
-    Returns parsed {call_id, elder_known, dynamic_vars} on success, or None on any
+    Returns parsed {call_id, contact_known, dynamic_vars} on success, or None on any
     failure so the worker can fall back to a greet-only inbound conversation.
     """
     url = f"{settings.api_base_url}/v1/calls/inbound"

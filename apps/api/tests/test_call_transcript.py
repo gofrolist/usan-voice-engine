@@ -8,7 +8,7 @@ from sqlalchemy.pool import NullPool
 
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import transcripts as transcripts_repo
 
 # Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
@@ -22,10 +22,12 @@ async def _seed(async_database_url: str, room: str, *, with_tx: bool) -> uuid.UU
     base = datetime(2026, 6, 5, 1, 22, tzinfo=UTC)
     try:
         async with factory() as db:
-            elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+            contact = await contacts_repo.create_contact(
+                db, name="A", phone_e164=phone, timezone="UTC"
+            )
             call = await calls_repo.create_call(
                 db,
-                elder_id=elder.id,
+                contact_id=contact.id,
                 direction=CallDirection.OUTBOUND,
                 status=CallStatus.COMPLETED,
                 livekit_room=room,
@@ -136,12 +138,12 @@ def test_list_for_call_caps_and_orders_segments(async_database_url, monkeypatch)
         base = datetime(2026, 6, 5, 1, 22, tzinfo=UTC)
         try:
             async with factory() as db:
-                elder = await elders_repo.create_elder(
+                contact = await contacts_repo.create_contact(
                     db, name="A", phone_e164=phone, timezone="UTC"
                 )
                 call = await calls_repo.create_call(
                     db,
-                    elder_id=elder.id,
+                    contact_id=contact.id,
                     direction=CallDirection.OUTBOUND,
                     status=CallStatus.COMPLETED,
                     livekit_room="usan-outbound-cap",

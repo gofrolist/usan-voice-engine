@@ -40,12 +40,12 @@ function SeverityBadge({ severity }: { severity: string }) {
 
 // The console never shows a dialable number: contact identity is name + masked
 // phone only, with the name deep-linking to that contact's call history.
-function ElderCell({
-  elderId,
+function ContactCell({
+  contactId,
   name,
   maskedPhone,
 }: {
-  elderId: string;
+  contactId: string;
   name: string | null;
   maskedPhone: string;
 }) {
@@ -53,7 +53,7 @@ function ElderCell({
     <Td>
       <Link
         className="font-medium text-slate-900 hover:underline"
-        to={`/calls?elder_id=${elderId}`}
+        to={`/calls?contact_id=${contactId}`}
       >
         {name ?? "—"}
       </Link>
@@ -172,7 +172,7 @@ export function QueueTable(props: QueueTableProps) {
                 className={cn(f.severity === "urgent" && "border-l-4 border-l-red-500")}
               >
                 <Td className="whitespace-nowrap text-xs">{fmtDate(f.created_at)}</Td>
-                <ElderCell elderId={f.elder_id} name={f.elder_name} maskedPhone={f.masked_phone} />
+                <ContactCell contactId={f.contact_id} name={f.contact_name} maskedPhone={f.masked_phone} />
                 <Td>
                   <SeverityBadge severity={f.severity} />
                 </Td>
@@ -198,7 +198,7 @@ export function QueueTable(props: QueueTableProps) {
           : props.rows.map((c) => (
               <Tr key={c.id}>
                 <Td className="whitespace-nowrap text-xs">{fmtDate(c.created_at)}</Td>
-                <ElderCell elderId={c.elder_id} name={c.elder_name} maskedPhone={c.masked_phone} />
+                <ContactCell contactId={c.contact_id} name={c.contact_name} maskedPhone={c.masked_phone} />
                 <Td>
                   <div>{c.requested_time_text}</div>
                   {c.requested_at ? (

@@ -42,7 +42,7 @@ def require_operator_token(
 ) -> None:
     """Authenticate an operator on the management plane via a static bearer token.
 
-    Guards human/back-office routes (elders, DNC, outbound enqueue/lookup). The
+    Guards human/back-office routes (contacts, DNC, outbound enqueue/lookup). The
     presented token is compared to OPERATOR_API_KEY in constant time. The mismatch
     message is deliberately generic so it leaks nothing about why it failed.
     """

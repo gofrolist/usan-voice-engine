@@ -125,3 +125,35 @@ async def test_schedule_callback_passes_null_optionals(fake_http):
         "requested_at": None,
         "notes": None,
     }
+
+
+async def test_record_personal_fact_posts_scoped_request(fake_http):
+    # US4: the agent->API boundary for the memory-write tool. structured defaults to {}
+    # when omitted (so an important_date with no date still posts a well-formed body).
+    _FakeClient.json_data = {"id": 789}
+    await api_client.record_personal_fact(
+        "call-1", _settings(), category="person", content="daughter Maria visits Sundays"
+    )
+    cap = fake_http.captured
+    assert cap["url"] == "http://api:8000/v1/tools/record_personal_fact"
+    assert cap["json"] == {
+        "call_id": "call-1",
+        "category": "person",
+        "content": "daughter Maria visits Sundays",
+        "structured": {},
+    }
+    assert cap["headers"]["Authorization"].startswith("Bearer ")
+
+
+async def test_record_personal_fact_forwards_structured(fake_http):
+    # A provided structured payload (e.g. an important_date's date) is forwarded verbatim,
+    # so build_memory_params can window it into the important_dates builtin next call.
+    _FakeClient.json_data = {"id": 790}
+    await api_client.record_personal_fact(
+        "call-1",
+        _settings(),
+        category="important_date",
+        content="her birthday",
+        structured={"date": "2026-07-04"},
+    )
+    assert fake_http.captured["json"]["structured"] == {"date": "2026-07-04"}

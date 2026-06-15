@@ -34,7 +34,7 @@ const CATALOG: ToolSpec[] = [
   {
     name: "log_wellness",
     label: "Log wellness",
-    description: "Record the elder's wellness.",
+    description: "Record the contact's wellness.",
     category: "logging",
     always_on: false,
     requires_config: false,
@@ -96,7 +96,7 @@ describe("ToolsSection", () => {
     getMock.mockResolvedValue({ tools: CATALOG });
     render(wrapper(<Harness enabled={["log_wellness", "end_call"]} />));
 
-    await screen.findByText("Record the elder's wellness.");
+    await screen.findByText("Record the contact's wellness.");
     const labels = screen.getAllByText(/^(log_wellness|send_sms|end_call)$/);
     // TOOL_NAMES order: log_wellness comes before send_sms comes before end_call,
     // even though the catalog returned them as send_sms, log_wellness, end_call.
@@ -152,7 +152,7 @@ describe("ToolsSection", () => {
     render(wrapper(<Harness enabled={["log_wellness"]} />));
 
     await waitFor(() => expect(getMock).toHaveBeenCalled());
-    expect(screen.queryByText("Record the elder's wellness.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Record the contact's wellness.")).not.toBeInTheDocument();
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
   });
 
@@ -188,7 +188,7 @@ const VAR_CATALOG: VariableSpec[] = [
   {
     name: "first_name",
     tier: "builtin",
-    description: "Elder first name",
+    description: "Contact first name",
     default: "there",
     example: "Rose",
     phi: false,
@@ -269,7 +269,7 @@ describe("ToolsSection SMS catalog notices", () => {
     render(wrapper(<SmsBodyHarness body="Hi {{first_name}}" />));
 
     // Wait for the catalogs to settle so the absence assertions are meaningful.
-    await screen.findByText("Record the elder's wellness.");
+    await screen.findByText("Record the contact's wellness.");
     await waitFor(() => expect(getMock).toHaveBeenCalledWith("/v1/admin/variable-catalog"));
     expect(screen.queryByText(/blocked at save/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/not substituted in SMS/i)).not.toBeInTheDocument();

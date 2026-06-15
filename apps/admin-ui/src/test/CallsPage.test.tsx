@@ -26,8 +26,8 @@ function call(over: Partial<AdminCallSummary> = {}): AdminCallSummary {
   seq += 1;
   return {
     id: `00000000-0000-0000-0000-${String(seq).padStart(12, "0")}`,
-    elder_id: "11111111-1111-1111-1111-111111111111",
-    elder_name: `Elder ${seq}`,
+    contact_id: "11111111-1111-1111-1111-111111111111",
+    contact_name: `Contact ${seq}`,
     masked_phone: "***4567",
     direction: "outbound",
     status: "completed",
@@ -72,9 +72,9 @@ function renderPage(initialEntry = "/calls") {
             element={
               <>
                 <CallsPage />
-                {/* Deep-link probe: elder_id arrives via the URL while the page
+                {/* Deep-link probe: contact_id arrives via the URL while the page
                     stays mounted (queue rows / call detail link here). */}
-                <Link to="/calls?elder_id=22222222-2222-2222-2222-222222222222">ELDER LINK</Link>
+                <Link to="/calls?contact_id=22222222-2222-2222-2222-222222222222">CONTACT LINK</Link>
               </>
             }
           />
@@ -92,10 +92,10 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("CallsPage", () => {
-  it("renders masked phone, elder name and origin badges", async () => {
+  it("renders masked phone, contact name and origin badges", async () => {
     respondWith([
       call({
-        elder_name: "Edna Moore",
+        contact_name: "Edna Moore",
         origin: { source: "schedule", id: "s1", ordinal: "2026-06-09" },
       }),
       call({ origin: { source: "batch", id: "b1", ordinal: 3 } }),
@@ -131,15 +131,15 @@ describe("CallsPage", () => {
       expect(lastUrl()).toContain("offset=0");
     });
 
-    // The elder filter is URL-driven (deep links) — changing it while the page
-    // stays mounted must also restart paging, or the new elder's (shorter)
+    // The contact filter is URL-driven (deep links) — changing it while the page
+    // stays mounted must also restart paging, or the new contact's (shorter)
     // result set can land beyond its last page.
     await user.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(lastUrl()).toContain("offset=50"));
 
-    await user.click(screen.getByText("ELDER LINK"));
+    await user.click(screen.getByText("CONTACT LINK"));
     await waitFor(() => {
-      expect(lastUrl()).toContain("elder_id=22222222-2222-2222-2222-222222222222");
+      expect(lastUrl()).toContain("contact_id=22222222-2222-2222-2222-222222222222");
       expect(lastUrl()).toContain("offset=0");
     });
   });
@@ -172,12 +172,12 @@ describe("CallsPage", () => {
     await waitFor(() => expect(lastUrl()).toContain(`created_from=${expected}`));
   });
 
-  it("honors elder_id from the URL", async () => {
+  it("honors contact_id from the URL", async () => {
     respondWith(rows(1));
-    renderPage("/calls?elder_id=7f0e8b9a-1111-2222-3333-444455556666");
+    renderPage("/calls?contact_id=7f0e8b9a-1111-2222-3333-444455556666");
 
     await waitFor(() =>
-      expect(lastUrl()).toContain("elder_id=7f0e8b9a-1111-2222-3333-444455556666"),
+      expect(lastUrl()).toContain("contact_id=7f0e8b9a-1111-2222-3333-444455556666"),
     );
   });
 
@@ -200,7 +200,7 @@ describe("CallsPage", () => {
 
   it("row click navigates to detail", async () => {
     const user = userEvent.setup();
-    respondWith([call({ elder_name: "Edna Moore" })]);
+    respondWith([call({ contact_name: "Edna Moore" })]);
     renderPage();
 
     await user.click(await screen.findByText("Edna Moore"));

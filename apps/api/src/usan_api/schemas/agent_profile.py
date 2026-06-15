@@ -45,7 +45,7 @@ class ProfileSummary(BaseModel):
     is_default_outbound: bool
     published_version: int | None
     has_unpublished_draft: bool
-    assigned_elder_count: int
+    assigned_contact_count: int
     draft_revision: int
     updated_at: datetime
 
@@ -55,7 +55,7 @@ class ProfileSummary(BaseModel):
         profile: AgentProfile,
         *,
         has_unpublished_draft: bool,
-        assigned_elder_count: int,
+        assigned_contact_count: int,
     ) -> ProfileSummary:
         return cls(
             id=profile.id,
@@ -66,7 +66,7 @@ class ProfileSummary(BaseModel):
             is_default_outbound=profile.is_default_outbound,
             published_version=profile.published_version,
             has_unpublished_draft=has_unpublished_draft,
-            assigned_elder_count=assigned_elder_count,
+            assigned_contact_count=assigned_contact_count,
             draft_revision=profile.draft_revision,
             updated_at=profile.updated_at,
         )

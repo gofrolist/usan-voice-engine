@@ -9,15 +9,19 @@ from livekit import api
 from loguru import logger
 
 from usan_api import quiet_hours
-from usan_api.builtin_vars import resolve_builtin_vars
+from usan_api.builtin_vars import build_memory_params, resolve_builtin_vars
 from usan_api.db.base import CallStatus
-from usan_api.db.models import Call, Elder
+from usan_api.db.models import Call, Contact
 from usan_api.db.session import get_session_factory
 from usan_api.observability.custom_metrics import DIAL_REQUEUED_TOTAL
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import contacts as contacts_repo
+from usan_api.repositories import conversation_summaries as conversation_summaries_repo
 from usan_api.repositories import dnc as dnc_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import family_tasks as family_tasks_repo
+from usan_api.repositories import medication_reminders as medication_reminders_repo
+from usan_api.repositories import personal_facts as personal_facts_repo
 from usan_api.repositories import wellness as wellness_repo
 from usan_api.settings import Settings
 from usan_api.sip_status import classify_dial_exception
@@ -291,17 +295,17 @@ async def dispatch_agent(
     logger.bind(call_id=str(call.id), room=call.livekit_room).info("Agent dispatched")
 
 
-async def _create_sip_participant(call: Call, elder: Elder, settings: Settings) -> object:
+async def _create_sip_participant(call: Call, contact: Contact, settings: Settings) -> object:
     trunk_id = await resolve_outbound_trunk_id(settings)
     async with build_livekit_api(settings) as lkapi:
         return await lkapi.sip.create_sip_participant(
             api.CreateSIPParticipantRequest(
                 sip_trunk_id=trunk_id,
-                sip_call_to=elder.phone_e164,
+                sip_call_to=contact.phone_e164,
                 sip_number=settings.telnyx_caller_id,
                 room_name=call.livekit_room,
                 participant_identity="callee",
-                participant_name=elder.name,
+                participant_name=contact.name,
                 wait_until_answered=True,
                 play_ringtone=True,
                 ringing_timeout=Duration(seconds=settings.outbound_ringing_timeout_s),
@@ -343,11 +347,11 @@ async def _dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
     factory = get_session_factory()
     async with factory() as db:
         call = await calls_repo.get_call(db, call_id)
-        if call is None or call.elder_id is None or not call.livekit_room:
+        if call is None or call.contact_id is None or not call.livekit_room:
             logger.bind(call_id=str(call_id)).warning("dial_and_classify: call not dialable")
             return
-        elder = await elders_repo.get_elder(db, call.elder_id)
-        if elder is None:
+        contact = await contacts_repo.get_contact(db, call.contact_id)
+        if contact is None:
             return
         room = call.livekit_room
 
@@ -365,7 +369,7 @@ async def _dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
 
     log = logger.bind(call_id=str(call_id), room=room)
     try:
-        info = await _create_sip_participant(call, elder, settings)
+        info = await _create_sip_participant(call, contact, settings)
     except OutboundDispatchError:
         # Permanent misconfiguration surfaced at dial time — fail without a retry.
         async with factory() as db:
@@ -412,7 +416,7 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
     """Poller dispatch entrypoint for a claimed retry (already flipped to DIALING).
 
     Re-checks quiet hours at the actual dial moment (re-queues with a fresh clamp
-    when stale; fails closed on a bad timezone) and DNC (the elder may have opted
+    when stale; fails closed on a bad timezone) and DNC (the contact may have opted
     out since the retry was scheduled), dispatches the agent, then delegates to
     dial_and_classify. A permanent misconfig fails the call without a retry; any
     other crash marks FAILED and schedules a retry per §5.3.
@@ -424,24 +428,24 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
             if call is None:
                 logger.bind(call_id=str(call_id)).warning("dispatch_and_dial: call not found")
                 return
-            if call.elder_id is None or not call.livekit_room:
+            if call.contact_id is None or not call.livekit_room:
                 # ON DELETE SET NULL leaves the row DIALING forever otherwise:
                 # reclaim_stuck_dialing re-queues it, the poller re-claims it — an
                 # infinite loop pinning one in-flight slot (spec §2.3). Fail it
-                # terminally; schedule_retry refuses elder-less parents, so the
+                # terminally; schedule_retry refuses contact-less parents, so the
                 # chain settles here.
                 await calls_repo.mark_dial_failure(
-                    db, call_id, CallStatus.FAILED, end_reason="elder_missing"
+                    db, call_id, CallStatus.FAILED, end_reason="contact_missing"
                 )
                 await db.commit()
                 logger.bind(call_id=str(call_id)).warning(
-                    "dispatch_and_dial: elder missing; FAILED"
+                    "dispatch_and_dial: contact missing; FAILED"
                 )
                 return
-            elder = await elders_repo.get_elder(db, call.elder_id)
-            if elder is None:
+            contact = await contacts_repo.get_contact(db, call.contact_id)
+            if contact is None:
                 await calls_repo.mark_dial_failure(
-                    db, call_id, CallStatus.FAILED, end_reason="elder_missing"
+                    db, call_id, CallStatus.FAILED, end_reason="contact_missing"
                 )
                 await db.commit()
                 return
@@ -461,13 +465,13 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
             policy = await agent_profiles_repo.resolve_call_policy(
                 db,
                 profile_override=call.profile_override,
-                elder_profile_id=elder.agent_profile_id,
+                contact_profile_id=contact.agent_profile_id,
                 direction="outbound",
             )
             try:
                 allowed = quiet_hours.next_allowed(
                     now,
-                    elder.timezone,
+                    contact.timezone,
                     start_local=policy.start_local,
                     end_local=policy.end_local,
                 )
@@ -477,7 +481,7 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
                 )
                 await db.commit()
                 logger.bind(call_id=str(call_id)).error(
-                    "Dial blocked: elder timezone invalid; call FAILED (fail closed)"
+                    "Dial blocked: contact timezone invalid; call FAILED (fail closed)"
                 )
                 await _delete_room(room, settings)
                 return
@@ -500,16 +504,30 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
                 )
                 return
             # DNC re-check at dial time (closes the schedule->due window).
-            await dnc_repo.lock_phone(db, elder.phone_e164)
-            blocked = await dnc_repo.is_blocked(db, elder.phone_e164)
+            await dnc_repo.lock_phone(db, contact.phone_e164)
+            blocked = await dnc_repo.is_blocked(db, contact.phone_e164)
             if blocked:
                 await calls_repo.set_status(db, call_id, CallStatus.DNC_BLOCKED)
                 await db.commit()
                 logger.bind(call_id=str(call_id)).info("Retry blocked by DNC")
                 await _delete_room(room, settings)
                 return
-            last_log = await wellness_repo.get_latest_for_elder(db, elder.id)
-            resolved_vars, timezone = resolve_builtin_vars(elder, last_log, direction="outbound")
+            last_log = await wellness_repo.get_latest_for_contact(db, contact.id)
+            open_tasks = await family_tasks_repo.list_open_family_tasks(db, contact_id=contact.id)
+            pending_meds = await medication_reminders_repo.list_pending(db, contact_id=contact.id)
+            facts = await personal_facts_repo.list_active(db, contact_id=contact.id)
+            summary = await conversation_summaries_repo.get_latest(db, contact_id=contact.id)
+            memory = build_memory_params(
+                facts, summary, timezone=contact.timezone or "", now=datetime.now(UTC)
+            )
+            resolved_vars, timezone = resolve_builtin_vars(
+                contact,
+                last_log,
+                direction="outbound",
+                open_family_tasks=[t.message for t in open_tasks],
+                pending_med_reasks=[r.medication_name for r in pending_meds],
+                **memory,
+            )
             await db.commit()  # release the advisory lock before the slow dial
 
         try:

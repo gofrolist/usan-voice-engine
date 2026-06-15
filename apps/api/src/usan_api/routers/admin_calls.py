@@ -24,7 +24,7 @@ from usan_api.masking import mask_phone
 from usan_api.repositories import admin_audit
 from usan_api.repositories import admin_calls as admin_calls_repo
 from usan_api.repositories import calls as calls_repo
-from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.schemas.admin_calls import AdminCallDetail, AdminCallSummary
 from usan_api.schemas.call import TranscriptSegment, parse_origin
@@ -46,11 +46,11 @@ def _assume_utc(v: datetime | None) -> datetime | None:
     return v
 
 
-def _summary(call: Call, elder_name: str | None, phone: str | None) -> AdminCallSummary:
+def _summary(call: Call, contact_name: str | None, phone: str | None) -> AdminCallSummary:
     return AdminCallSummary(
         id=call.id,
-        elder_id=call.elder_id,
-        elder_name=elder_name,
+        contact_id=call.contact_id,
+        contact_name=contact_name,
         masked_phone=mask_phone(phone),
         direction=call.direction.value,
         status=call.status.value,
@@ -67,7 +67,7 @@ def _summary(call: Call, elder_name: str | None, phone: str | None) -> AdminCall
 
 @router.get("/calls", response_model=list[AdminCallSummary])
 async def list_calls(
-    elder_id: uuid.UUID | None = Query(default=None),
+    contact_id: uuid.UUID | None = Query(default=None),
     status: CallStatus | None = Query(default=None),
     direction: CallDirection | None = Query(default=None),
     origin: Literal["schedule", "batch", "adhoc"] | None = Query(default=None),
@@ -84,7 +84,7 @@ async def list_calls(
         raise HTTPException(status_code=422, detail="created_from must be <= created_to")
     rows = await admin_calls_repo.list_calls(
         db,
-        elder_id=elder_id,
+        contact_id=contact_id,
         status=status,
         direction=direction,
         origin=origin,
@@ -93,19 +93,19 @@ async def list_calls(
         limit=limit,
         offset=offset,
     )
-    # PHI read (elder names + masked phones) -> audit. Detail carries only the
+    # PHI read (contact names + masked phones) -> audit. Detail carries only the
     # seven filter values + count (spec §4.1 — no `limit`), NEVER names/phones.
     # Guard the audit write+commit so a transient DB error rolls the session
-    # back instead of leaving it dirty (matches admin_tools / admin_elders).
+    # back instead of leaving it dirty (matches admin_tools / admin_contacts).
     try:
         await admin_audit.record(
             db,
             actor_email=actor,
             action="calls.list",
             entity_type="call",
-            entity_id=None,  # a list has no single entity; the elder filter goes in detail
+            entity_id=None,  # a list has no single entity; the contact filter goes in detail
             detail={
-                "elder_id": str(elder_id) if elder_id is not None else None,
+                "contact_id": str(contact_id) if contact_id is not None else None,
                 "status": status.value if status is not None else None,
                 "direction": direction.value if direction is not None else None,
                 "origin": origin,
@@ -119,7 +119,7 @@ async def list_calls(
     except SQLAlchemyError:
         await db.rollback()
         raise
-    return [_summary(call, elder_name, phone) for call, elder_name, phone in rows]
+    return [_summary(call, contact_name, phone) for call, contact_name, phone in rows]
 
 
 @router.get("/calls/{call_id}", response_model=AdminCallDetail)
@@ -163,7 +163,11 @@ async def get_call_detail(
         phi_audit.log_transcript_accessed(
             call_id=call_id, client=client_host, actor=actor, segments=len(transcript)
         )
-    elder = await elders_repo.get_elder(db, call.elder_id) if call.elder_id is not None else None
+    contact = (
+        await contacts_repo.get_contact(db, call.contact_id)
+        if call.contact_id is not None
+        else None
+    )
     # PHI read -> audit row in the same commit; detail carries counts/flags only,
     # never names/phones/content. Guarded so a transient DB error rolls the
     # session back instead of leaving it dirty (matches calls.list above).
@@ -185,8 +189,8 @@ async def get_call_detail(
         raise
     summary = _summary(
         call,
-        elder.name if elder is not None else None,
-        elder.phone_e164 if elder is not None else None,
+        contact.name if contact is not None else None,
+        contact.phone_e164 if contact is not None else None,
     )
     return AdminCallDetail(
         **summary.model_dump(),
