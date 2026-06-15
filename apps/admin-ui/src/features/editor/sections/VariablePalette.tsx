@@ -58,7 +58,7 @@ export function VariablePalette({ variables, onInsert }: VariablePaletteProps) {
         {"{ }"}
       </button>
       {open ? (
-        <div className="absolute z-10 mt-1 max-h-72 w-72 overflow-auto rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+        <div className="absolute right-0 z-20 mt-1 max-h-72 w-72 max-w-[calc(100vw-2rem)] overflow-auto rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
           {TIER_LABELS.map(({ key, label }) =>
             groups[key].length === 0 ? null : (
               <div key={key} className="mb-2 last:mb-0">

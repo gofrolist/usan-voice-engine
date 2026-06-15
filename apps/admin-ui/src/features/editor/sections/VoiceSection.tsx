@@ -4,8 +4,50 @@ import { Controller } from "react-hook-form";
 import type { AgentConfigForm } from "../../../config/agentConfigSchema";
 import { useVoiceCatalog, type VoiceSpec } from "../../../config/voiceCatalog";
 import { Input } from "../../../components/ui/input";
+import { cn } from "../../../lib/cn";
 import { Field } from "./Field";
 import { NumberControl, TextControl } from "./controls";
+
+// Inline SVGs keep the compact picker self-contained (no icon dependency). All are
+// aria-hidden: the play button carries its own aria-label, and selection state is
+// announced via aria-pressed on the row, so the check mark is purely decorative.
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3 w-3 fill-current">
+      <path d="M5 3.5 13 8 5 12.5Z" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3 w-3 fill-current">
+      <rect x="4" y="4" width="8" height="8" rx="1.5" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      className="h-4 w-4 fill-none stroke-indigo-600"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="m3.5 8.5 3 3 6-7" />
+    </svg>
+  );
+}
+
+// Display labels for the voice gender enum (avoid surfacing the raw "gender_neutral" token).
+const GENDER_LABEL: Record<NonNullable<VoiceSpec["gender"]>, string> = {
+  masculine: "masculine",
+  feminine: "feminine",
+  gender_neutral: "neutral",
+};
 
 // US2 / FR-009, FR-010: a searchable, curated voice picker with a per-voice audio
 // preview. The selected value remains AgentConfig.voice.cartesia_voice_id (a plain
@@ -135,37 +177,63 @@ function VoicePicker({ form }: { form: UseFormReturn<AgentConfigForm> }) {
             ) : null}
           </div>
           {playError ? <p className="text-xs font-medium text-red-700">{playError}</p> : null}
-          <ul className="space-y-2">
+          <ul className="space-y-1.5">
             {filtered.map((v) => {
               const isSelected = field.value === v.cartesia_voice_id;
+              const isPlaying = playing === v.cartesia_voice_id;
               return (
                 <li
                   key={v.cartesia_voice_id}
-                  className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 shadow-card ${
-                    isSelected ? "border-indigo-400 bg-indigo-50" : "border-slate-200 bg-white"
-                  }`}
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors",
+                    isSelected
+                      ? "border-indigo-400 bg-indigo-50"
+                      : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50",
+                  )}
                 >
+                  {/* Compact play control (Cartesia-style ▶ circle), a separate sibling
+                      button so the rest of the row stays a single select target. */}
                   <button
                     type="button"
-                    className="min-w-0 text-left"
+                    className={cn(
+                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition-colors",
+                      isPlaying
+                        ? "border-indigo-300 bg-indigo-100 text-indigo-700"
+                        : "border-slate-300 text-slate-600 hover:bg-slate-100",
+                    )}
+                    aria-label={isPlaying ? `Stop sample of ${v.name}` : `Play sample of ${v.name}`}
+                    onClick={() => {
+                      if (isPlaying) {
+                        stopSample();
+                        setPlaying(null);
+                      } else {
+                        void onPlay(v.cartesia_voice_id);
+                      }
+                    }}
+                  >
+                    {isPlaying ? <StopIcon /> : <PlayIcon />}
+                  </button>
+                  {/* The select target fills the rest of the row, so clicking anywhere to
+                      the right of the play button selects the voice (not just the text). */}
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
                     aria-pressed={isSelected}
                     onClick={() => field.onChange(v.cartesia_voice_id)}
                   >
-                    <span className="block text-sm font-medium text-slate-900">{v.name}</span>
-                    <span className="mt-0.5 block text-xs text-slate-500">{v.description}</span>
-                    <span className="mt-0.5 block text-xs text-slate-400">
-                      {v.language}
-                      {v.gender ? ` · ${v.gender}` : ""}
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-slate-900">
+                        {v.name}
+                      </span>
+                      <span className="block truncate text-xs text-slate-500">{v.description}</span>
                     </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="shrink-0 rounded-lg border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
-                    aria-label={`Play sample of ${v.name}`}
-                    disabled={playing === v.cartesia_voice_id}
-                    onClick={() => void onPlay(v.cartesia_voice_id)}
-                  >
-                    {playing === v.cartesia_voice_id ? "Playing…" : "Play sample"}
+                    <span className="flex shrink-0 items-center gap-2">
+                      <span className="text-xs text-slate-400">
+                        {v.language}
+                        {v.gender ? ` · ${GENDER_LABEL[v.gender]}` : ""}
+                      </span>
+                      {isSelected ? <CheckIcon /> : null}
+                    </span>
                   </button>
                 </li>
               );
