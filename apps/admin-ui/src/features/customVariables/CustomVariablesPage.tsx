@@ -118,11 +118,11 @@ export function CustomVariablesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Custom variables</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-display text-2xl text-ink-strong">Custom variables</h1>
         {isAdmin ? <Button onClick={() => setCreateOpen(true)}>New variable</Button> : null}
       </div>
-      <p className="text-sm text-slate-600">
+      <p className="text-sm text-muted">
         Custom variables document the <code className="font-mono text-xs">{"{{tokens}}"}</code>{" "}
         operator systems supply per call via dynamic variables. Definitions carry no values.
       </p>

@@ -60,9 +60,9 @@ export function AdminUsersPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Admin users (SSO allow-list)</h1>
+      <h1 className="font-display text-2xl text-ink-strong">Admin users (SSO allow-list)</h1>
 
-      <form onSubmit={handleAdd} className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-card">
+      <form onSubmit={handleAdd} className="flex flex-wrap items-end gap-3 rounded-xl border border-line bg-surface p-4 shadow-card">
         <div>
           <label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="au-email">
             Email

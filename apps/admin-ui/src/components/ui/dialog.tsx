@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 // Minimal modal dialog: a fixed overlay + centered panel. No focus-trap library;
@@ -17,10 +17,21 @@ export function Dialog({
   title?: ReactNode;
   children: ReactNode;
 }) {
+  // Escape closes from anywhere — not only when focus already sits inside the panel
+  // (the backdrop's onKeyDown only fires once focus is within the portal subtree).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm"
       onClick={onClose}
       onKeyDown={(e) => {
         if (e.key === "Escape") onClose();
@@ -28,7 +39,7 @@ export function Dialog({
       role="presentation"
     >
       <div
-        className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
+        className="w-full max-w-lg rounded-2xl border border-line bg-surface p-6 text-ink shadow-pop"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -36,7 +47,7 @@ export function Dialog({
         // (via the React tree, through the portal) up to a surrounding page <form>.
         onSubmit={(e) => e.stopPropagation()}
       >
-        {title ? <h2 className="mb-3 text-lg font-semibold">{title}</h2> : null}
+        {title ? <h2 className="mb-3 font-display text-xl text-ink-strong">{title}</h2> : null}
         {children}
       </div>
     </div>,

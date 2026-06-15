@@ -46,8 +46,8 @@ export function CallDetailPage() {
     if ((call.error as ApiError).status === 404) {
       return (
         <div className="space-y-2">
-          <h1 className="text-xl font-semibold">Call not found</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="font-display text-2xl text-ink-strong">Call not found</h1>
+          <p className="text-sm text-muted">
             This call does not exist — the link may be stale.{" "}
             <Link to="/calls" className="text-indigo-600 hover:underline">
               Back to calls
@@ -66,14 +66,14 @@ export function CallDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Call detail</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-display text-2xl text-ink-strong">Call detail</h1>
         <Link to="/calls" className="text-sm text-indigo-600 hover:underline">
           ← Back to calls
         </Link>
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="rounded-lg border border-line bg-surface p-4">
         <div className="flex items-baseline gap-3">
           {c.contact_id !== null ? (
             <Link

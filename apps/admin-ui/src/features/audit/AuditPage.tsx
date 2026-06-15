@@ -46,7 +46,7 @@ export function AuditPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Audit log</h1>
+      <h1 className="font-display text-2xl text-ink-strong">Audit log</h1>
 
       <div className="flex flex-wrap items-end gap-3">
         <div>
@@ -106,7 +106,7 @@ export function AuditPage() {
         <p className="text-sm text-red-700">Failed to load audit log: {(error as Error)?.message}</p>
       ) : (
         <>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-muted">
             Showing the most recent {limit} entries matching the current filters (filters
             are applied across the whole log, not just this page).
           </p>

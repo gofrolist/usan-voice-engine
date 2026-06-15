@@ -268,9 +268,9 @@ export function ProfileEditorPage() {
       {conflict ? (
         <div
           role="alert"
-          className="flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-8 py-2 text-sm text-amber-900"
+          className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 sm:px-6 lg:px-8"
         >
-          <span>
+          <span className="min-w-0">
             This draft changed since you opened it. Reload to load the latest before saving — your
             unsaved edits are kept until you choose.
           </span>
@@ -283,10 +283,10 @@ export function ProfileEditorPage() {
           </button>
         </div>
       ) : null}
-      <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <div className="order-2 min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 md:order-1">
           <div className="mx-auto max-w-3xl">
-            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
+            <h2 className="mb-4 text-xs font-semibold uppercase tracking-[0.12em] text-faint">
               {SECTION_LABELS[section]}
             </h2>
             <form className="min-w-0" onSubmit={onSave}>
@@ -304,7 +304,7 @@ export function ProfileEditorPage() {
             </form>
           </div>
         </div>
-        <aside className="w-64 shrink-0 overflow-y-auto border-l border-slate-200 bg-white px-3 py-4">
+        <aside className="order-1 shrink-0 overflow-x-auto border-b border-line bg-surface px-3 py-2 md:order-2 md:w-64 md:overflow-y-auto md:border-b-0 md:border-l md:py-4">
           <SectionRail
             order={SECTION_ORDER}
             active={section}
@@ -315,10 +315,10 @@ export function ProfileEditorPage() {
       </div>
 
       {isAdmin ? (
-        <div className="border-t border-slate-200 bg-white px-8 py-3">
+        <div className="border-t border-line bg-surface px-4 py-3 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-3xl">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-slate-700">Test before publishing</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-ink">Test before publishing</span>
               <button
                 type="button"
                 className={`rounded px-2 py-1 text-xs font-medium ${testTab === "llm" ? "bg-sky-600 text-white" : "border border-slate-300 text-slate-700 hover:bg-slate-50"}`}

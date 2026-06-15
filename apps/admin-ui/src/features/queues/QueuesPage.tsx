@@ -45,7 +45,7 @@ function Pagination({
   const rangeStart = count === 0 ? 0 : offset + 1;
   const rangeEnd = offset + count;
   return (
-    <div className="flex items-center gap-3 text-sm text-slate-600">
+    <div className="flex items-center gap-3 text-sm text-muted">
       <Button
         variant="secondary"
         disabled={!hasPrev}
@@ -247,7 +247,7 @@ export function QueuesPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Queues</h1>
+      <h1 className="font-display text-2xl text-ink-strong">Queues</h1>
 
       <Tabs
         className="flex-row"
@@ -261,7 +261,7 @@ export function QueuesPage() {
 
       <div className="flex flex-wrap items-end gap-3">
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="queues-status">
+          <label className="mb-1 block text-xs font-medium text-muted" htmlFor="queues-status">
             Status
           </label>
           <Select
@@ -279,7 +279,7 @@ export function QueuesPage() {
         {tab === "flags" ? (
           <div>
             <label
-              className="mb-1 block text-xs font-medium text-slate-600"
+              className="mb-1 block text-xs font-medium text-muted"
               htmlFor="queues-severity"
             >
               Severity

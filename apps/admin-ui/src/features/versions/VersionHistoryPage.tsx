@@ -64,14 +64,14 @@ export function VersionHistoryPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Version history</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-display text-2xl text-ink-strong">Version history</h1>
         <Link to={`/profiles/${id}`} className="text-sm text-indigo-600 hover:underline">
           ← Back to editor
         </Link>
       </div>
 
-      <p className="text-sm text-slate-500">
+      <p className="text-sm text-muted">
         Pick two versions to compare. Selected:{" "}
         {left !== null ? <Badge tone="blue">v{left}</Badge> : <span className="text-slate-400">—</span>}{" "}
         vs{" "}

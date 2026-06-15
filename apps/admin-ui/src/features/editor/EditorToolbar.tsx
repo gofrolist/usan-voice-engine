@@ -8,10 +8,10 @@ function Chip({ label, value, onClick }: { label: string; value: string; onClick
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+      className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1 text-xs text-muted transition-colors hover:border-line-strong hover:bg-surface-2"
     >
-      <span className="text-slate-400">{label}</span>
-      <span className="max-w-[10rem] truncate font-medium text-slate-800">{value}</span>
+      <span className="text-faint">{label}</span>
+      <span className="max-w-[10rem] truncate font-medium text-ink">{value}</span>
     </button>
   );
 }
@@ -37,10 +37,10 @@ interface EditorToolbarProps {
 // sibling of the scrolling body — not a sticky overlay — so it never covers content.
 export function EditorToolbar(props: EditorToolbarProps) {
   return (
-    <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-8 py-3">
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-surface px-4 py-3 sm:px-6 lg:px-8">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <h1 className="truncate text-lg font-semibold text-slate-900">{props.name}</h1>
+          <h1 className="truncate font-display text-xl text-ink-strong">{props.name}</h1>
           <Badge tone={props.status === "active" ? "green" : "gray"}>{props.status}</Badge>
           {props.publishedVersion !== null ? (
             <Badge tone="blue">live v{props.publishedVersion}</Badge>
@@ -55,7 +55,7 @@ export function EditorToolbar(props: EditorToolbarProps) {
           <Chip label="Lang" value={props.language} onClick={() => props.onJump("voice")} />
           <Link
             to={`/profiles/${props.profileId}/versions`}
-            className="text-xs text-indigo-600 hover:underline"
+            className="text-xs font-medium text-accent hover:underline"
           >
             Version history
           </Link>
@@ -69,7 +69,7 @@ export function EditorToolbar(props: EditorToolbarProps) {
           <Button onClick={props.onPublish}>Publish</Button>
         </div>
       ) : (
-        <span className="text-xs text-slate-500">Read-only (viewer role)</span>
+        <span className="text-xs text-muted">Read-only (viewer role)</span>
       )}
     </div>
   );
