@@ -189,3 +189,36 @@ async def test_elder_with_no_calls_skipped(session_factory):
     counts = await family_report_job.poll_once(session_factory, _settings(), now=NOW)
     assert counts["generated"] == 0
     assert await _reports(session_factory, elder_id) == []
+
+
+async def test_report_narrative_uses_vertex_when_enabled(session_factory, monkeypatch):
+    # M8: with summarization enabled + a project, the report narrative comes from Vertex
+    # (model_version == the model), not the deterministic fallback. The family SMS is STILL
+    # the fixed PHI-free template — the Vertex narrative stays in Postgres (Constitution II).
+    from types import SimpleNamespace
+
+    elder_id = await _seed_elder_with_month_data(session_factory, with_contact=True)
+
+    async def _fake_turn(**kwargs):
+        return SimpleNamespace(text="Ada stayed engaged and upbeat this month.")
+
+    monkeypatch.setattr(family_report_job, "run_vertex_turn", _fake_turn)
+    settings = _settings(
+        SUMMARIZATION_ENABLED="true",
+        GCP_PROJECT="proj-x",
+        SUMMARIZATION_MODEL="gemini-2.5-flash",
+    )
+
+    counts = await family_report_job.poll_once(session_factory, settings, now=NOW)
+    assert counts["generated"] == 1
+
+    reports = await _reports(session_factory, elder_id)
+    assert len(reports) == 1
+    assert reports[0].narrative == "Ada stayed engaged and upbeat this month."
+    assert reports[0].model_version == "gemini-2.5-flash"  # the Vertex branch, not deterministic
+
+    sms = await _report_sms(session_factory, elder_id)
+    assert len(sms) == 1
+    low = sms[0].body.lower()
+    for term in _CLINICAL_TERMS:
+        assert term not in low, f"family report SMS leaks clinical term: {term}"

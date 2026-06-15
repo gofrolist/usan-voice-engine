@@ -96,6 +96,24 @@ async def get_pending_notifications(db: AsyncSession, *, limit: int = 50) -> lis
     return list(result.scalars().all())
 
 
+async def claim_pending_notification(db: AsyncSession) -> SmsMessage | None:
+    """Lock + return the oldest claimable pending notification (FOR UPDATE SKIP LOCKED).
+
+    The row lock is held until the caller's transaction commits, so a second concurrent
+    poller (another replica) SKIPs this row rather than re-sending it. The caller sends,
+    then marks the row sent/failed/suppressed, then commits — releasing the lock. SKIP
+    LOCKED means concurrent pollers make progress on disjoint rows instead of blocking.
+    """
+    result = await db.execute(
+        select(SmsMessage)
+        .where(SmsMessage.call_id.is_(None), SmsMessage.status == "pending")
+        .order_by(SmsMessage.created_at)
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    )
+    return result.scalar_one_or_none()
+
+
 async def count_for_call(db: AsyncSession, call_id: uuid.UUID) -> int:
     """All sms rows for a call, regardless of status (the per-call send budget)."""
     result = await db.execute(
@@ -159,6 +177,26 @@ async def mark_failed(
     row = await db.get(SmsMessage, sms_id)
     if row is None:
         # Concurrent delete between the guarded UPDATE and this GET — no row to refresh.
+        return None
+    await db.refresh(row)
+    return row
+
+
+async def mark_suppressed(db: AsyncSession, sms_id: uuid.UUID, *, reason: str) -> SmsMessage | None:
+    """Status-guarded pending->suppressed: a TERMINAL, intentional non-send (recipient
+    opted out / on the DNC list). Distinct from 'failed' (a delivery error that inflates
+    failure metrics and implies retry). Returns the row, or None if it was not pending."""
+    result = await db.execute(
+        update(SmsMessage)
+        .where(SmsMessage.id == sms_id, SmsMessage.status == "pending")
+        .values(status="suppressed", error={"reason": reason}, updated_at=_utcnow())
+        .returning(SmsMessage.id)
+    )
+    if result.scalar_one_or_none() is None:
+        return None
+    await db.flush()
+    row = await db.get(SmsMessage, sms_id)
+    if row is None:
         return None
     await db.refresh(row)
     return row

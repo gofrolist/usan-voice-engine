@@ -21,6 +21,7 @@ from loguru import logger
 from usan_api import telnyx_messaging
 from usan_api.db.session import get_session_factory
 from usan_api.observability.custom_metrics import SMS_MESSAGES_TOTAL
+from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import sms_messages as sms_repo
 from usan_api.settings import Settings, get_settings
 
@@ -43,20 +44,36 @@ async def _flush_pending_notifications() -> None:
     settings = get_settings()
     factory = get_session_factory()
     async with factory() as db:
-        pending = await sms_repo.get_pending_notifications(db, limit=_BATCH)
-        if not pending:
-            return
-
         if not settings.telnyx_messaging_enabled:
             # Do NOT burn crisis/missed-call alerts when messaging is misconfigured-off:
-            # leave them pending so the backlog flushes once messaging is enabled.
-            logger.bind(n=len(pending)).warning(
-                "Notification outbox: messaging disabled; leaving {n} pending", n=len(pending)
-            )
+            # leave them pending (peek without claiming) so the backlog flushes once
+            # messaging is enabled.
+            pending = await sms_repo.get_pending_notifications(db, limit=_BATCH)
+            if pending:
+                logger.bind(n=len(pending)).warning(
+                    "Notification outbox: messaging disabled; leaving {n} pending", n=len(pending)
+                )
             return
 
         flushed = 0
-        for row in pending:
+        # Claim ONE row at a time under FOR UPDATE SKIP LOCKED, holding the lock through the
+        # send + status flip + commit, so a second replica's poller never re-sends the same
+        # row (it skips the locked row). _BATCH caps the per-cycle work; a 'sent'/'failed'/
+        # 'suppressed' row drops out of the pending claim, so the loop always terminates.
+        for _ in range(_BATCH):
+            row = await sms_repo.claim_pending_notification(db)
+            if row is None:
+                break  # nothing claimable (all flushed, or locked by a peer)
+            # TCPA / opt-out: never text a number that has opted out (on the DNC list) —
+            # EXCEPT the one-time opt_out_ack, the unsubscribe confirmation, which is
+            # permitted and is sent TO the number that just opted out.
+            if row.kind != "opt_out_ack" and await dnc_repo.is_blocked(db, row.to_number):
+                claimed = await sms_repo.mark_suppressed(db, row.id, reason="recipient_opted_out")
+                await db.commit()
+                if claimed is not None:
+                    SMS_MESSAGES_TOTAL.labels(status="suppressed").inc()
+                    flushed += 1
+                continue
             try:
                 message_id = await telnyx_messaging.send_sms(
                     settings, to_number=row.to_number, body=row.body

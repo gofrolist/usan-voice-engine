@@ -185,6 +185,9 @@ async def _generate_one(
     moment: datetime,
 ) -> bool:
     """Generate + deliver one elder's report for the prior month. True if a report was made."""
+    # Phase 1 — read-only aggregation in a short-lived session. We must NOT hold a DB
+    # connection/transaction open across the multi-second Vertex narrative call (review M7),
+    # so the session closes before the network round-trip below.
     async with factory() as db:
         elder = await elders_repo.get_elder(db, elder_id)
         if elder is None:
@@ -194,16 +197,19 @@ async def _generate_one(
             db, elder_id=elder_id, period_month=period_month
         ):
             return False  # idempotent: already generated this elder's month
-
         start, end = _month_window(period_month, elder.timezone)
         calls_completed, metrics = await _aggregate(
             db, elder_id=elder_id, start=start, end=end, period_month=period_month
         )
-        if calls_completed == 0:
-            return False  # SC-012: only elders with at least one call in the period
+    if calls_completed == 0:
+        return False  # SC-012: only elders with at least one call in the period
 
-        narrative, model_version = await _narrative(metrics, calls_completed, settings)
+    # Vertex narrative OUTSIDE any DB transaction (no connection held during the network call).
+    narrative, model_version = await _narrative(metrics, calls_completed, settings)
 
+    # Phase 2 — persist + enqueue in a fresh session. The get_for_month gap above is safe:
+    # create() is ON CONFLICT DO NOTHING, so a worker that lost the race gets report=None.
+    async with factory() as db:
         recipients = await family_contacts_repo.list_alert_recipients(
             db, elder_id=elder_id, kind="report"
         )

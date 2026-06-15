@@ -1,10 +1,15 @@
 """PHI retention purge (§10 data retention).
 
-When PHI_RETENTION_DAYS is set, ``run_poller`` loops ``purge_expired`` once per
-day. The purge deletes transcript rows past the cutoff and strips ``dynamic_vars``
-(which may embed elder names / last-check-in summaries) from terminal calls and
-settled batch targets past the cutoff. Default-off: with PHI_RETENTION_DAYS unset
-the poller never starts, so existing deployments retain everything.
+When PHI_RETENTION_DAYS is set, ``run_poller`` loops the purge once per day. It:
+- deletes transcript rows past the cutoff and strips ``dynamic_vars`` (which may embed
+  elder names / last-check-in summaries) + ``recording_uri`` from terminal calls and
+  settled batch targets past the cutoff (``purge_expired``); and
+- deletes the standalone elder-memory PHI records past the cutoff — per-call recaps,
+  monthly survey scores, monthly family reports, and extracted/stated facts
+  (``purge_memory_phi``; Clara Care Parity tables, review M5).
+Default-off: with PHI_RETENTION_DAYS unset the poller never starts, so existing
+deployments retain everything. ``call_schedules.dynamic_vars`` stays exempt as live
+re-used config (operator PATCH/DELETE is its removal path).
 """
 
 import asyncio
@@ -17,7 +22,15 @@ from sqlalchemy import CursorResult, delete, func, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from usan_api.db.base import CallStatus
-from usan_api.db.models import Call, CallBatchTarget, Transcript
+from usan_api.db.models import (
+    Call,
+    CallBatchTarget,
+    ConversationSummary,
+    FamilyReport,
+    PersonalFact,
+    Transcript,
+    WellbeingSurveyResult,
+)
 from usan_api.db.session import get_session_factory
 from usan_api.settings import Settings
 
@@ -99,6 +112,38 @@ async def purge_expired(
     return deleted.rowcount or 0, scrubbed.rowcount or 0, target_scrub.rowcount or 0
 
 
+# Elder-memory PHI added by Clara Care Parity (002). Unlike call dynamic_vars (scrubbed in
+# place), these are standalone PHI records keyed by their own created_at, so once older than
+# the window they are DELETED outright. A fact still actively mentioned is re-extracted with a
+# fresh timestamp on the next call, so live memory survives while abandoned PHI is purged.
+_MEMORY_PHI_MODELS = (
+    ("conversation_summaries", ConversationSummary),
+    ("wellbeing_survey_results", WellbeingSurveyResult),
+    ("family_reports", FamilyReport),
+    ("personal_facts", PersonalFact),
+)
+
+
+async def purge_memory_phi(
+    session: AsyncSession, *, days: int, now: datetime | None = None
+) -> dict[str, int]:
+    """Delete elder-memory PHI rows older than the retention window (review M5).
+
+    Returns a ``{table: rows_deleted}`` map. The caller commits — these run in the SAME
+    transaction as ``purge_expired`` so a crash can't leave a partial purge. ``now``
+    overrides the clock for tests.
+    """
+    cutoff = (now if now is not None else _utcnow()) - timedelta(days=days)
+    counts: dict[str, int] = {}
+    for label, model in _MEMORY_PHI_MODELS:
+        result = cast(
+            "CursorResult[Any]",
+            await session.execute(delete(model).where(model.created_at < cutoff)),
+        )
+        counts[label] = result.rowcount or 0
+    return counts
+
+
 async def run_poller(settings: Settings, stop: asyncio.Event) -> None:
     """Run ``purge_expired`` daily until ``stop`` is set. No-op if retention is unset.
 
@@ -124,12 +169,15 @@ async def run_poller(settings: Settings, stop: asyncio.Event) -> None:
 async def _purge_cycle(factory: async_sessionmaker[AsyncSession], days: int) -> None:
     async with factory() as db:
         transcripts, calls, batch_targets = await purge_expired(db, days=days)
+        memory = await purge_memory_phi(db, days=days)
         await db.commit()
-    if transcripts or calls or batch_targets:
+    memory_total = sum(memory.values())
+    if transcripts or calls or batch_targets or memory_total:
         logger.bind(component="retention_poller").info(
-            "Purged {t} transcript(s); scrubbed dynamic_vars on {c} call(s) "
-            "and {b} batch target(s)",
+            "Purged {t} transcript(s) + {m} memory-PHI row(s); scrubbed dynamic_vars on "
+            "{c} call(s) and {b} batch target(s)",
             t=transcripts,
+            m=memory_total,
             c=calls,
             b=batch_targets,
         )

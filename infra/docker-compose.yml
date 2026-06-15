@@ -271,6 +271,15 @@ services:
       CARTESIA_API_URL: ${CARTESIA_API_URL:-https://api.cartesia.ai}
       CARTESIA_VERSION: ${CARTESIA_VERSION:-2024-11-13}
       CARTESIA_SAMPLE_MODEL: ${CARTESIA_SAMPLE_MODEL:-sonic-2}
+      # Vertex AI (BAA-covered, ADC via the VM service account) — the API ALSO calls Vertex
+      # for the Admin Studio text-test, US4 post-call summarization, and the US8 family-report
+      # narrative (separate from the agent's own copy). SUMMARIZATION_* ship-inert (default
+      # OFF) — needs GCP_PROJECT set AND the flag on, else the narrative uses the deterministic
+      # fallback. These run in the API process, so they MUST be on the api service env too.
+      GCP_PROJECT: ${GCP_PROJECT}
+      VERTEX_LOCATION: ${VERTEX_LOCATION:-global}
+      SUMMARIZATION_ENABLED: ${SUMMARIZATION_ENABLED:-false}
+      SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL:-gemini-2.5-flash}
     # The API is stateless: no on-disk writes outside /tmp, so run the root
     # filesystem read-only and block privilege escalation. /tmp is a tmpfs for
     # any transient scratch (e.g. signed-URL staging).

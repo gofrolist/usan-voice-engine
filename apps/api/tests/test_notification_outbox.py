@@ -19,6 +19,7 @@ from usan_api import notification_outbox, notifications, telnyx_messaging
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import SmsMessage
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import elders as elders_repo
 from usan_api.repositories import sms_messages as sms_repo
 
@@ -269,3 +270,122 @@ def test_family_alert_dispatch_latency_within_sc004_budget(
     row = asyncio.run(_row(async_database_url, sms_id))
     assert row.status == "sent"  # dispatched within a single interval (<= 5 min)
     get_settings.cache_clear()
+
+
+# --- review H1 (TCPA opt-out at send) + H2 (FOR UPDATE SKIP LOCKED claim) -------------------
+
+
+async def _seed_notification_to(url: str, *, to_number: str, kind: str, on_dnc: bool) -> uuid.UUID:
+    engine = _engine(url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            elder = await elders_repo.create_elder(
+                db, name="Ada", phone_e164=f"+1555{str(uuid.uuid4().int)[:7]}", timezone="UTC"
+            )
+            if on_dnc:
+                await dnc_repo.add_entry(db, to_number, "test opt-out")
+            row = await sms_repo.create_notification(
+                db,
+                elder_id=elder.id,
+                to_number=to_number,
+                kind=kind,
+                body="USAN update.",
+                dedupe_key=f"{kind}:{uuid.uuid4()}",
+            )
+            await db.commit()
+            assert row is not None
+            return row.id
+    finally:
+        await engine.dispose()
+
+
+def test_outbox_suppresses_sms_to_opted_out_number(
+    client, async_database_url, monkeypatch, request
+):
+    # H1 / TCPA: a number that texted STOP (on the DNC list) must NOT receive family
+    # alerts/reports — the outbox marks the row 'suppressed' and never transmits.
+    _enable_messaging(monkeypatch)
+    sent: list[str] = []
+
+    async def _fake_send(settings, *, to_number, body):
+        sent.append(to_number)
+        return "msg-should-not-happen"
+
+    monkeypatch.setattr(telnyx_messaging, "send_sms", _fake_send)
+    _patch_factory(request, monkeypatch, async_database_url)
+
+    blocked = f"+1555{str(uuid.uuid4().int)[:7]}"
+    sms_id = asyncio.run(
+        _seed_notification_to(
+            async_database_url, to_number=blocked, kind="family_alert", on_dnc=True
+        )
+    )
+    asyncio.run(notification_outbox.flush_pending_notifications())
+    row = asyncio.run(_row(async_database_url, sms_id))
+    assert row.status == "suppressed"
+    assert blocked not in sent  # never transmitted to the opted-out number
+    from usan_api.settings import get_settings
+
+    get_settings.cache_clear()
+
+
+def test_outbox_sends_opt_out_ack_even_to_blocked_number(
+    client, async_database_url, monkeypatch, request
+):
+    # H1 exemption: the one-time opt-out acknowledgement is TCPA-permitted and goes TO the
+    # number that just opted out (now on the DNC list) — it must still send.
+    _enable_messaging(monkeypatch)
+    sent: list[str] = []
+
+    async def _fake_send(settings, *, to_number, body):
+        sent.append(to_number)
+        return "msg-ack"
+
+    monkeypatch.setattr(telnyx_messaging, "send_sms", _fake_send)
+    _patch_factory(request, monkeypatch, async_database_url)
+
+    blocked = f"+1555{str(uuid.uuid4().int)[:7]}"
+    sms_id = asyncio.run(
+        _seed_notification_to(
+            async_database_url, to_number=blocked, kind="opt_out_ack", on_dnc=True
+        )
+    )
+    asyncio.run(notification_outbox.flush_pending_notifications())
+    row = asyncio.run(_row(async_database_url, sms_id))
+    assert row.status == "sent"
+    assert blocked in sent  # the confirmation is delivered despite the DNC entry
+    from usan_api.settings import get_settings
+
+    get_settings.cache_clear()
+
+
+async def test_claim_pending_notification_skips_locked_row(async_database_url):
+    # H2: a pending row locked by one transaction (FOR UPDATE SKIP LOCKED) is SKIPPED — not
+    # blocked on — by a concurrent claim, so two replicas never claim (and send) the same row.
+    engine = _engine(async_database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            elder = await elders_repo.create_elder(
+                db, name="Lock", phone_e164=f"+1555{str(uuid.uuid4().int)[:7]}", timezone="UTC"
+            )
+            await sms_repo.create_notification(
+                db,
+                elder_id=elder.id,
+                to_number=f"+1555{str(uuid.uuid4().int)[:7]}",
+                kind="family_alert",
+                body="x",
+                dedupe_key=f"lock:{uuid.uuid4()}",
+            )
+            await db.commit()
+
+        async with factory() as a, factory() as b:
+            claimed_a = await sms_repo.claim_pending_notification(a)  # locks a pending row
+            assert claimed_a is not None
+            claimed_b = await sms_repo.claim_pending_notification(b)  # must SKIP the locked row
+            # b never gets the row a holds (it may get an unrelated pending row, or None).
+            assert claimed_b is None or claimed_b.id != claimed_a.id
+            await a.rollback()
+    finally:
+        await engine.dispose()

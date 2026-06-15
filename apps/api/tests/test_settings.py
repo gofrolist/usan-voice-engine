@@ -495,6 +495,15 @@ def test_med_reask_cap_out_of_range_rejected(monkeypatch):
         get_settings()
 
 
+def test_spanish_profile_id_non_uuid_rejected_at_startup(monkeypatch):
+    # A misconfigured non-UUID SPANISH_PROFILE_ID must fail fast at startup, not 500 on
+    # every Spanish callback (set_spanish_callback parses it as the callback profile UUID).
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SPANISH_PROFILE_ID", "not-a-uuid")
+    with pytest.raises(ValueError, match="valid UUID"):
+        Settings()
+
+
 @pytest.mark.parametrize("blank", ["", "   "])
 def test_inbound_key_and_spanish_profile_blank_coerce_to_none(monkeypatch, blank):
     # Compose passes unset optionals as "" (${VAR:-}); blank must coerce to None.

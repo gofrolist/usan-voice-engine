@@ -210,10 +210,10 @@ class MedicationReminder(Base):
     )
     next_reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     opened_call_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("calls.id")
+        UUID(as_uuid=True), ForeignKey("calls.id", ondelete="SET NULL")
     )
     cleared_call_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("calls.id")
+        UUID(as_uuid=True), ForeignKey("calls.id", ondelete="SET NULL")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -902,7 +902,7 @@ class FamilyTask(Base):
         Boolean, nullable=False, server_default=text("false")
     )
     delivered_call_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("calls.id")
+        UUID(as_uuid=True), ForeignKey("calls.id", ondelete="SET NULL")
     )
     # Telnyx inbound message id — idempotency key for the webhook intake. NULL for
     # operator-entered tasks (unique-where-not-null: many NULLs allowed in PG).

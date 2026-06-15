@@ -82,6 +82,12 @@ _CATEGORY_PATTERNS: tuple[tuple[CrisisCategory, "re.Pattern[str]"], ...] = (
 )
 
 
+# Cap the running buffer so a long call can't grow it without bound before a match.
+# Crisis phrases are short, so keeping a generous tail never splits an in-progress phrase —
+# it only drops old text that already failed to match (review L13).
+_MAX_BUFFER_CHARS = 2000
+
+
 def detect_crisis(text: str) -> CrisisCategory | None:
     """The crisis category an utterance matches, or None. First category wins."""
     for category, pattern in _CATEGORY_PATTERNS:
@@ -109,7 +115,7 @@ class CrisisWatcher:
             return None  # already detected; stop escalating
         # Interim chunks are revised rather than strictly additive, but matching the
         # explicit phrases against the running buffer is robust to that (like voicemail).
-        self._buffer = f"{self._buffer} {transcript}".strip()
+        self._buffer = f"{self._buffer} {transcript}".strip()[-_MAX_BUFFER_CHARS:]
         category = detect_crisis(self._buffer)
         if category is not None:
             self._category = category

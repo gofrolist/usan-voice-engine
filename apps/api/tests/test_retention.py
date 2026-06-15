@@ -7,11 +7,20 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from usan_api import retention
 from usan_api.db.base import CallDirection, CallStatus
-from usan_api.db.models import Call, CallBatchTarget, CallSchedule, Transcript
+from usan_api.db.models import (
+    Call,
+    CallBatchTarget,
+    CallSchedule,
+    ConversationSummary,
+    PersonalFact,
+    Transcript,
+)
 from usan_api.repositories import call_batches as batches_repo
 from usan_api.repositories import call_schedules as schedules_repo
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import conversation_summaries as summaries_repo
 from usan_api.repositories import elders as elders_repo
+from usan_api.repositories import personal_facts as personal_facts_repo
 from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.schemas.batch import BatchTargetIn
 
@@ -128,6 +137,73 @@ async def test_purge_keeps_recent_rows(session_factory):
         await db.commit()
     assert transcripts == 0
     assert scrubbed == 0
+
+
+async def _seed_memory_phi(factory) -> uuid.UUID:
+    """An elder with a conversation summary + an extracted personal fact (both PHI)."""
+    phone = f"+1555{str(uuid.uuid4().int)[:7]}"
+    async with factory() as db:
+        elder = await elders_repo.create_elder(db, name="A", phone_e164=phone, timezone="UTC")
+        call = await calls_repo.create_call(
+            db, elder_id=elder.id, direction=CallDirection.OUTBOUND, status=CallStatus.COMPLETED
+        )
+        await summaries_repo.create(
+            db,
+            call_id=call.id,
+            elder_id=elder.id,
+            summary="recap with PHI",
+            open_plans=["see the doctor Tuesday"],
+            model_version="m",
+        )
+        await personal_facts_repo.create(
+            db,
+            elder_id=elder.id,
+            category="person",
+            content="son named Bob",
+            structured=None,
+            source="extracted",
+        )
+        await db.commit()
+        return elder.id
+
+
+@pytest.mark.asyncio
+async def test_purge_memory_phi_deletes_old_records(session_factory):
+    # M5: elder-memory PHI (recaps, facts, survey scores, reports) past the window is DELETED.
+    eid = await _seed_memory_phi(session_factory)
+    async with session_factory() as db:
+        counts = await retention.purge_memory_phi(db, days=30, now=_FUTURE)
+        await db.commit()
+    assert counts["conversation_summaries"] == 1
+    assert counts["personal_facts"] == 1
+    async with session_factory() as db:
+        n_sum = await db.execute(
+            select(func.count())
+            .select_from(ConversationSummary)
+            .where(ConversationSummary.elder_id == eid)
+        )
+        n_fact = await db.execute(
+            select(func.count()).select_from(PersonalFact).where(PersonalFact.elder_id == eid)
+        )
+    assert n_sum.scalar_one() == 0
+    assert n_fact.scalar_one() == 0
+
+
+@pytest.mark.asyncio
+async def test_purge_memory_phi_keeps_recent_records(session_factory):
+    # With a present-day clock, just-created memory PHI is inside the window and survives.
+    eid = await _seed_memory_phi(session_factory)
+    recent = datetime.now(UTC) + timedelta(seconds=5)
+    async with session_factory() as db:
+        counts = await retention.purge_memory_phi(db, days=30, now=recent)
+        await db.commit()
+    assert counts["conversation_summaries"] == 0
+    assert counts["personal_facts"] == 0
+    async with session_factory() as db:
+        n_fact = await db.execute(
+            select(func.count()).select_from(PersonalFact).where(PersonalFact.elder_id == eid)
+        )
+    assert n_fact.scalar_one() == 1
 
 
 async def _seed_elder(factory) -> uuid.UUID:

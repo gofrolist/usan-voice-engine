@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 from functools import lru_cache
 from typing import Any, Literal
@@ -182,7 +183,7 @@ class Settings(BaseSettings):
     cartesia_version: str = Field(default="2024-11-13", alias="CARTESIA_VERSION")
     cartesia_sample_model: str = Field(default="sonic-2", alias="CARTESIA_SAMPLE_MODEL")
     gcp_project: str | None = Field(default=None, alias="GCP_PROJECT")
-    vertex_location: str = Field(default="us-central1", alias="VERTEX_LOCATION")
+    vertex_location: str = Field(default="global", alias="VERTEX_LOCATION")
     # Post-call summarization + fact extraction (US4 / FR-024). Ship-inert: default OFF,
     # so no Vertex call (spend or PHI egress) happens until a deploy explicitly enables it
     # AND gcp_project is set. Reuses the text-test Vertex ADC path (Constitution II) — never
@@ -274,6 +275,19 @@ class Settings(BaseSettings):
         # whitespace-only values as unset so truthiness checks behave correctly.
         if isinstance(v, str) and not v.strip():
             return None
+        return v
+
+    @field_validator("spanish_profile_id", mode="after")
+    @classmethod
+    def _spanish_profile_id_is_uuid(cls, v: str | None) -> str | None:
+        # set_spanish_callback parses this as a UUID (the callback's profile_override), so a
+        # non-UUID value would raise 500 on every Spanish callback. Fail fast at startup.
+        if v is None:
+            return None
+        try:
+            uuid.UUID(v)
+        except ValueError as exc:
+            raise ValueError("SPANISH_PROFILE_ID must be a valid UUID") from exc
         return v
 
     @field_validator("livekit_url")

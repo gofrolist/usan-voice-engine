@@ -95,3 +95,16 @@ async def test_watcher_feed_is_sync_and_usable_from_event_handler():
         return w.feed("I think I took too many pills")
 
     assert await _drive() == "overdose"
+
+
+def test_buffer_is_capped_and_still_detects_at_tail():
+    # L13: a long call must not grow the watcher buffer without bound. After lots of
+    # non-matching speech the buffer stays capped, and a crisis phrase spoken now (at the
+    # tail) is still detected.
+    from usan_agent import crisis_watcher as cw
+
+    w = CrisisWatcher()
+    for _ in range(2000):
+        assert w.feed("the weather is lovely and my knee aches a little today") is None
+    assert len(w._buffer) <= cw._MAX_BUFFER_CHARS
+    assert w.feed("I want to die") == "suicidal"
