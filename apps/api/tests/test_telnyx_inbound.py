@@ -179,3 +179,23 @@ async def test_national_format_sender_matches_e164_contact(client, signer, sessi
     rows = await _open_tasks(session_factory, elder_id)
     assert len(rows) == 1
     assert rows[0].message == "remind mom about lunch"
+
+
+def test_inbound_sms_text_is_length_capped():
+    # Security review: bound the stored inbound text so an oversized payload can't write an
+    # unbounded blob into family_tasks.message.
+    from usan_api.schemas.inbound_sms import _MAX_SMS_TEXT_CHARS, parse_inbound_sms
+
+    payload = {
+        "data": {
+            "event_type": "message.received",
+            "payload": {
+                "id": "msg_big",
+                "from": {"phone_number": "+15550009001"},
+                "text": "x" * 5000,
+            },
+        }
+    }
+    parsed = parse_inbound_sms(payload)
+    assert parsed is not None
+    assert len(parsed.text) == _MAX_SMS_TEXT_CHARS

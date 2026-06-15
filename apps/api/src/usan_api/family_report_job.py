@@ -36,6 +36,15 @@ from usan_api.vertex_test import run_vertex_turn
 
 _MAX_NARRATIVE_CHARS = 4000
 
+# Per-cycle ceiling on NEW reports generated, so one cycle cannot fire an unbounded burst
+# of multi-second Vertex calls across a large elder population (review: resource exhaustion).
+# Already-reported elders are skipped cheaply (get_for_month) and don't count, so the cycle
+# advances ~_GENERATE_BUDGET fresh reports at a time; the rest follow on later cycles.
+_GENERATE_BUDGET = 100
+# Hard bound on a single narrative round-trip so a hung Vertex call can't stall the poller
+# (run_vertex_turn has no internal timeout). On timeout the report uses the deterministic body.
+_VERTEX_TIMEOUT_S = 30.0
+
 _REPORT_SYSTEM = (
     "You write a brief, warm monthly status note about an elderly person's wellness "
     "check-ins for their care team's internal record. Respond with 1-3 plain sentences, "
@@ -160,13 +169,16 @@ async def _narrative(
     if settings.summarization_enabled and settings.gcp_project:
         prompt = _fallback_narrative(metrics, calls_completed)
         try:
-            turn = await run_vertex_turn(
-                model=settings.summarization_model,
-                temperature=0.3,
-                system_instruction=_REPORT_SYSTEM,
-                tools=[],
-                contents=[{"role": "user", "parts": [{"text": prompt}]}],
-                settings=settings,
+            turn = await asyncio.wait_for(
+                run_vertex_turn(
+                    model=settings.summarization_model,
+                    temperature=0.3,
+                    system_instruction=_REPORT_SYSTEM,
+                    tools=[],
+                    contents=[{"role": "user", "parts": [{"text": prompt}]}],
+                    settings=settings,
+                ),
+                timeout=_VERTEX_TIMEOUT_S,
             )
             text = (turn.text or "").strip()[:_MAX_NARRATIVE_CHARS]
             if text:
@@ -272,6 +284,8 @@ async def poll_once(
 
     generated = 0
     for elder_id in elder_ids:
+        if generated >= _GENERATE_BUDGET:
+            break  # cap expensive Vertex bursts per cycle; remaining elders run next cycle
         if await _generate_one(factory, settings, elder_id, moment):
             generated += 1
     return {"generated": generated}

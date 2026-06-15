@@ -1,6 +1,13 @@
 # {$API_DOMAIN} and {$LIVEKIT_DOMAIN} come from the Caddy container env.
 {$API_DOMAIN} {
 	encode zstd gzip
+	# Cap request bodies at the edge so the unauthenticated, signature-gated webhook
+	# routes (/v1/webhooks/telnyx, /v1/webhooks/livekit) can't be used to exhaust API
+	# memory with a giant POST before the signature check reads the body. 1MB is ample
+	# for every legitimate plane (webhook JSON, agent tool calls, operator commands).
+	request_body {
+		max_size 1MB
+	}
 	# The operator/management endpoints (/v1/elders, /v1/dnc, /v1/calls) are
 	# authenticated at the app layer via OPERATOR_API_KEY. An operator may add a
 	# defense-in-depth IP allowlist for those paths here (e.g. a matcher with

@@ -9,6 +9,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
+# Cap the stored inbound text: a signed Telnyx SMS is small, but bound it anyway so a
+# malformed/oversized payload can't write an unbounded blob into family_tasks.message.
+_MAX_SMS_TEXT_CHARS = 2000
+
 
 class InboundSms(BaseModel):
     """The fields the family-task / opt-out intake needs from an inbound SMS."""
@@ -41,6 +45,6 @@ def parse_inbound_sms(payload: dict[str, Any]) -> InboundSms | None:
     return InboundSms(
         message_id=str(message_id),
         from_number=str(from_number),
-        text=str(text),
+        text=str(text)[:_MAX_SMS_TEXT_CHARS],
         event_type=event_type,
     )

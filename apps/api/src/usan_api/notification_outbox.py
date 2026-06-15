@@ -112,8 +112,10 @@ async def run_poller(settings: Settings, stop: asyncio.Event) -> None:
     while not stop.is_set():
         try:
             await flush_pending_notifications()
-        except Exception:
-            log.opt(exception=True).error("Notification outbox cycle failed")
+        except Exception as exc:  # noqa: BLE001 - poller must survive; log TYPE only (PHI-safe)
+            # Never opt(exception=True)/str(exc): a DB/httpx message can embed SQL params or
+            # URLs tied to elder/family phone numbers (matches this file's flush discipline).
+            log.bind(err=type(exc).__name__).error("Notification outbox cycle failed")
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(
                 stop.wait(), timeout=settings.notification_outbox_poll_interval_s
