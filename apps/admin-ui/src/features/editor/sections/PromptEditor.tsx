@@ -1,6 +1,7 @@
 import { Suspense, lazy, useRef, useState } from "react";
-import type { EditorProps, OnChange, OnMount } from "@monaco-editor/react";
+import type { BeforeMount, EditorProps, OnChange, OnMount } from "@monaco-editor/react";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
+import { useTheme } from "../../../lib/theme";
 import { Textarea } from "../../../components/ui/textarea";
 import { matchPromptTokens } from "./promptTokens";
 import { unknownTokenNames } from "./unknownTokens";
@@ -71,6 +72,7 @@ const EMPTY_KNOWN: ReadonlySet<string> = new Set<string>();
 
 export function PromptEditor(props: PromptEditorProps) {
   const { value, onChange, rows = 6, variables, knownNames, fieldKey, phiNames } = props;
+  const theme = useTheme();
   const editorRef = useRef<EditorInstance | null>(null);
   const monacoRef = useRef<MonacoInstance | null>(null);
   const collectionRef = useRef<DecorationsCollection | null>(null);
@@ -128,6 +130,25 @@ export function PromptEditor(props: PromptEditorProps) {
     highlightTokens();
   };
 
+  // App-matched editor themes so the prompt editor follows the global light/dark toggle
+  // (Monaco otherwise stays on the light "vs" theme — a bright panel inside the dark app).
+  // Backgrounds mirror the --c-surface tokens; {{token}} highlights are CSS decorations,
+  // so they keep working across both themes.
+  const handleBeforeMount: BeforeMount = (monaco) => {
+    monaco.editor.defineTheme("usan-light", {
+      base: "vs",
+      inherit: true,
+      rules: [],
+      colors: { "editor.background": "#ffffff", "editor.foreground": "#18221f" },
+    });
+    monaco.editor.defineTheme("usan-dark", {
+      base: "vs-dark",
+      inherit: true,
+      rules: [],
+      colors: { "editor.background": "#151f1d", "editor.foreground": "#ecefec" },
+    });
+  };
+
   const handleChange: OnChange = (v) => {
     onChange(v ?? "");
     highlightTokens();
@@ -162,6 +183,8 @@ export function PromptEditor(props: PromptEditorProps) {
             <MonacoEditor
               height={`${Math.max(rows, 4) * 22}px`}
               defaultLanguage="markdown"
+              theme={theme === "dark" ? "usan-dark" : "usan-light"}
+              beforeMount={handleBeforeMount}
               value={value}
               onChange={handleChange}
               onMount={handleMount}
