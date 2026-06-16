@@ -279,6 +279,95 @@ def test_sample_streams_audio_and_only_sample_phrase_synthesized(
     get_settings.cache_clear()
 
 
+# --- sample proxy upstream-error mapping (Cartesia failures) ----------------
+
+
+def _patch_cartesia(monkeypatch, *, response=None, raises=None):
+    """Point the sample proxy's httpx.AsyncClient at a fake whose POST returns
+    ``response`` (an httpx.Response) or raises ``raises``. Configures the key and
+    clears the per-process settings + sample caches so synthesis is exercised."""
+    from usan_api.routers import admin_voice_catalog as mod
+    from usan_api.settings import get_settings
+
+    monkeypatch.setenv("CARTESIA_API_KEY", "sk_car_test")
+    get_settings.cache_clear()
+    mod._SAMPLE_CACHE.clear()
+
+    class _FakeClient:
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json, headers):
+            if raises is not None:
+                raise raises
+            return response
+
+    monkeypatch.setattr(mod.httpx, "AsyncClient", _FakeClient)
+
+
+def test_sample_402_credits_maps_to_503_with_actionable_detail(client, admin_session, monkeypatch):
+    # Cartesia returns 402 "Model credits limit reached" when the account is out of
+    # credits. The proxy must surface an actionable reason — not a generic 502 — so the
+    # operator knows to check the Cartesia subscription rather than chase a phantom bug.
+    import httpx
+
+    from usan_api.settings import get_settings
+
+    req = httpx.Request("POST", "https://api.cartesia.ai/tts/bytes")
+    resp = httpx.Response(
+        402,
+        text="Model credits limit reached: Please upgrade your subscription.",
+        request=req,
+    )
+    _patch_cartesia(monkeypatch, response=resp)
+
+    voice_id = next(iter(VOICE_IDS))
+    r = client.get(f"/v1/admin/voice-catalog/{voice_id}/sample")
+    assert r.status_code == 503
+    detail = r.json()["detail"].lower()
+    assert "credit" in detail
+    assert "cartesia" in detail
+    get_settings.cache_clear()
+
+
+def test_sample_upstream_5xx_maps_to_502_with_status_in_detail(client, admin_session, monkeypatch):
+    # A non-402 upstream failure still maps to 502, but the detail names the upstream
+    # status so the failure is diagnosable from the response alone.
+    import httpx
+
+    from usan_api.settings import get_settings
+
+    req = httpx.Request("POST", "https://api.cartesia.ai/tts/bytes")
+    resp = httpx.Response(500, text="upstream boom", request=req)
+    _patch_cartesia(monkeypatch, response=resp)
+
+    voice_id = next(iter(VOICE_IDS))
+    r = client.get(f"/v1/admin/voice-catalog/{voice_id}/sample")
+    assert r.status_code == 502
+    assert "500" in r.json()["detail"]
+    get_settings.cache_clear()
+
+
+def test_sample_transport_error_maps_to_502(client, admin_session, monkeypatch):
+    # A connect/timeout error (no HTTP response) still fails clean as 502.
+    import httpx
+
+    from usan_api.settings import get_settings
+
+    _patch_cartesia(monkeypatch, raises=httpx.ConnectError("no route to host"))
+
+    voice_id = next(iter(VOICE_IDS))
+    r = client.get(f"/v1/admin/voice-catalog/{voice_id}/sample")
+    assert r.status_code == 502
+    get_settings.cache_clear()
+
+
 # --- handler 422 over the live save/publish/rollback paths ------------------
 
 
