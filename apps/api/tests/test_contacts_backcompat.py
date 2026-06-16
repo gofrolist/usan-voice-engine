@@ -10,11 +10,14 @@ regression guard so a future over-eager physical rename trips a red test.
 import asyncio
 import uuid
 
+import pytest
+from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 from usan_api import webhook_events
+from usan_api.schemas.contact import ContactCreate, ContactUpdate
 
 # Management-plane routes require the operator bearer token (matches conftest).
 _OP = {"Authorization": "Bearer " + "o" * 32}
@@ -93,3 +96,29 @@ def test_webhook_payload_schemas_still_carry_contact_id():
     assert "contact_id" in webhook_events._CallStartedData.model_fields
     assert "contact_id" in webhook_events._CallCompletedData.model_fields
     assert "contact_id" in webhook_events._CallbackCreatedData.model_fields
+
+
+# ---------------------------------------------------------------------------
+# Contact create/update reject an invalid IANA timezone before it reaches the DB.
+# ---------------------------------------------------------------------------
+
+
+def test_contact_create_rejects_invalid_timezone():
+    with pytest.raises(ValidationError):
+        ContactCreate(name="X", phone_e164="+15551230001", timezone="Mars/Phobos")
+
+
+def test_contact_create_accepts_valid_timezone():
+    c = ContactCreate(name="X", phone_e164="+15551230001", timezone="America/Chicago")
+    assert c.timezone == "America/Chicago"
+
+
+def test_contact_update_rejects_invalid_timezone():
+    with pytest.raises(ValidationError):
+        ContactUpdate(timezone="EST5")
+
+
+def test_contact_update_allows_omitted_timezone():
+    # Omitting timezone is the common partial-update case; must not trip the validator.
+    u = ContactUpdate(name="New Name")
+    assert u.timezone is None

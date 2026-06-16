@@ -82,3 +82,13 @@ async def assign_profile(
     contact.agent_profile_id = profile_id
     await db.flush()
     return contact
+
+
+async def set_timezone(db: AsyncSession, contact_id: uuid.UUID, timezone: str) -> Contact | None:
+    """Set a contact's IANA timezone. Returns None if the contact is gone. Caller commits."""
+    contact = await db.get(Contact, contact_id)
+    if contact is None:
+        return None
+    contact.timezone = timezone
+    await db.flush()
+    return contact

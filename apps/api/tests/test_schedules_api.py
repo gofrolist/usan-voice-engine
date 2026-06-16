@@ -138,10 +138,21 @@ def test_patch_slot_and_invalid_slot_filter_are_422(client):
     assert bad.status_code == 422
 
 
-def test_create_schedule_422_invalid_contact_timezone(client):
-    # The contact API only length-validates timezone, so a bad zone can be seeded;
-    # schedule creation must fail closed (zoneinfo ValueError -> 422, spec §6.3).
-    contact_id = _seed_contact(client, timezone="Mars/Olympus")
+def test_create_schedule_422_invalid_contact_timezone(client, async_database_url):
+    # The contact API now rejects bad zones at the boundary, but a row can still hold
+    # an unresolvable zone (legacy data / direct DB write); schedule creation must fail
+    # closed (zoneinfo ValueError -> 422, spec §6.3). Corrupt the zone at the DB level
+    # to exercise the create path's fail-closed branch.
+    contact_id = _seed_contact(client)
+
+    async def _corrupt_tz(db):
+        await db.execute(
+            text("UPDATE contacts SET timezone = 'Mars/Olympus' WHERE id = :id"),
+            {"id": contact_id},
+        )
+
+    asyncio.run(_run_db(async_database_url, _corrupt_tz))
+
     r = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP)
     assert r.status_code == 422
 

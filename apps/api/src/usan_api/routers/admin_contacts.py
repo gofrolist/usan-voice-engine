@@ -13,7 +13,7 @@ from usan_api.masking import mask_phone
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as profiles_repo
 from usan_api.repositories import contacts as contacts_repo
-from usan_api.schemas.admin import AssignProfileRequest, ContactSummary
+from usan_api.schemas.admin import AssignProfileRequest, ContactSummary, SetTimezoneRequest
 
 router = APIRouter(
     prefix="/v1/admin/contacts",
@@ -27,6 +27,7 @@ def _summary(contact: Contact, profile_name: str | None) -> ContactSummary:
         id=contact.id,
         name=contact.name,
         masked_phone=mask_phone(contact.phone_e164),
+        timezone=contact.timezone,
         agent_profile_id=contact.agent_profile_id,
         agent_profile_name=profile_name,
     )
@@ -69,6 +70,39 @@ async def assign_profile(
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(status_code=400, detail="unknown agent_profile_id") from exc
+    profile_name = None
+    if contact.agent_profile_id is not None:
+        prof = await profiles_repo.get_profile(db, contact.agent_profile_id)
+        profile_name = prof.name if prof else None
+    return _summary(contact, profile_name)
+
+
+@router.put("/{contact_id}/timezone", response_model=ContactSummary)
+async def set_timezone(
+    contact_id: uuid.UUID,
+    body: SetTimezoneRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: str = Depends(get_actor_email),
+    _: object = Depends(require_admin_role(AdminRole.ADMIN)),
+) -> ContactSummary:
+    # No IntegrityError guard (unlike assign_profile, which can hit an FK violation
+    # on agent_profile_id): timezone is a plain Text column with no FK/unique
+    # constraint, and SetTimezoneRequest has already IANA-validated the value.
+    contact = await contacts_repo.get_contact(db, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="contact not found")
+    old = contact.timezone
+    # set_timezone mutates this same session-cached instance; ignore its return value.
+    await contacts_repo.set_timezone(db, contact_id, body.timezone)
+    await admin_audit.record(
+        db,
+        actor_email=actor,
+        action="contact.set_timezone",
+        entity_type="contact",
+        entity_id=str(contact_id),
+        detail={"old": old, "new": body.timezone},
+    )
+    await db.commit()
     profile_name = None
     if contact.agent_profile_id is not None:
         prof = await profiles_repo.get_profile(db, contact.agent_profile_id)

@@ -5,7 +5,8 @@ import { Spinner } from "../../components/ui/spinner";
 import { Button } from "../../components/ui/button";
 import { useIsAdmin } from "../../auth/useSession";
 import { useProfiles } from "../profiles/hooks";
-import { useAssignProfile, useContacts } from "./hooks";
+import { US_TIMEZONES } from "./timezones";
+import { useAssignProfile, useContacts, useSetTimezone } from "./hooks";
 
 const PAGE_SIZE = 200;
 
@@ -17,6 +18,7 @@ export function ContactsPage() {
   const contacts = useContacts(PAGE_SIZE, offset);
   const profiles = useProfiles();
   const assign = useAssignProfile();
+  const setTz = useSetTimezone();
 
   if (!isAdmin) {
     return <p className="text-sm text-muted">Admins only.</p>;
@@ -55,13 +57,14 @@ export function ContactsPage() {
           <Tr>
             <Th>Name</Th>
             <Th>Phone</Th>
+            <Th>Timezone</Th>
             <Th>Assigned profile</Th>
           </Tr>
         </Thead>
         <Tbody>
           {contactList.length === 0 ? (
             <Tr>
-              <Td className="text-faint" colSpan={3}>
+              <Td className="text-faint" colSpan={4}>
                 No contacts.
               </Td>
             </Tr>
@@ -70,6 +73,26 @@ export function ContactsPage() {
             <Tr key={e.id}>
               <Td className="font-medium text-slate-900">{e.name}</Td>
               <Td className="font-mono text-xs">{e.masked_phone}</Td>
+              <Td>
+                <Select
+                  aria-label={`Timezone for ${e.name}`}
+                  value={e.timezone}
+                  disabled={setTz.isPending && setTz.variables?.contactId === e.id}
+                  onChange={(ev) =>
+                    setTz.mutate({ contactId: e.id, timezone: ev.target.value })
+                  }
+                >
+                  {/* Keep a current value that isn't in the curated US set visible. */}
+                  {!US_TIMEZONES.some((tz) => tz.value === e.timezone) ? (
+                    <option value={e.timezone}>{e.timezone}</option>
+                  ) : null}
+                  {US_TIMEZONES.map((tz) => (
+                    <option key={tz.value} value={tz.value}>
+                      {tz.label}
+                    </option>
+                  ))}
+                </Select>
+              </Td>
               <Td>
                 <Select
                   aria-label={`Assigned profile for ${e.name}`}
