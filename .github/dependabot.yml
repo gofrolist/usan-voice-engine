@@ -1,6 +1,6 @@
 version: 2
-# Non-major bumps auto-merge once required CI checks pass — see
-# .github/workflows/dependabot-auto-merge.yml. Majors open individually for manual review.
+# All bumps (majors included) auto-merge once the required CI checks pass — see
+# .github/workflows/dependabot-auto-merge.yml. CI is the gate; a red build never lands.
 updates:
   # Python deps (uv) — API
   - package-ecosystem: "pip"
@@ -32,9 +32,10 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
-      # Only group minor + patch updates. Majors open as individual PRs so each
-      # breaking upgrade (e.g. eslint flat-config, tailwind v4, react 19) can be
-      # migrated and reviewed in isolation instead of one unreviewable group bump.
+      # Only group minor + patch updates. Majors open as individual PRs so a breaking
+      # upgrade (e.g. eslint flat-config, tailwind v4, react 19) that fails CI is isolated
+      # from the green minor/patch group rather than blocking it — each still auto-merges
+      # on its own once it passes the required checks.
       admin-ui-npm:
         patterns: ["*"]
         update-types: ["minor", "patch"]
