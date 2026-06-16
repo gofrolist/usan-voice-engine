@@ -21,6 +21,7 @@ from collections.abc import Iterator
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from loguru import logger
 
 from usan_api.auth import require_admin_session
 from usan_api.schemas.voice_catalog import (
@@ -56,8 +57,11 @@ async def get_voice_catalog() -> VoiceCatalogResponse:
 async def _synthesize_sample(settings: Settings, voice_id: str, model: str) -> bytes:
     """POST the fixed SAMPLE_PHRASE to Cartesia /tts/bytes and return the MP3 bytes.
 
-    Caches per (voice_id, model). Raises HTTPException(502) on any upstream failure so
-    the admin sees a clean error rather than a stack trace.
+    Caches per (voice_id, model). On an upstream failure it logs the real Cartesia
+    status + body (the only signal for *why* the preview failed) and raises a clean,
+    actionable HTTPException: a 402 "credit limit reached" becomes a 503 telling the
+    operator to check the Cartesia subscription; any other upstream/transport failure
+    becomes a 502 naming the upstream status — never a stack trace.
     """
     cache_key = (voice_id, model)
     cached = _SAMPLE_CACHE.get(cache_key)
@@ -88,10 +92,40 @@ async def _synthesize_sample(settings: Settings, voice_id: str, model: str) -> b
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             audio = resp.content
-    except httpx.HTTPError as exc:
+    except httpx.HTTPStatusError as exc:
+        upstream = exc.response.status_code
+        # SAMPLE_PHRASE is PHI-free, so Cartesia's error body is safe to log — and it is
+        # the only signal that explains the failure (e.g. an exhausted credit balance).
+        logger.warning(
+            "Cartesia voice-sample synthesis failed: voice={voice} model={model} "
+            "upstream={status} body={body}",
+            voice=voice_id,
+            model=model,
+            status=upstream,
+            body=exc.response.text[:500],
+        )
+        if upstream == status.HTTP_402_PAYMENT_REQUIRED:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "voice preview unavailable: the Cartesia account has reached its "
+                    "credit limit — check the Cartesia subscription"
+                ),
+            ) from exc
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="voice sample synthesis failed",
+            detail=f"voice sample synthesis failed (Cartesia returned {upstream})",
+        ) from exc
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "Cartesia voice-sample request error: voice={voice} model={model} err={err}",
+            voice=voice_id,
+            model=model,
+            err=repr(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="voice sample synthesis failed (Cartesia unreachable)",
         ) from exc
     _SAMPLE_CACHE[cache_key] = audio
     return audio
