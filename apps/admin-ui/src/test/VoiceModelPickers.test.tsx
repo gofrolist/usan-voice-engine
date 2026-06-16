@@ -9,7 +9,7 @@
 // - The Zod schema stays permissive (model/voice are plain str), so a withdrawn value
 //   still parses (forward-compat invariant).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useForm, type UseFormReturn } from "react-hook-form";
@@ -229,6 +229,91 @@ describe("VoiceSection picker", () => {
       "/v1/admin/voice-catalog/voice-warm-man/sample",
       expect.objectContaining({ credentials: "include" }),
     );
+  });
+
+  it("does not surface a play error when a playing sample is stopped", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(["x"], { type: "audio/mpeg" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn(() => "blob:fake"),
+      revokeObjectURL: vi.fn(),
+    });
+    // Capture each Audio element so we can fire the late "error" event a real
+    // browser emits when an element's src is cleared on stop.
+    const created: HTMLAudioElement[] = [];
+    vi.spyOn(window.HTMLMediaElement.prototype, "play").mockImplementation(function (
+      this: HTMLAudioElement,
+    ) {
+      created.push(this);
+      return Promise.resolve();
+    });
+
+    render(wrap(<VoiceHarness voiceId={null} />));
+    await screen.findByText("Barbershop Man");
+
+    await user.click(screen.getByRole("button", { name: /play sample of Barbershop Man/i }));
+    await waitFor(() => expect(created).toHaveLength(1));
+    const audio = created[0]!;
+
+    // Stop the sample. In a real browser, clearing the element's src fires an
+    // async "error" on that now-discarded element — reproduce it explicitly.
+    await user.click(await screen.findByRole("button", { name: /stop sample of Barbershop Man/i }));
+    act(() => {
+      audio.dispatchEvent(new Event("error"));
+    });
+
+    // The stop was intentional: no error message, and the src must be detached
+    // via removeAttribute (not set to "" which resolves to the page URL).
+    expect(screen.queryByText(/could not play this voice sample/i)).not.toBeInTheDocument();
+    expect(audio.getAttribute("src")).toBeNull();
+  });
+
+  it("does not surface a play error when switching to another voice", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(["x"], { type: "audio/mpeg" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn(() => "blob:fake"),
+      revokeObjectURL: vi.fn(),
+    });
+    const created: HTMLAudioElement[] = [];
+    vi.spyOn(window.HTMLMediaElement.prototype, "play").mockImplementation(function (
+      this: HTMLAudioElement,
+    ) {
+      created.push(this);
+      return Promise.resolve();
+    });
+
+    render(wrap(<VoiceHarness voiceId={null} />));
+    await screen.findByText("Barbershop Man");
+
+    await user.click(screen.getByRole("button", { name: /play sample of Barbershop Man/i }));
+    await waitFor(() => expect(created).toHaveLength(1));
+    const firstAudio = created[0]!;
+
+    // Switch to a different voice while the first is still "playing".
+    await user.click(screen.getByRole("button", { name: /play sample of Calm Lady/i }));
+    await waitFor(() => expect(created).toHaveLength(2));
+
+    // The browser fires a late "error" on the now-discarded first element; it
+    // must be ignored — the second voice plays fine.
+    act(() => {
+      firstAudio.dispatchEvent(new Event("error"));
+    });
+
+    expect(screen.queryByText(/could not play this voice sample/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /stop sample of Calm Lady/i }),
+    ).toBeInTheDocument();
   });
 
   it("shows a deprecation marker when the selected voice is withdrawn", async () => {

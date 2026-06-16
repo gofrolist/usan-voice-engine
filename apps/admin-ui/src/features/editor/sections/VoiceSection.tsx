@@ -94,10 +94,16 @@ function VoicePicker({ form }: { form: UseFormReturn<AgentConfigForm> }) {
   const stopSample = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    // Drop the ref first: any media event that fires on this element after we
+    // stop it is now stale and must be ignored by onPlay's finish() guard.
+    audioRef.current = null;
     audio.pause();
     if (audio.src.startsWith("blob:")) URL.revokeObjectURL(audio.src);
-    audio.src = "";
-    audioRef.current = null;
+    // removeAttribute, NOT `audio.src = ""`: an empty src resolves to the page
+    // URL, which the element tries to load and then fires a spurious "error"
+    // event — surfacing a bogus "Could not play this voice sample" on every
+    // stop/switch even though playback was fine.
+    audio.removeAttribute("src");
   }, []);
 
   useEffect(() => stopSample, [stopSample]);
@@ -109,26 +115,36 @@ function VoicePicker({ form }: { form: UseFormReturn<AgentConfigForm> }) {
     setPlayError(null);
     stopSample();
     setPlaying(voiceId);
+    let audio: HTMLAudioElement | null = null;
     try {
       const res = await fetch(`/v1/admin/voice-catalog/${encodeURIComponent(voiceId)}/sample`, {
         credentials: "include",
       });
       if (!res.ok) throw new Error("voice sample unavailable");
       const blob = await res.blob();
-      const audio = new Audio(URL.createObjectURL(blob));
-      audioRef.current = audio;
+      const el = new Audio(URL.createObjectURL(blob));
+      audio = el;
+      audioRef.current = el;
       const finish = (failed: boolean): void => {
-        if (audio.src.startsWith("blob:")) URL.revokeObjectURL(audio.src);
-        if (audioRef.current === audio) audioRef.current = null;
+        // Only the active element drives UI state. An error/ended event from an
+        // element we already stopped or replaced (audioRef has moved on) is
+        // stale and must not surface an error or clear a newer selection.
+        if (audioRef.current !== el) return;
+        if (el.src.startsWith("blob:")) URL.revokeObjectURL(el.src);
+        audioRef.current = null;
         setPlaying((p) => (p === voiceId ? null : p));
         if (failed) setPlayError("Could not play this voice sample. Please try again.");
       };
-      audio.addEventListener("ended", () => finish(false));
-      audio.addEventListener("error", () => finish(true));
-      await audio.play();
+      el.addEventListener("ended", () => finish(false));
+      el.addEventListener("error", () => finish(true));
+      await el.play();
     } catch {
+      // A play() rejection caused by us stopping/replacing this element (e.g.
+      // AbortError) is expected — only report when this element is still active,
+      // or when we failed before creating one (a real fetch/network error).
+      if (audio && audioRef.current !== audio) return;
       stopSample();
-      setPlaying(null);
+      setPlaying((p) => (p === voiceId ? null : p));
       setPlayError("Could not play this voice sample. Please try again.");
     }
   }
