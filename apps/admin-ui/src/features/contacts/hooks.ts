@@ -38,3 +38,21 @@ export function useAssignProfile() {
     onError: (err) => pushToast(err.detail),
   });
 }
+
+interface SetTimezoneVars {
+  contactId: string;
+  timezone: string;
+}
+
+export function useSetTimezone() {
+  const qc = useQueryClient();
+  return useMutation<ContactSummary, ApiError, SetTimezoneVars>({
+    mutationFn: ({ contactId, timezone }) =>
+      api.put<ContactSummary>(`/v1/admin/contacts/${contactId}/timezone`, { timezone }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: CONTACTS_KEY });
+    },
+    // A 422 (invalid IANA zone) from the API surfaces as a toast.
+    onError: (err) => pushToast(err.detail),
+  });
+}
