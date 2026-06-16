@@ -190,3 +190,29 @@ def test_every_tenant_table_is_rls_enabled_and_fails_closed(async_database_url, 
             await eng.dispose()
 
     asyncio.run(run())
+
+
+def test_app_engine_connections_inherit_default_org_context(async_database_url):
+    """Background workers connect via the app engine (get_engine) OUTSIDE get_db (schedule
+    orchestrator, webhook/sms/family jobs, retention, callback dialer). get_engine installs
+    a connect-event listener (_install_default_org_context) that puts every connection into
+    default-org context, so those worker sessions are not fail-closed under RLS. Verified by
+    installing that SAME listener on a fresh usan_app engine — a bare usan_app engine (as the
+    fail-closed tests above use) has NO context, so the listener is what provides it here."""
+    from usan_api.db.session import _install_default_org_context
+
+    async def run() -> str:
+        eng = create_async_engine(_app_url(async_database_url), poolclass=NullPool)
+        _install_default_org_context(eng)
+        try:
+            async with eng.connect() as conn:
+                ctx = (
+                    await conn.execute(text("SELECT current_setting('app.current_org', true)"))
+                ).scalar_one()
+                # Not fail-closed: a tenant table is queryable under the inherited context.
+                await conn.execute(text("SELECT 1 FROM contacts"))
+                return ctx
+        finally:
+            await eng.dispose()
+
+    assert asyncio.run(run())  # a uuid string (the default org), not empty/None
