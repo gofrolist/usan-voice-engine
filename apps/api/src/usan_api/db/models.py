@@ -30,7 +30,32 @@ def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     return [member.value for member in enum_cls]
 
 
-class Contact(Base):
+class TenantScoped:
+    """Mixin adding the tenant FK. Applied to every tenant-owned model in Tasks 4-5.
+
+    The column is added to the DB by migrations 0031/0032; this mixin keeps the ORM
+    mapping in sync. organization_id is filled by a DB column DEFAULT sourced from the
+    tenant context on INSERT (see the migrations' SET DEFAULT) — so repositories never
+    set it and existing insert code is unchanged — and RLS WITH CHECK rejects any
+    cross-org mismatch. The server_default below mirrors that DDL so SQLAlchemy omits
+    the column from INSERTs and reads it back via RETURNING.
+    """
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id"),
+        nullable=False,
+        index=True,
+        # Mirrors the DB column DEFAULT set by migrations 0031/0032. Postgres forbids a
+        # subquery in a DEFAULT expression, so the default-org lookup is wrapped in the
+        # default_org_id() SQL function (created in 0031). COALESCE prefers the request
+        # context; falls back to the default org for context-free (superuser) seeds.
+        server_default=text(
+            "COALESCE(current_setting('app.current_org', true)::uuid, default_org_id())"
+        ),
+    )
+
+
+class Contact(Base, TenantScoped):
     __tablename__ = "contacts"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -960,26 +985,4 @@ class Organization(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
-
-class TenantScoped:
-    """Mixin adding the tenant FK. Applied to every tenant-owned model in Tasks 4-5.
-
-    The column is added to the DB by migrations 0031/0032; this mixin keeps the ORM
-    mapping in sync. organization_id is filled by a DB column DEFAULT sourced from the
-    tenant context on INSERT (see the migrations' SET DEFAULT) — so repositories never
-    set it and existing insert code is unchanged — and RLS WITH CHECK rejects any
-    cross-org mismatch. The server_default below mirrors that DDL so SQLAlchemy omits
-    the column from INSERTs and reads it back via RETURNING.
-    """
-
-    organization_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("organizations.id"),
-        nullable=False,
-        index=True,
-        server_default=text(
-            "COALESCE(current_setting('app.current_org', true)::uuid,"
-            " (SELECT id FROM organizations WHERE slug = 'usan'))"
-        ),
     )
