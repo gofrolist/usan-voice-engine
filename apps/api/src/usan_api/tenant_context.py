@@ -34,6 +34,12 @@ async def resolve_default_org_id(db: AsyncSession) -> uuid.UUID:
     return _default_org_id
 
 
+def _clear_default_org_cache() -> None:
+    """Reset the cached default-org id (used by test teardown for isolation)."""
+    global _default_org_id
+    _default_org_id = None
+
+
 async def set_tenant_context(db: AsyncSession, org_id: uuid.UUID) -> None:
     # is_local=true => transaction-scoped, cleared at COMMIT/ROLLBACK; no cross-request leak.
     await db.execute(

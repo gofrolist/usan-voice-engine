@@ -108,13 +108,18 @@ def database_url() -> str:
         # never live in migrations). Give it a known test password so the
         # app-under-test (and the isolation suite) connect as the RLS-subject role.
         asyncio.run(_set_app_role_password(url))
-        os.environ["APP_DATABASE_URL"] = f"postgresql://usan_app:usan_app@{host}:{port}/usan"
         yield url
 
 
 @pytest.fixture(scope="session")
 def async_database_url(database_url: str) -> str:
     return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+
+@pytest.fixture(scope="session")
+def app_database_url(database_url: str) -> str:
+    """The usan_app (non-superuser, RLS-subject) DSN, derived from the superuser url."""
+    return database_url.replace("usan:usan@", "usan_app:usan_app@", 1)
 
 
 # Every table a `client` test may touch, wiped as one statement. RESTART IDENTITY
@@ -167,9 +172,11 @@ def _routed_app() -> FastAPI:
 
 
 @pytest.fixture
-def client(database_url: str, async_database_url: str, monkeypatch) -> TestClient:
+def client(
+    database_url: str, async_database_url: str, app_database_url: str, monkeypatch
+) -> TestClient:
     # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
-    monkeypatch.setenv("DATABASE_URL", os.environ["APP_DATABASE_URL"])
+    monkeypatch.setenv("DATABASE_URL", app_database_url)
     monkeypatch.setenv("LIVEKIT_API_KEY", "key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
@@ -208,6 +215,9 @@ def client(database_url: str, async_database_url: str, monkeypatch) -> TestClien
         asyncio.run(_truncate_and_dispose(test_engine))
         app.dependency_overrides.pop(get_db, None)
         get_settings.cache_clear()
+        from usan_api.tenant_context import _clear_default_org_cache
+
+        _clear_default_org_cache()
 
 
 @pytest.fixture
@@ -216,10 +226,12 @@ def operator_headers() -> dict[str, str]:
 
 
 @pytest.fixture
-def sso_client(database_url: str, async_database_url: str, monkeypatch) -> TestClient:
+def sso_client(
+    database_url: str, async_database_url: str, app_database_url: str, monkeypatch
+) -> TestClient:
     """Like `client`, but with Google SSO configured (for /v1/auth flow tests)."""
     # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
-    monkeypatch.setenv("DATABASE_URL", os.environ["APP_DATABASE_URL"])
+    monkeypatch.setenv("DATABASE_URL", app_database_url)
     monkeypatch.setenv("LIVEKIT_API_KEY", "key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
@@ -256,6 +268,9 @@ def sso_client(database_url: str, async_database_url: str, monkeypatch) -> TestC
         asyncio.run(_truncate_and_dispose(test_engine))
         app.dependency_overrides.pop(get_db, None)
         get_settings.cache_clear()
+        from usan_api.tenant_context import _clear_default_org_cache
+
+        _clear_default_org_cache()
 
 
 async def _seed_admin_user_async(async_database_url: str, email: str, role: str) -> None:
