@@ -105,3 +105,20 @@ resource "google_sql_user" "grafana_ro" {
   instance = google_sql_database_instance.usan.name
   password = random_password.grafana_ro.result
 }
+
+# --- Non-superuser application login subject to Row-Level Security (P1 tenancy). ---
+# The role itself + all GRANTs are created idempotently by Alembic migration 0029
+# (CREATE ROLE usan_app NOSUPERUSER NOBYPASSRLS ... LOGIN). Terraform only provisions
+# the login password here, same split as grafana_ro. The API's DATABASE_URL MUST point
+# at this user (NOT `usan`, which has cloudsqlsuperuser and BYPASSES RLS) for tenant
+# isolation to actually hold in prod.
+resource "random_password" "usan_app" {
+  length  = 32
+  special = false # avoids escaping issues in the DATABASE_URL password
+}
+
+resource "google_sql_user" "usan_app" {
+  name     = "usan_app"
+  instance = google_sql_database_instance.usan.name
+  password = random_password.usan_app.result
+}
