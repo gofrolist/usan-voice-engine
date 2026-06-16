@@ -62,6 +62,25 @@ def gauge_value(gauge) -> float:
     return 0.0
 
 
+async def _set_app_role_password(super_url: str) -> None:
+    """Give the migration-created usan_app role a known login password.
+
+    usan_app is created by migration 0029 with LOGIN but no password (secrets never
+    live in migrations). The app-under-test (and the RLS isolation suite) connect as
+    this RLS-subject role, so the test harness sets a known password here. Runs as the
+    superuser url (asyncpg fallback — psycopg v3 is not installed in this env).
+    """
+    eng = create_async_engine(
+        super_url.replace("postgresql://", "postgresql+asyncpg://", 1),
+        poolclass=NullPool,
+    )
+    try:
+        async with eng.begin() as conn:
+            await conn.execute(text("ALTER ROLE usan_app WITH LOGIN PASSWORD 'usan_app'"))
+    finally:
+        await eng.dispose()
+
+
 @pytest.fixture(scope="session")
 def database_url() -> str:
     with PostgresContainer(
@@ -85,6 +104,11 @@ def database_url() -> str:
             env=env,
             check=True,
         )
+        # usan_app is created by migration 0029 with LOGIN but no password (secrets
+        # never live in migrations). Give it a known test password so the
+        # app-under-test (and the isolation suite) connect as the RLS-subject role.
+        asyncio.run(_set_app_role_password(url))
+        os.environ["APP_DATABASE_URL"] = f"postgresql://usan_app:usan_app@{host}:{port}/usan"
         yield url
 
 
@@ -144,7 +168,8 @@ def _routed_app() -> FastAPI:
 
 @pytest.fixture
 def client(database_url: str, async_database_url: str, monkeypatch) -> TestClient:
-    monkeypatch.setenv("DATABASE_URL", database_url)
+    # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
+    monkeypatch.setenv("DATABASE_URL", os.environ["APP_DATABASE_URL"])
     monkeypatch.setenv("LIVEKIT_API_KEY", "key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
@@ -193,7 +218,8 @@ def operator_headers() -> dict[str, str]:
 @pytest.fixture
 def sso_client(database_url: str, async_database_url: str, monkeypatch) -> TestClient:
     """Like `client`, but with Google SSO configured (for /v1/auth flow tests)."""
-    monkeypatch.setenv("DATABASE_URL", database_url)
+    # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
+    monkeypatch.setenv("DATABASE_URL", os.environ["APP_DATABASE_URL"])
     monkeypatch.setenv("LIVEKIT_API_KEY", "key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
