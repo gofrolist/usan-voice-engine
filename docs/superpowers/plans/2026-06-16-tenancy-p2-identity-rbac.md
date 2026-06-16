@@ -49,6 +49,18 @@ class AdminPrincipal:
 
 ---
 
+## Execution Ordering & Fixture Dependencies (READ FIRST)
+
+Tests across units share new pytest fixtures. To avoid "fixture not found" failures, the fixtures land **before** the tests that use them, as follows:
+
+1. **Task A3 owns the foundational conftest fixtures.** Before its repo tests, A3 adds to `apps/api/tests/conftest.py`: `app_async_database_url` (session), `two_orgs` (inserts org A + org B via the superuser engine, yields `(uuid_a, uuid_b)`, deletes them + their memberships on teardown), and `app_session` (a `usan_app` async session, `NullPool`). These depend only on P1 + the `memberships` table from A2 — no P2 app code.
+2. **Task B1 owns the `admin_session` fixture migration.** When `issue_session`'s signature changes (B1), the existing `admin_session` fixture in conftest breaks. B1 must, in the same task: update `admin_session` to mint via `issue_session(email, active_org_id=<seeded org>, role=AdminRole.ADMIN, is_super_admin=False, acting_as=False, settings=...)` **and** create a `Membership(email, <org>, ADMIN)`; add a `super_admin_session` fixture (identity `is_super_admin=True`, no membership, `active_org=None`); add `memberships` to `_TRUNCATE_ALL` (before `admin_users` for FK order).
+3. **Task D2 is now ONLY** the `get_tenant_db` override (run admin routes as `usan_app` + context) and greening the full suite — the fixture *definitions* it previously listed now live in A3/B1 (D2 step 1/2/4 there are satisfied by A3/B1; D2 keeps step 3 + step 5).
+
+Net task order: **A1 → A2 → A3(+fixtures) → B1(+admin_session fixture) → B2 → B3 → B4 → C1 → C2 → D1 → D2(override+green) → D3.**
+
+---
+
 ## UNIT A — Schema, migration, models, repos
 
 ### Task A1: `Membership` model + `AdminUser` changes
