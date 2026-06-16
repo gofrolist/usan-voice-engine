@@ -261,12 +261,17 @@ export interface ContactSummary {
   id: string;
   name: string;
   masked_phone: string;
+  timezone: string;
   agent_profile_id: string | null;
   agent_profile_name: string | null;
 }
 
 export interface AssignProfileRequest {
   agent_profile_id: string | null;
+}
+
+export interface SetTimezoneRequest {
+  timezone: string;
 }
 
 // ---------------------------------------------------------------------------
