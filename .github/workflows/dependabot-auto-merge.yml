@@ -1,14 +1,13 @@
 name: Dependabot auto-merge
 
-# Auto-enable squash auto-merge on Dependabot PRs for non-major bumps. Auto-merge then
-# waits for the required status checks (set in main's branch protection) to pass before
-# merging, so a red CI never auto-merges. Major bumps are left open for manual review
-# (mirrors dependabot.yml, which already isolates major npm upgrades).
+# Enable squash auto-merge on every Dependabot PR — majors included — so any bump that
+# passes the required CI checks merges without a manual click. Auto-merge waits on main's
+# required status checks (branch protection), so a red CI never lands: CI is the gate.
 #
 # pull_request_target runs in the BASE-repo context with a read/write token — a plain
 # pull_request event from Dependabot only gets a read-only token. We never check out the
 # PR's head code here (only read its metadata and call the API), so there is no
-# untrusted-code-execution risk from using pull_request_target.
+# untrusted-code-execution risk. All event/metadata values are passed via env and quoted.
 on: pull_request_target
 
 permissions:
@@ -23,9 +22,12 @@ jobs:
       - name: Fetch Dependabot metadata
         id: meta
         uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2.5.0
-      - name: Enable auto-merge for non-major updates
-        if: ${{ steps.meta.outputs.update-type != 'version-update:semver-major' }}
-        run: gh pr merge --auto --squash "$PR_URL"
+      - name: Enable auto-merge
+        run: |
+          echo "Auto-merging $NAMES ($UPDATE_TYPE) — lands once required checks pass."
+          gh pr merge --auto --squash "$PR_URL"
         env:
+          NAMES: ${{ steps.meta.outputs.dependency-names }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
