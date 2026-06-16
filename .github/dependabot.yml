@@ -1,4 +1,6 @@
 version: 2
+# Non-major bumps auto-merge once required CI checks pass — see
+# .github/workflows/dependabot-auto-merge.yml. Majors open individually for manual review.
 updates:
   # Python deps (uv) — API
   - package-ecosystem: "pip"
