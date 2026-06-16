@@ -85,12 +85,15 @@ async def set_timezone(
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ContactSummary:
+    # No IntegrityError guard (unlike assign_profile, which can hit an FK violation
+    # on agent_profile_id): timezone is a plain Text column with no FK/unique
+    # constraint, and SetTimezoneRequest has already IANA-validated the value.
     contact = await contacts_repo.get_contact(db, contact_id)
     if contact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="contact not found")
     old = contact.timezone
-    contact = await contacts_repo.set_timezone(db, contact_id, body.timezone)
-    assert contact is not None  # just fetched it above under the same session
+    # set_timezone mutates this same session-cached instance; ignore its return value.
+    await contacts_repo.set_timezone(db, contact_id, body.timezone)
     await admin_audit.record(
         db,
         actor_email=actor,
