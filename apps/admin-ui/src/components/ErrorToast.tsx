@@ -13,7 +13,7 @@ export function ErrorToast() {
           key={t.id}
           role="alert"
           className={cn(
-            "rounded border p-3 text-sm shadow-md",
+            "rounded-xl border p-3.5 text-sm shadow-pop",
             t.tone === "error"
               ? "border-red-200 bg-red-50 text-red-800"
               : "border-blue-200 bg-blue-50 text-blue-800",
@@ -23,7 +23,7 @@ export function ErrorToast() {
             <span>{t.message}</span>
             <button
               aria-label="dismiss"
-              className="text-slate-400 hover:text-slate-600"
+              className="-mr-1 -mt-0.5 rounded p-0.5 text-lg leading-none opacity-70 transition-opacity hover:opacity-100"
               onClick={() => dismissToast(t.id)}
             >
               ×
@@ -31,7 +31,7 @@ export function ErrorToast() {
           </div>
           {t.tone === "error" ? (
             <button
-              className="mt-2 text-xs font-medium underline"
+              className="mt-2 text-xs font-semibold underline underline-offset-2"
               onClick={() => window.location.reload()}
             >
               Reload

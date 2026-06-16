@@ -1,8 +1,175 @@
 @import "tailwindcss";
 
-/* Load the legacy JS config (custom Inter font stack + shadow-card utility).
-   Tailwind v4 no longer auto-discovers tailwind.config.js. */
-@config "../tailwind.config.js";
+/* ──────────────────────────────────────────────────────────────────────────
+   USAN Admin — "Clinical Calm" design system
+   Refined operator console: warm-paper light theme + deep teal dark theme.
+   Self-hosted fonts (Fraunces display / Geist body / Geist Mono) are imported
+   from main.tsx so Vite bundles the woff2 (no runtime external requests).
+
+   Theming strategy: the app's existing code uses Tailwind's `slate` scale as its
+   single neutral ramp and `indigo`/`sky` as its accent. We REMAP those scales
+   (plus `white`) to runtime CSS variables that flip in `.dark`, so every page
+   adopts the new palette and dark mode with no per-file color churn. New/edited
+   code uses the semantic tokens below (bg-canvas, text-ink, bg-accent, …).
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* Class-based dark mode toggle (default v4 dark = prefers-color-scheme). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Type — distinctive, self-hosted. `--font-sans` also drives the base font. */
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-serif: "Fraunces Variable", ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Semantic color tokens → runtime vars (flip per theme below). */
+  --color-canvas: var(--c-canvas);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-ink: var(--c-ink);
+  --color-ink-strong: var(--c-ink-strong);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-accent: var(--c-accent);
+  --color-accent-strong: var(--c-accent-strong);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-accent-fg: var(--c-accent-fg);
+
+  /* Slightly softer, more modern radii. */
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.875rem;
+  --radius-2xl: 1.125rem;
+
+  /* Themed elevations. */
+  --shadow-card: var(--c-shadow-card);
+  --shadow-pop: var(--c-shadow-pop);
+}
+
+/* ── Light (default) ──────────────────────────────────────────────────────── */
+:root {
+  color-scheme: light;
+
+  --c-canvas: #faf8f2;
+  --c-surface: #ffffff;
+  --c-surface-2: #f3efe6;
+  --c-ink: #18221f;
+  --c-ink-strong: #0d1413;
+  --c-muted: #5e6a64;
+  /* faint #686e6a clears WCAG AA (4.5:1) on the warm surfaces; the lighter #8c958f failed. */
+  --c-faint: #686e6a;
+  --c-line: #e7e1d6;
+  --c-line-strong: #d7d0c3;
+  /* accent #0b6d6c clears AA for active-state text on accent-soft (5.27:1) and white-on-accent (6.14:1). */
+  --c-accent: #0b6d6c;
+  --c-accent-strong: #0b6463;
+  --c-accent-soft: #e1f1ef;
+  --c-accent-fg: #ffffff;
+  --c-shadow-card: 0 1px 2px 0 rgb(24 34 31 / 0.05), 0 1px 3px 0 rgb(24 34 31 / 0.07);
+  --c-shadow-pop: 0 14px 34px -10px rgb(24 34 31 / 0.20), 0 3px 10px -3px rgb(24 34 31 / 0.10);
+
+  /* Neutral ramp remap (slate → warm paper-to-ink). */
+  --color-slate-50: #faf8f2;
+  --color-slate-100: #f2eee4;
+  --color-slate-200: #e7e1d6;
+  --color-slate-300: #d7d0c3;
+  --color-slate-400: #99a29c;
+  --color-slate-500: #5e6a64;
+  --color-slate-600: #4d5852;
+  --color-slate-700: #3a4540;
+  --color-slate-800: #28302c;
+  --color-slate-900: #18221f;
+  --color-white: #ffffff;
+
+  /* Accent remap (indigo + sky → teal). */
+  --color-indigo-50: #e1f1ef;
+  --color-indigo-100: #c8e6e3;
+  --color-indigo-200: #a9d8d4;
+  --color-indigo-300: #6fbfba;
+  --color-indigo-400: #34a8a3;
+  --color-indigo-500: #0e7c7b;
+  --color-indigo-600: #0e7c7b;
+  --color-indigo-700: #0b6463;
+  --color-sky-600: #0e7c7b;
+  --color-sky-700: #0b6463;
+  --color-sky-800: #095150;
+}
+
+/* ── Dark ─────────────────────────────────────────────────────────────────── */
+.dark {
+  color-scheme: dark;
+
+  --c-canvas: #0e1513;
+  --c-surface: #151f1d;
+  --c-surface-2: #1c2724;
+  --c-ink: #ecefec;
+  --c-ink-strong: #ffffff;
+  --c-muted: #9fada8;
+  /* faint #818f8a clears AA (4.5:1) on dark surface/surface-2; #71817b failed there. */
+  --c-faint: #818f8a;
+  --c-line: #27322f;
+  --c-line-strong: #36433f;
+  --c-accent: #2bc4be;
+  --c-accent-strong: #46d6d0;
+  --c-accent-soft: #11302e;
+  --c-accent-fg: #06211f;
+  --c-shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.32), 0 1px 3px 0 rgb(0 0 0 / 0.42);
+  --c-shadow-pop: 0 18px 42px -10px rgb(0 0 0 / 0.62), 0 3px 10px -3px rgb(0 0 0 / 0.5);
+
+  /* Neutral ramp inverted (paper ↔ ink). */
+  --color-slate-50: #0e1513;
+  --color-slate-100: #1a2421;
+  --color-slate-200: #27322f;
+  --color-slate-300: #36433f;
+  --color-slate-400: #6f7e79;
+  --color-slate-500: #93a19c;
+  --color-slate-600: #aab6b1;
+  --color-slate-700: #c6d0cb;
+  --color-slate-800: #dde3df;
+  --color-slate-900: #ecefec;
+  --color-white: #151f1d;
+
+  /* Accent (brighter teal for dark surfaces). */
+  --color-indigo-50: #11302e;
+  --color-indigo-100: #16403d;
+  --color-indigo-200: #1d524e;
+  --color-indigo-300: #2bc4be;
+  --color-indigo-400: #2bc4be;
+  --color-indigo-500: #2bc4be;
+  --color-indigo-600: #46d6d0;
+  --color-indigo-700: #5fe0db;
+  --color-sky-600: #2bc4be;
+  --color-sky-700: #46d6d0;
+  --color-sky-800: #5fe0db;
+
+  /* Semantic colors tuned for dark (bg steps darken, text steps lighten). */
+  --color-red-50: #2a1413;
+  --color-red-100: #3a1a18;
+  --color-red-200: #4d211d;
+  --color-red-300: #5e2723;
+  --color-red-600: #f0766b;
+  --color-red-700: #f0766b;
+  --color-red-800: #f6a39b;
+  --color-amber-50: #271d0e;
+  --color-amber-100: #34290f;
+  --color-amber-200: #44360f;
+  --color-amber-300: #574616;
+  --color-amber-400: #d9a441;
+  --color-amber-500: #e0b252;
+  --color-amber-700: #e6c074;
+  --color-amber-800: #f0d699;
+  --color-amber-900: #f3deab;
+  --color-green-100: #16301f;
+  --color-green-700: #5dd08a;
+  --color-green-800: #88e0aa;
+  --color-blue-50: #10243a;
+  --color-blue-100: #16304a;
+  --color-blue-200: #1d3d59;
+  --color-blue-700: #6fb7f0;
+  --color-blue-800: #a6d2f5;
+}
 
 @layer base {
   html {
@@ -11,21 +178,64 @@
     text-rendering: optimizeLegibility;
   }
   body {
-    @apply bg-slate-50 text-slate-900;
+    @apply bg-canvas text-ink;
+  }
+
+  /* Distinctive, optical display type for the big titles. */
+  .font-display {
+    font-family: var(--font-serif);
+    font-optical-sizing: auto;
+    letter-spacing: -0.01em;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--c-accent) 26%, transparent);
+  }
+
+  /* Subtle, theme-aware scrollbars (WebKit). */
+  * {
+    scrollbar-color: var(--c-line-strong) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--c-line-strong);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--c-faint);
+    background-clip: content-box;
+  }
+}
+
+/* Ease the light⇄dark swap without animating layout-affecting props. */
+@media (prefers-reduced-motion: no-preference) {
+  body,
+  .theme-transition,
+  .theme-transition * {
+    transition:
+      background-color 0.25s ease,
+      border-color 0.25s ease,
+      color 0.2s ease,
+      fill 0.2s ease;
   }
 }
 
 /* {{variable}} / {slot} token highlight inside Monaco prompt editors. */
 .prompt-var-token {
-  color: #4f46e5;
-  background: #eef2ff;
+  color: var(--c-accent-strong);
+  background: var(--c-accent-soft);
   border-radius: 3px;
 }
 
-/* Unknown {{variable}} (not in the fetched catalog): warn amber, distinct from the
-   indigo known-token highlight. Non-blocking — the field still saves. */
+/* Unknown {{variable}} (not in the fetched catalog): warn amber, distinct from
+   the accent known-token highlight. Non-blocking — the field still saves. */
 .prompt-var-token--unknown {
-  color: #b45309;
-  background: #fef3c7;
+  color: var(--color-amber-700);
+  background: var(--color-amber-100);
   border-radius: 3px;
 }

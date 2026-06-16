@@ -29,7 +29,7 @@ export function ProfilesListPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 text-slate-600">
+      <div className="flex items-center gap-2 text-muted">
         <Spinner /> Loading profiles…
       </div>
     );
@@ -44,8 +44,8 @@ export function ProfilesListPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Agent profiles</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-display text-2xl text-ink-strong">Agent profiles</h1>
         {isAdmin ? <Button onClick={() => openNew()}>New profile</Button> : null}
       </div>
 

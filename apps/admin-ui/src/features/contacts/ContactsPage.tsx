@@ -19,12 +19,12 @@ export function ContactsPage() {
   const assign = useAssignProfile();
 
   if (!isAdmin) {
-    return <p className="text-sm text-slate-600">Admins only.</p>;
+    return <p className="text-sm text-muted">Admins only.</p>;
   }
 
   if (contacts.isLoading || profiles.isLoading) {
     return (
-      <div className="flex items-center gap-2 text-slate-600">
+      <div className="flex items-center gap-2 text-muted">
         <Spinner /> Loading contacts…
       </div>
     );
@@ -47,7 +47,9 @@ export function ContactsPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Contacts</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-display text-2xl text-ink-strong">Contacts</h1>
+      </div>
       <Table>
         <Thead>
           <Tr>
@@ -59,7 +61,7 @@ export function ContactsPage() {
         <Tbody>
           {contactList.length === 0 ? (
             <Tr>
-              <Td className="text-slate-500" colSpan={3}>
+              <Td className="text-faint" colSpan={3}>
                 No contacts.
               </Td>
             </Tr>
@@ -101,7 +103,7 @@ export function ContactsPage() {
         </Tbody>
       </Table>
 
-      <div className="flex items-center gap-3 text-sm text-slate-600">
+      <div className="flex items-center gap-3 text-sm text-muted">
         <Button
           variant="secondary"
           disabled={!hasPrev}

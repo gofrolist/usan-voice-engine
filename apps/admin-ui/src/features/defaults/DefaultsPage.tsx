@@ -34,7 +34,7 @@ function DirectionCard({ state, eligible, canEdit, pending, onSelect }: Directio
   const { direction, default_profile: current, ineligible, ineligible_reason: reason } = state;
   const effective = current !== null && current.eligible;
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-card">
+    <div className="rounded-xl border border-line bg-surface p-4 shadow-card">
       <div className="flex items-center gap-2">
         <h2 className="text-sm font-semibold">{DIRECTION_LABEL[direction]}</h2>
         {current ? (
@@ -174,15 +174,15 @@ export function DefaultsPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Default profiles</h1>
+      <h1 className="font-display text-2xl text-ink-strong">Default profiles</h1>
       {!isAdmin ? (
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-muted">
           Read-only (viewer role). Only admins can change defaults.
         </p>
       ) : null}
 
       {/* Plain-language resolution order (FR-017), highest precedence first. */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-card">
+      <div className="rounded-xl border border-line bg-surface p-4 shadow-card">
         <h2 className="text-sm font-semibold">Resolution order</h2>
         <p className="mt-1 text-xs text-slate-500">
           For every call, the configuration is chosen by the first rule that applies:

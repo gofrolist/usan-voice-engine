@@ -118,7 +118,9 @@ export function CallsPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Calls</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-display text-2xl text-ink-strong">Calls</h1>
+      </div>
 
       <div className="flex flex-wrap items-end gap-3">
         <div>
@@ -200,7 +202,7 @@ export function CallsPage() {
       </div>
 
       {calls.isLoading ? (
-        <div className="flex items-center gap-2 text-slate-600">
+        <div className="flex items-center gap-2 text-muted">
           <Spinner /> Loading calls…
         </div>
       ) : calls.isError ? (
@@ -225,7 +227,7 @@ export function CallsPage() {
             <Tbody>
               {list.length === 0 ? (
                 <Tr>
-                  <Td className="text-slate-500" colSpan={8}>
+                  <Td className="text-muted" colSpan={8}>
                     No calls match these filters
                   </Td>
                 </Tr>
@@ -239,7 +241,7 @@ export function CallsPage() {
                   <Td className="whitespace-nowrap text-xs">{fmtDate(c.created_at)}</Td>
                   <Td>
                     <div className="font-medium text-slate-900">{c.contact_name ?? "—"}</div>
-                    <div className="font-mono text-xs text-slate-500">{c.masked_phone}</div>
+                    <div className="font-mono text-xs text-faint">{c.masked_phone}</div>
                   </Td>
                   <Td className="text-xs">{c.direction}</Td>
                   <Td>{originBadge(c)}</Td>

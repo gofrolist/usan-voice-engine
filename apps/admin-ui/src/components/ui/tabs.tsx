@@ -26,10 +26,10 @@ export function Tabs({
           aria-selected={it.key === active}
           onClick={() => onSelect(it.key)}
           className={cn(
-            "rounded-lg px-3 py-1.5 text-left text-sm",
+            "rounded-lg px-3 py-1.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
             it.key === active
-              ? "bg-indigo-50 font-medium text-indigo-700"
-              : "text-slate-600 hover:bg-slate-100",
+              ? "bg-accent-soft font-medium text-accent"
+              : "text-muted hover:bg-surface-2 hover:text-ink",
           )}
         >
           {it.label}
