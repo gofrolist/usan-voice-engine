@@ -946,3 +946,40 @@ class FamilyReport(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class TenantScoped:
+    """Mixin adding the tenant FK. Applied to every tenant-owned model in Tasks 4-5.
+
+    The column is added to the DB by migrations 0031/0032; this mixin keeps the ORM
+    mapping in sync. organization_id is filled by a DB column DEFAULT sourced from the
+    tenant context on INSERT (see the migrations' SET DEFAULT) — so repositories never
+    set it and existing insert code is unchanged — and RLS WITH CHECK rejects any
+    cross-org mismatch. The server_default below mirrors that DDL so SQLAlchemy omits
+    the column from INSERTs and reads it back via RETURNING.
+    """
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id"),
+        nullable=False,
+        index=True,
+        server_default=text(
+            "COALESCE(current_setting('app.current_org', true)::uuid,"
+            " (SELECT id FROM organizations WHERE slug = 'usan'))"
+        ),
+    )
