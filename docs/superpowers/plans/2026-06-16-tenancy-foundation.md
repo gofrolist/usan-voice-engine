@@ -674,10 +674,10 @@ def test_rls_with_check_blocks_wrong_org_insert(async_database_url):
 Run: `cd apps/api && uv run pytest tests/test_rls_isolation.py -v`
 Expected: PASS (cross-tenant read blocked even with no app filter; fail-closed with no context; WITH CHECK blocks wrong-org insert). **If `test_rls_blocks_cross_tenant_reads` sees both rows, RLS is being bypassed — confirm the test connects as `usan_app` and that 0029 set `NOBYPASSRLS`.**
 
-- [ ] **Step 5: Run the full suite (app under RLS, default-org context)**
+- [ ] **Step 5: Run the full suite**
 
 Run: `cd apps/api && uv run pytest -q`
-Expected: PASS. All existing contacts are in the default org and the app sets default-org context via `get_db`, so behavior is unchanged. A failure pinpoints a contacts query path not going through `get_db`'s context — fix it (a real prod bug this catches).
+Expected: PASS. **Harness note (important):** the `client`/`sso_client` fixtures override `get_db` with `_override_get_db`, which yields a session from the **superuser `usan`** engine and does NOT set tenant context — so endpoint tests *bypass* RLS (superusers ignore it) and pass unchanged. That is expected; RLS is proven by `test_rls_isolation.py` (which connects as `usan_app`), not by the endpoint suite. The paths that DO run as `usan_app` in tests are the process-global-engine paths (BackgroundTasks like `flush_pending_sms`, and the workers); if any such path lacks context it fails closed here — that's a real prod bug, fixed in Task 6. Prod request handlers are covered because the real `get_db` (Task 3) sets context for every `Depends(get_db)` handler.
 
 - [ ] **Step 6: Commit**
 
@@ -786,7 +786,7 @@ def test_every_tenant_table_is_rls_enabled_and_fails_closed(async_database_url, 
 - [ ] **Step 4: Run isolation + full suite**
 
 Run: `cd apps/api && uv run pytest tests/test_rls_isolation.py -v` → PASS.
-Run: `cd apps/api && uv run pytest -q` → PASS. **Failures here are the high-value catch:** any query path not running under `get_db`'s context now returns empty/raises. Each is a real prod risk — fix by routing that path through a context-bearing session (or, for a background worker, Task 6).
+Run: `cd apps/api && uv run pytest -q` → PASS. **Same harness note as Task 4 Step 5:** endpoint tests bypass RLS (superuser `usan` via `_override_get_db`), so they pass unchanged; RLS is proven by `test_rls_isolation.py` (as `usan_app`). The high-value catch here is any **process-global-engine / BackgroundTask** path running as `usan_app` without context — it now fails closed. Triage each: it's a non-`get_db` session site that Task 6 must route through `session_in_default_org()`. Note which tests fail so Task 6 covers exactly those paths.
 
 - [ ] **Step 5: Commit**
 
@@ -807,8 +807,8 @@ git commit -m "feat(api): organization_id + RLS on all remaining tenant tables"
 
 - [ ] **Step 1: Identify the worker session sites**
 
-Run: `cd apps/api && grep -rn "get_session_factory\|async_sessionmaker" src/usan_api | grep -viE "db/session.py|tenant_context.py"`
-Expected hits: the schedule orchestrator loop, the retry/dial poller, the webhook delivery worker, and `family_report_job`. Each opens a session per unit of work — that's where context must be set.
+Run: `cd apps/api && grep -rn "get_session_factory\|async_sessionmaker\|get_engine(" src/usan_api | grep -viE "db/session.py|tenant_context.py"`
+Expected hits: the schedule orchestrator loop, the retry/dial poller, the webhook delivery worker, `family_report_job`, and **any BackgroundTask that uses the process-global engine (e.g. `flush_pending_sms`)**. **Completeness is the security property here:** these non-`get_db` session sites are the ONLY prod paths that bypass the `get_db` context chokepoint, so every one must set context. Cross-check this grep against the exact set of tests that failed-closed in Task 4 Step 5 / Task 5 Step 4 — every failing path must appear here and get fixed. Each opens a session per unit of work — that's where context must be set.
 
 - [ ] **Step 2: Write a worker-context test**
 
