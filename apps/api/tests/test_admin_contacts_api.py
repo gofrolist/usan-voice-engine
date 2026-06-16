@@ -5,6 +5,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
+from usan_api.admin_session import SESSION_COOKIE_NAME, issue_session
+from usan_api.db.base import AdminRole
+from usan_api.settings import get_settings
+
 
 async def _seed_contact(async_database_url: str, name: str, phone: str) -> str:
     eid = str(uuid.uuid4())
@@ -21,6 +25,22 @@ async def _seed_contact(async_database_url: str, name: str, phone: str) -> str:
     finally:
         await engine.dispose()
     return eid
+
+
+async def _seed_admin(async_database_url: str, email: str, role: str) -> None:
+    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO admin_users (email, role, added_by) "
+                    "VALUES (:e, CAST(:r AS admin_role), 'test') "
+                    "ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role"
+                ),
+                {"e": email.lower(), "r": role},
+            )
+    finally:
+        await engine.dispose()
 
 
 def test_contacts_requires_session(client):
@@ -90,3 +110,48 @@ def test_assign_profile_audit_detail_has_no_phi(client, admin_session, async_dat
     assert "ada" not in blob
     assert "lovelace" not in blob
     assert "9999" not in blob
+
+
+def test_summary_includes_timezone(client, admin_session, async_database_url):
+    eid = asyncio.run(_seed_contact(async_database_url, "Tz Shown", "+15551250001"))
+    listed = client.get("/v1/admin/contacts").json()
+    me = next(e for e in listed if e["id"] == eid)
+    assert me["timezone"] == "America/New_York"
+
+
+def test_set_timezone_happy_path_and_audit(client, admin_session, async_database_url):
+    eid = asyncio.run(_seed_contact(async_database_url, "Tz Set", "+15551250002"))
+    r = client.put(f"/v1/admin/contacts/{eid}/timezone", json={"timezone": "America/Chicago"})
+    assert r.status_code == 200
+    assert r.json()["timezone"] == "America/Chicago"
+    listed = client.get("/v1/admin/contacts").json()
+    assert next(e for e in listed if e["id"] == eid)["timezone"] == "America/Chicago"
+    rows = client.get("/v1/admin/audit?action=contact.set_timezone").json()
+    entry = next(e for e in rows if e["entity_id"] == eid)
+    assert entry["detail"] == {"old": "America/New_York", "new": "America/Chicago"}
+
+
+def test_set_timezone_invalid_iana_422_leaves_value_unchanged(
+    client, admin_session, async_database_url
+):
+    eid = asyncio.run(_seed_contact(async_database_url, "Tz Bad", "+15551250003"))
+    r = client.put(f"/v1/admin/contacts/{eid}/timezone", json={"timezone": "Mars/Phobos"})
+    assert r.status_code == 422
+    listed = client.get("/v1/admin/contacts").json()
+    assert next(e for e in listed if e["id"] == eid)["timezone"] == "America/New_York"
+
+
+def test_set_timezone_unknown_contact_404(client, admin_session):
+    r = client.put(
+        f"/v1/admin/contacts/{uuid.uuid4()}/timezone", json={"timezone": "America/Chicago"}
+    )
+    assert r.status_code == 404
+
+
+def test_viewer_cannot_set_timezone(client, async_database_url):
+    eid = asyncio.run(_seed_contact(async_database_url, "Tz Viewer", "+15551250004"))
+    asyncio.run(_seed_admin(async_database_url, "viewer@example.com", "viewer"))
+    token = issue_session("viewer@example.com", AdminRole.VIEWER, get_settings())
+    client.cookies.set(SESSION_COOKIE_NAME, token)
+    r = client.put(f"/v1/admin/contacts/{eid}/timezone", json={"timezone": "America/Chicago"})
+    assert r.status_code == 403
