@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from typing import Any
 
+from loguru import logger
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -38,6 +39,14 @@ def _install_default_org_context(engine: AsyncEngine) -> None:
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute("SELECT set_config('app.current_org', default_org_id()::text, false)")
+        except Exception:  # noqa: BLE001 - never let a connect hook crash every connection
+            # default_org_id() is created by migration 0031. During a partial migration
+            # (app deployed before `alembic upgrade head` finishes) it may not exist yet —
+            # don't poison every new connection. Roll back the aborted statement and proceed
+            # with NO baseline context: tenant tables then fail closed under RLS (safe, no
+            # leak) until migrations complete. Logged so the window is visible.
+            dbapi_connection.rollback()
+            logger.warning("Could not set default-org context on connect (migrations behind?)")
         finally:
             cursor.close()
 

@@ -11,8 +11,6 @@ resolver with "the authenticated user's org / act-as target".
 """
 
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from usan_api.repositories.organizations import get_org_by_slug
 from usan_api.settings import get_settings
 
+# Process-lifetime cache: the default org is seeded once (migration 0030) and its id is
+# immutable in P1, so caching is safe. A slug/id change requires a process restart to take
+# effect; _clear_default_org_cache() is test-only (per-test isolation teardown).
 _default_org_id: uuid.UUID | None = None
 
 
@@ -35,7 +36,7 @@ async def resolve_default_org_id(db: AsyncSession) -> uuid.UUID:
 
 
 def _clear_default_org_cache() -> None:
-    """Reset the cached default-org id (used by test teardown for isolation)."""
+    """Reset the cached default-org id (TEST-ONLY: per-test isolation teardown)."""
     global _default_org_id
     _default_org_id = None
 
@@ -46,17 +47,3 @@ async def set_tenant_context(db: AsyncSession, org_id: uuid.UUID) -> None:
         text("SELECT set_config('app.current_org', :org, true)"),
         {"org": str(org_id)},
     )
-
-
-@asynccontextmanager
-async def session_in_default_org() -> AsyncIterator[AsyncSession]:
-    """A session with tenant context pre-set to the default org, for background workers.
-
-    P1 single-org behavior. P2 will replace this with per-org iteration (Open Q1).
-    """
-    from usan_api.db.session import get_session_factory
-
-    async with get_session_factory()() as session:
-        org_id = await resolve_default_org_id(session)
-        await set_tenant_context(session, org_id)
-        yield session
