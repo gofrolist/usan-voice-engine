@@ -14,6 +14,9 @@ def test_custom_variable_columns_and_defaults():
         "phi",
         "created_at",
         "updated_at",
+        # Added by the TenantScoped mixin (migration 0032): every tenant-owned table
+        # carries organization_id for RLS isolation.
+        "organization_id",
     }
     assert not cols["name"].nullable
     assert cols["name"].unique is True
@@ -21,3 +24,7 @@ def test_custom_variable_columns_and_defaults():
     assert cols["description"].server_default is not None
     assert cols["example"].server_default is not None
     assert cols["updated_at"].onupdate is not None
+    # The tenant column is NOT NULL and defaults from the request context (see
+    # TenantScoped / migration 0032's COALESCE(... , default_org_id()) DEFAULT).
+    assert not cols["organization_id"].nullable
+    assert cols["organization_id"].server_default is not None

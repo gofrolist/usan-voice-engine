@@ -30,7 +30,32 @@ def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     return [member.value for member in enum_cls]
 
 
-class Contact(Base):
+class TenantScoped:
+    """Mixin adding the tenant FK. Applied to every tenant-owned model in Tasks 4-5.
+
+    The column is added to the DB by migrations 0031/0032; this mixin keeps the ORM
+    mapping in sync. organization_id is filled by a DB column DEFAULT sourced from the
+    tenant context on INSERT (see the migrations' SET DEFAULT) — so repositories never
+    set it and existing insert code is unchanged — and RLS WITH CHECK rejects any
+    cross-org mismatch. The server_default below mirrors that DDL so SQLAlchemy omits
+    the column from INSERTs and reads it back via RETURNING.
+    """
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id"),
+        nullable=False,
+        index=True,
+        # Mirrors the DB column DEFAULT set by migrations 0031/0032. Postgres forbids a
+        # subquery in a DEFAULT expression, so the default-org lookup is wrapped in the
+        # default_org_id() SQL function (created in 0031). COALESCE prefers the request
+        # context; falls back to the default org for context-free (superuser) seeds.
+        server_default=text(
+            "COALESCE(current_setting('app.current_org', true)::uuid, default_org_id())"
+        ),
+    )
+
+
+class Contact(Base, TenantScoped):
     __tablename__ = "contacts"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -60,7 +85,7 @@ class Contact(Base):
     )
 
 
-class DNCEntry(Base):
+class DNCEntry(Base, TenantScoped):
     __tablename__ = "dnc_list"
 
     phone_e164: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -70,7 +95,7 @@ class DNCEntry(Base):
     )
 
 
-class Call(Base):
+class Call(Base, TenantScoped):
     __tablename__ = "calls"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -132,7 +157,7 @@ class Call(Base):
     )
 
 
-class Transcript(Base):
+class Transcript(Base, TenantScoped):
     __tablename__ = "transcripts"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -150,7 +175,7 @@ class Transcript(Base):
     )
 
 
-class WellnessLog(Base):
+class WellnessLog(Base, TenantScoped):
     __tablename__ = "wellness_logs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -169,7 +194,7 @@ class WellnessLog(Base):
     )
 
 
-class MedicationLog(Base):
+class MedicationLog(Base, TenantScoped):
     __tablename__ = "medication_logs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -187,7 +212,7 @@ class MedicationLog(Base):
     )
 
 
-class MedicationReminder(Base):
+class MedicationReminder(Base, TenantScoped):
     """A pending re-ask for a medication reported NOT taken (0020, US3).
 
     State machine: not-taken → ``pending`` (attempt_count=0); each repeated not-taken
@@ -223,7 +248,7 @@ class MedicationReminder(Base):
     )
 
 
-class PersonalFact(Base):
+class PersonalFact(Base, TenantScoped):
     """A durable, categorized fact about an contact (0021, US4).
 
     Captured by the ``record_personal_fact`` tool (``source='contact_stated'``) or the
@@ -259,7 +284,7 @@ class PersonalFact(Base):
     )
 
 
-class ConversationSummary(Base):
+class ConversationSummary(Base, TenantScoped):
     """A per-call carry-forward recap (0021, US4).
 
     One row per completed call (``call_id`` is unique → the summarization trigger is
@@ -291,7 +316,7 @@ class ConversationSummary(Base):
     )
 
 
-class WellbeingSurveyResult(Base):
+class WellbeingSurveyResult(Base, TenantScoped):
     """A structured monthly wellbeing survey outcome (0023, US6).
 
     One row per contact per calendar month — a unique ``(contact_id, period_month)`` (migration
@@ -321,7 +346,7 @@ class WellbeingSurveyResult(Base):
     )
 
 
-class ActivityHistory(Base):
+class ActivityHistory(Base, TenantScoped):
     """Per-contact record of mood-boosting activities used (0023, US6).
 
     The activity catalog itself is CODE (``activities_catalog.py``); this table only tracks
@@ -346,7 +371,7 @@ class ActivityHistory(Base):
     )
 
 
-class TurnMetrics(Base):
+class TurnMetrics(Base, TenantScoped):
     __tablename__ = "turn_metrics"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -367,7 +392,7 @@ class TurnMetrics(Base):
     )
 
 
-class CallMetrics(Base):
+class CallMetrics(Base, TenantScoped):
     __tablename__ = "call_metrics"
 
     call_id: Mapped[uuid.UUID] = mapped_column(
@@ -409,7 +434,7 @@ class CallMetrics(Base):
     )
 
 
-class AgentProfile(Base):
+class AgentProfile(Base, TenantScoped):
     __tablename__ = "agent_profiles"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -455,7 +480,7 @@ class AgentProfile(Base):
     )
 
 
-class AgentProfileVersion(Base):
+class AgentProfileVersion(Base, TenantScoped):
     __tablename__ = "agent_profile_versions"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -476,6 +501,8 @@ class AgentProfileVersion(Base):
 
 
 class AdminUser(Base):
+    """Global operator allow-list — NOT tenant-scoped in P1; gains organization_id in P2."""
+
     __tablename__ = "admin_users"
 
     email: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -495,7 +522,7 @@ class AdminUser(Base):
     )
 
 
-class AdminAuditLog(Base):
+class AdminAuditLog(Base, TenantScoped):
     """Append-only audit trail for admin/operator mutations.
 
     ``actor_email`` is normally the SSO-authenticated admin's email. The
@@ -522,7 +549,7 @@ class AdminAuditLog(Base):
     )
 
 
-class FollowUpFlag(Base):
+class FollowUpFlag(Base, TenantScoped):
     __tablename__ = "follow_up_flags"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -554,7 +581,7 @@ class FollowUpFlag(Base):
     )
 
 
-class CallbackRequest(Base):
+class CallbackRequest(Base, TenantScoped):
     __tablename__ = "callback_requests"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -583,7 +610,7 @@ class CallbackRequest(Base):
     )
 
 
-class SmsMessage(Base):
+class SmsMessage(Base, TenantScoped):
     __tablename__ = "sms_messages"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -622,7 +649,7 @@ class SmsMessage(Base):
     )
 
 
-class CallSchedule(Base):
+class CallSchedule(Base, TenantScoped):
     __tablename__ = "call_schedules"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -670,7 +697,7 @@ class CallSchedule(Base):
     )
 
 
-class CallBatch(Base):
+class CallBatch(Base, TenantScoped):
     __tablename__ = "call_batches"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -707,7 +734,7 @@ class CallBatch(Base):
     )
 
 
-class CallBatchTarget(Base):
+class CallBatchTarget(Base, TenantScoped):
     __tablename__ = "call_batch_targets"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -749,7 +776,7 @@ class CallBatchTarget(Base):
     )
 
 
-class WebhookEndpoint(Base):
+class WebhookEndpoint(Base, TenantScoped):
     __tablename__ = "webhook_endpoints"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -781,7 +808,7 @@ class WebhookEndpoint(Base):
     )
 
 
-class WebhookDelivery(Base):
+class WebhookDelivery(Base, TenantScoped):
     __tablename__ = "webhook_deliveries"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -814,7 +841,7 @@ class WebhookDelivery(Base):
     )
 
 
-class CustomVariable(Base):
+class CustomVariable(Base, TenantScoped):
     """Operator-declared prompt variable (catalog tier ``custom``, migration 0015).
 
     Definitions are documentation/UX only — values arrive per call via
@@ -845,7 +872,7 @@ class CustomVariable(Base):
     )
 
 
-class FamilyContact(Base):
+class FamilyContact(Base, TenantScoped):
     """A person linked to an contact who can send tasks and receive alerts/reports (0019, US2).
 
     No ondelete on contact_id (a contact's context outlives an contact row change, like
@@ -880,7 +907,7 @@ class FamilyContact(Base):
     )
 
 
-class FamilyTask(Base):
+class FamilyTask(Base, TenantScoped):
     """A short instruction from a family contact to convey to the contact then close (0019, US2).
 
     State machine: open → delivered → closed; open → needs_review (operator) → open/closed.
@@ -916,7 +943,7 @@ class FamilyTask(Base):
     status_updated_by: Mapped[str | None] = mapped_column(Text)
 
 
-class FamilyReport(Base):
+class FamilyReport(Base, TenantScoped):
     """A generated monthly per-contact status-and-trends report (0025, US8).
 
     One row per contact per calendar month — unique ``(contact_id, period_month)`` makes the
@@ -944,5 +971,22 @@ class FamilyReport(Base):
     )
     model_version: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class Organization(Base):
+    """The tenant anchor table — global, not itself tenant-scoped (no TenantScoped mixin)."""
+
+    __tablename__ = "organizations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

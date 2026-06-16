@@ -62,3 +62,9 @@ output "grafana_ro_password" {
   value       = random_password.grafana_ro.result
   sensitive   = true
 }
+
+output "usan_app_password" {
+  description = "Generated usan_app (RLS-subject) DB password. Read: terraform output -raw usan_app_password — set it in the prod DATABASE_URL (the app MUST connect as usan_app, not usan, for RLS to apply)."
+  value       = random_password.usan_app.result
+  sensitive   = true
+}

@@ -62,6 +62,25 @@ def gauge_value(gauge) -> float:
     return 0.0
 
 
+async def _set_app_role_password(super_url: str) -> None:
+    """Give the migration-created usan_app role a known login password.
+
+    usan_app is created by migration 0029 with LOGIN but no password (secrets never
+    live in migrations). The app-under-test (and the RLS isolation suite) connect as
+    this RLS-subject role, so the test harness sets a known password here. Runs as the
+    superuser url (asyncpg fallback — psycopg v3 is not installed in this env).
+    """
+    eng = create_async_engine(
+        super_url.replace("postgresql://", "postgresql+asyncpg://", 1),
+        poolclass=NullPool,
+    )
+    try:
+        async with eng.begin() as conn:
+            await conn.execute(text("ALTER ROLE usan_app WITH LOGIN PASSWORD 'usan_app'"))
+    finally:
+        await eng.dispose()
+
+
 @pytest.fixture(scope="session")
 def database_url() -> str:
     with PostgresContainer(
@@ -85,6 +104,10 @@ def database_url() -> str:
             env=env,
             check=True,
         )
+        # usan_app is created by migration 0029 with LOGIN but no password (secrets
+        # never live in migrations). Give it a known test password so the
+        # app-under-test (and the isolation suite) connect as the RLS-subject role.
+        asyncio.run(_set_app_role_password(url))
         yield url
 
 
@@ -93,10 +116,34 @@ def async_database_url(database_url: str) -> str:
     return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
+@pytest.fixture
+def app_role_password(database_url: str) -> None:
+    """Ensure usan_app has its known login password right before a test connects as it.
+
+    The session-scoped `database_url` fixture sets the password once. But the migration
+    round-trip tests (test_webhook_migration, test_batch_migration, test_ops_queue_migration,
+    test_custom_variables_migration) downgrade below 0029 and re-upgrade — recreating
+    usan_app *passwordless* (migrations carry no secrets). Any later test that connects as
+    usan_app (the RLS isolation suite) would then hit "password authentication failed".
+    Re-applying the idempotent ALTER ROLE here makes those tests order-independent.
+    """
+    asyncio.run(_set_app_role_password(database_url))
+
+
+@pytest.fixture(scope="session")
+def app_database_url(database_url: str) -> str:
+    """The usan_app (non-superuser, RLS-subject) DSN, derived from the superuser url."""
+    return database_url.replace("usan:usan@", "usan_app:usan_app@", 1)
+
+
 # Every table a `client` test may touch, wiped as one statement. RESTART IDENTITY
 # CASCADE so dependent rows (e.g. webhook_deliveries -> webhook_endpoints) go too.
 _TRUNCATE_ALL = (
-    "TRUNCATE custom_variables, webhook_deliveries, webhook_endpoints, "
+    "TRUNCATE transcripts, wellness_logs, medication_logs, medication_reminders, "
+    "personal_facts, conversation_summaries, wellbeing_survey_results, "
+    "activity_history, turn_metrics, call_metrics, "
+    "family_contacts, family_tasks, family_reports, "
+    "custom_variables, webhook_deliveries, webhook_endpoints, "
     "call_batch_targets, call_batches, call_schedules, "
     "agent_profile_versions, agent_profiles, admin_audit_log, "
     "admin_users, follow_up_flags, callback_requests, sms_messages, "
@@ -143,8 +190,11 @@ def _routed_app() -> FastAPI:
 
 
 @pytest.fixture
-def client(database_url: str, async_database_url: str, monkeypatch) -> TestClient:
-    monkeypatch.setenv("DATABASE_URL", database_url)
+def client(
+    database_url: str, async_database_url: str, app_database_url: str, monkeypatch
+) -> TestClient:
+    # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
+    monkeypatch.setenv("DATABASE_URL", app_database_url)
     monkeypatch.setenv("LIVEKIT_API_KEY", "key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
@@ -183,6 +233,9 @@ def client(database_url: str, async_database_url: str, monkeypatch) -> TestClien
         asyncio.run(_truncate_and_dispose(test_engine))
         app.dependency_overrides.pop(get_db, None)
         get_settings.cache_clear()
+        from usan_api.tenant_context import _clear_default_org_cache
+
+        _clear_default_org_cache()
 
 
 @pytest.fixture
@@ -191,9 +244,12 @@ def operator_headers() -> dict[str, str]:
 
 
 @pytest.fixture
-def sso_client(database_url: str, async_database_url: str, monkeypatch) -> TestClient:
+def sso_client(
+    database_url: str, async_database_url: str, app_database_url: str, monkeypatch
+) -> TestClient:
     """Like `client`, but with Google SSO configured (for /v1/auth flow tests)."""
-    monkeypatch.setenv("DATABASE_URL", database_url)
+    # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
+    monkeypatch.setenv("DATABASE_URL", app_database_url)
     monkeypatch.setenv("LIVEKIT_API_KEY", "key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
@@ -230,6 +286,9 @@ def sso_client(database_url: str, async_database_url: str, monkeypatch) -> TestC
         asyncio.run(_truncate_and_dispose(test_engine))
         app.dependency_overrides.pop(get_db, None)
         get_settings.cache_clear()
+        from usan_api.tenant_context import _clear_default_org_cache
+
+        _clear_default_org_cache()
 
 
 async def _seed_admin_user_async(async_database_url: str, email: str, role: str) -> None:

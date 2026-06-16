@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, Request, Response
 from loguru import logger
 from pydantic import BaseModel
+from sqlalchemy import text
 from starlette.middleware.base import RequestResponseEndpoint
 
 from usan_api import (
@@ -86,11 +87,42 @@ async def _check_contact_name_shadow() -> None:
         logger.exception("Failed to run the contact_name shadow check")
 
 
+async def _check_rls_role_capability() -> None:
+    """Deploy-time guard (P1 tenancy): warn LOUDLY if the app's DB role BYPASSES Row-Level
+    Security — tenant isolation is silently void if the role is a superuser or has
+    BYPASSRLS (e.g. prod DATABASE_URL still points at ``usan`` / cloudsqlsuperuser instead
+    of the non-superuser ``usan_app``). Best-effort; logs CRITICAL, never crashes startup.
+    Intentionally a log, not a hard failure: P1 ships behavior-preserving with prod still
+    on ``usan`` until the DATABASE_URL cutover, so a raise would break the deploy."""
+    try:
+        async with get_session_factory()() as db:
+            row = (
+                await db.execute(
+                    text(
+                        "SELECT rolname, rolsuper, rolbypassrls FROM pg_roles "
+                        "WHERE rolname = current_user"
+                    )
+                )
+            ).one()
+        if row[1] or row[2]:
+            logger.critical(
+                "DB role {u} BYPASSES Row-Level Security (rolsuper={s}, rolbypassrls={b}) — "
+                "tenant isolation is NOT enforced. Point the API DATABASE_URL at the "
+                "non-superuser usan_app role.",
+                u=row[0],
+                s=row[1],
+                b=row[2],
+            )
+    except Exception:  # noqa: BLE001 - startup must not crash on a check failure
+        logger.exception("Failed to run the RLS role-capability check")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     await _seed_admin_allowlist(settings)
     await _check_contact_name_shadow()
+    await _check_rls_role_capability()
     stop = asyncio.Event()
     poller_tasks: list[asyncio.Task[None]] = []
     if settings.retry_poller_enabled:

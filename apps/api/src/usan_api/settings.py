@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
     database_url: SecretStr = Field(..., min_length=1, alias="DATABASE_URL")
+    # Slug of the implicit default organization (multi-tenant foundation P1). The
+    # tenant-context resolver maps every request to this single seeded org until P2
+    # introduces per-user org resolution; behavior is unchanged with one org.
+    default_org_slug: str = Field(default="usan", alias="DEFAULT_ORG_SLUG")
     livekit_api_key: str = Field(..., min_length=1, alias="LIVEKIT_API_KEY")
     livekit_api_secret: str = Field(..., min_length=32, alias="LIVEKIT_API_SECRET")
     livekit_url: str = Field(..., min_length=1, alias="LIVEKIT_URL")
