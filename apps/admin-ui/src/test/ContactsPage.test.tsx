@@ -97,4 +97,15 @@ describe("ContactsPage timezone editor", () => {
     expect((select as HTMLSelectElement).value).toBe("Europe/London");
     expect(screen.getByRole("option", { name: "Europe/London" })).toBeInTheDocument();
   });
+
+  it("surfaces a failed timezone update as a toast", async () => {
+    const { ApiError } = await import("../lib/api");
+    putMock.mockRejectedValue(new ApiError(422, "unknown IANA timezone"));
+    renderPage();
+    const select = await screen.findByLabelText("Timezone for Edna Moore");
+    await userEvent.selectOptions(select, "America/Chicago");
+    await waitFor(() =>
+      expect(pushToastMock).toHaveBeenCalledWith("unknown IANA timezone", undefined),
+    );
+  });
 });
