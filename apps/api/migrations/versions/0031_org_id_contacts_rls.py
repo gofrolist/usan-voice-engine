@@ -33,6 +33,9 @@ def upgrade() -> None:
         "$$ SELECT id FROM organizations WHERE slug = 'usan' $$"
     )
     op.add_column("contacts", sa.Column("organization_id", sa.Uuid(), nullable=True))
+    # The UPDATE is a full-table scan + rewrite under ACCESS EXCLUSIVE. Acceptable while
+    # prod row counts are small (pre-RetellAI cutover); for a >~500k-row table switch to
+    # a batched backfill with a lock_timeout before running this in prod.
     # Backfill from a hardcoded constant (no user input); S608 is a false positive.
     backfill = f"UPDATE contacts SET organization_id = {_DEFAULT_ORG} WHERE organization_id IS NULL"  # noqa: S608
     op.execute(backfill)

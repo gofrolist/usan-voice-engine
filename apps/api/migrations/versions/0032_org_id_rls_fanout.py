@@ -55,6 +55,10 @@ _ORG_DEFAULT_EXPR = "COALESCE(current_setting('app.current_org', true)::uuid, de
 def upgrade() -> None:
     for t in _TABLES:
         op.add_column(t, sa.Column("organization_id", sa.Uuid(), nullable=True))
+        # The UPDATE is a full-table scan + rewrite under ACCESS EXCLUSIVE, run once per
+        # table in this loop. Acceptable while prod row counts are small (pre-RetellAI
+        # cutover). If a table ever holds >~500k rows (calls/transcripts/turn_metrics),
+        # switch to a batched backfill with a lock_timeout before running this in prod.
         # Backfill from a hardcoded constant (no user input); S608 is a false positive.
         op.execute(f"UPDATE {t} SET organization_id = {_DEFAULT_ORG} WHERE organization_id IS NULL")  # noqa: S608, E501
         op.alter_column(t, "organization_id", nullable=False)

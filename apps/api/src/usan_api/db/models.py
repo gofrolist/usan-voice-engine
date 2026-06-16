@@ -501,6 +501,8 @@ class AgentProfileVersion(Base, TenantScoped):
 
 
 class AdminUser(Base):
+    """Global operator allow-list — NOT tenant-scoped in P1; gains organization_id in P2."""
+
     __tablename__ = "admin_users"
 
     email: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -974,6 +976,8 @@ class FamilyReport(Base, TenantScoped):
 
 
 class Organization(Base):
+    """The tenant anchor table — global, not itself tenant-scoped (no TenantScoped mixin)."""
+
     __tablename__ = "organizations"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())

@@ -135,7 +135,39 @@ def test_rls_with_check_blocks_wrong_org_insert(async_database_url):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("table", ["calls", "agent_profiles", "admin_audit_log", "sms_messages"])
+@pytest.mark.parametrize(
+    "table",
+    [
+        "contacts",
+        "dnc_list",
+        "calls",
+        "transcripts",
+        "wellness_logs",
+        "medication_logs",
+        "medication_reminders",
+        "personal_facts",
+        "conversation_summaries",
+        "wellbeing_survey_results",
+        "activity_history",
+        "turn_metrics",
+        "call_metrics",
+        "agent_profiles",
+        "agent_profile_versions",
+        "call_schedules",
+        "call_batches",
+        "call_batch_targets",
+        "webhook_endpoints",
+        "webhook_deliveries",
+        "custom_variables",
+        "admin_audit_log",
+        "follow_up_flags",
+        "callback_requests",
+        "sms_messages",
+        "family_contacts",
+        "family_tasks",
+        "family_reports",
+    ],
+)
 def test_every_tenant_table_is_rls_enabled_and_fails_closed(async_database_url, table):
     async def run():
         eng = create_async_engine(_app_url(async_database_url), poolclass=NullPool)

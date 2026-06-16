@@ -139,7 +139,11 @@ def app_database_url(database_url: str) -> str:
 # Every table a `client` test may touch, wiped as one statement. RESTART IDENTITY
 # CASCADE so dependent rows (e.g. webhook_deliveries -> webhook_endpoints) go too.
 _TRUNCATE_ALL = (
-    "TRUNCATE custom_variables, webhook_deliveries, webhook_endpoints, "
+    "TRUNCATE transcripts, wellness_logs, medication_logs, medication_reminders, "
+    "personal_facts, conversation_summaries, wellbeing_survey_results, "
+    "activity_history, turn_metrics, call_metrics, "
+    "family_contacts, family_tasks, family_reports, "
+    "custom_variables, webhook_deliveries, webhook_endpoints, "
     "call_batch_targets, call_batches, call_schedules, "
     "agent_profile_versions, agent_profiles, admin_audit_log, "
     "admin_users, follow_up_flags, callback_requests, sms_messages, "
