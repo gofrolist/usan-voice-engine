@@ -133,3 +133,28 @@ def test_rls_with_check_blocks_wrong_org_insert(async_database_url):
             await app.dispose()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("table", ["calls", "agent_profiles", "admin_audit_log", "sms_messages"])
+def test_every_tenant_table_is_rls_enabled_and_fails_closed(async_database_url, table):
+    async def run():
+        eng = create_async_engine(_app_url(async_database_url), poolclass=NullPool)
+        try:
+            async with eng.connect() as conn:
+                rows = (await conn.execute(text(f"SELECT 1 FROM {table}"))).all()
+                assert rows == []  # no context => fail closed
+                meta = (
+                    await conn.execute(
+                        text(
+                            "SELECT relrowsecurity, relforcerowsecurity "
+                            "FROM pg_class WHERE relname = :t"
+                        ),
+                        {"t": table},
+                    )
+                ).one()
+                assert meta[0] is True
+                assert meta[1] is True
+        finally:
+            await eng.dispose()
+
+    asyncio.run(run())
