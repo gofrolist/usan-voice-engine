@@ -28,9 +28,18 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:
-    """FastAPI dependency. Handlers commit explicitly; this only rolls back and closes."""
+    """FastAPI dependency. Sets the tenant context (P1: the default org), then yields.
+
+    Handlers commit explicitly; this only rolls back and closes. Context is set inside
+    the session's transaction (set_config is_local=true) so RLS sees it and it's cleared
+    when the transaction ends — no leak across pooled connections.
+    """
+    from usan_api.tenant_context import resolve_default_org_id, set_tenant_context
+
     async with get_session_factory()() as session:
         try:
+            org_id = await resolve_default_org_id(session)
+            await set_tenant_context(session, org_id)
             yield session
         except Exception:
             await session.rollback()
