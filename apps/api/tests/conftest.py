@@ -3,10 +3,12 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import jwt
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -134,6 +136,92 @@ def app_role_password(database_url: str) -> None:
 def app_database_url(database_url: str) -> str:
     """The usan_app (non-superuser, RLS-subject) DSN, derived from the superuser url."""
     return database_url.replace("usan:usan@", "usan_app:usan_app@", 1)
+
+
+@pytest.fixture(scope="session")
+def app_async_database_url(app_database_url: str) -> str:
+    """The async (asyncpg) usan_app DSN — the RLS-subject role for repo/route tests."""
+    return app_database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+
+@pytest.fixture
+def two_orgs(async_database_url: str) -> tuple[uuid.UUID, uuid.UUID]:
+    """Insert org A + org B via the superuser engine; yield their ids.
+
+    On teardown, delete the two orgs and their memberships. The membership delete
+    runs first (FK), then the orgs; ON DELETE CASCADE would also cover memberships,
+    but the explicit delete keeps the cleanup independent of the FK action.
+    """
+
+    async def _setup() -> tuple[uuid.UUID, uuid.UUID]:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                a = (
+                    await conn.execute(
+                        text(
+                            "INSERT INTO organizations (name, slug) VALUES ('A', :s) RETURNING id"
+                        ),
+                        {"s": f"a-{uuid.uuid4().hex[:8]}"},
+                    )
+                ).scalar_one()
+                b = (
+                    await conn.execute(
+                        text(
+                            "INSERT INTO organizations (name, slug) VALUES ('B', :s) RETURNING id"
+                        ),
+                        {"s": f"b-{uuid.uuid4().hex[:8]}"},
+                    )
+                ).scalar_one()
+            return a, b
+        finally:
+            await engine.dispose()
+
+    async def _teardown(org_a: uuid.UUID, org_b: uuid.UUID) -> None:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                # Safety net: never hang if a test left an open transaction holding an
+                # FK lock on these orgs (membership insert takes FOR KEY SHARE) — fail
+                # fast instead. The app_session fixture rolls back before this runs, so
+                # under correct fixture ordering the lock is already released.
+                await conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                await conn.execute(
+                    text("DELETE FROM memberships WHERE organization_id IN (:a, :b)"),
+                    {"a": org_a, "b": org_b},
+                )
+                await conn.execute(
+                    text("DELETE FROM organizations WHERE id IN (:a, :b)"),
+                    {"a": org_a, "b": org_b},
+                )
+        finally:
+            await engine.dispose()
+
+    org_a, org_b = asyncio.run(_setup())
+    try:
+        yield org_a, org_b
+    finally:
+        asyncio.run(_teardown(org_a, org_b))
+
+
+@pytest_asyncio.fixture
+async def app_session(app_async_database_url: str, app_role_password: None):
+    """A usan_app async session (NullPool) for repo-level tests.
+
+    Connects as the non-superuser RLS-subject role. memberships + admin_users are
+    GLOBAL (non-RLS) tables, so repo tests need no org context; tests that exercise
+    RLS-scoped tables must call set_tenant_context(session, org_id) themselves.
+    Rolls back on teardown so each test is isolated even without a TRUNCATE.
+    """
+    engine = create_async_engine(app_async_database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    session = factory()
+    try:
+        yield session
+    finally:
+        await session.rollback()
+        await session.close()
+        await engine.dispose()
 
 
 # Every table a `client` test may touch, wiped as one statement. RESTART IDENTITY

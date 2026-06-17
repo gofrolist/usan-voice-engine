@@ -1,177 +1,103 @@
-"""Allow-list data access for admin SSO (P3).
+"""Global identity data access for admin SSO (P2).
 
-The admin_users table is the source of truth for who may log in and at what role.
-require_admin_session re-checks it on every admin request, so a removal here revokes
-access immediately. Emails are stored lowercase (the PK) for case-insensitive match.
+The admin_users table is the global source of truth for *who* the person is (their
+identity + super-admin flag + status). Per-org *role* now lives in ``memberships``
+(see repositories/memberships.py). require_admin_session re-checks both on every
+admin request, so a status change or membership removal revokes access immediately.
+Emails are stored lowercase (the PK) for case-insensitive match.
 
-P2 transition note: the ORM ``AdminUser`` model no longer maps a ``role`` column —
-per-org role is moving to ``Membership`` (see the P2 plan, Unit A). The physical
-``admin_users.role`` column still exists until migration 0033 drops it (Task A2), and
-the legacy single-org admin plane still needs it. Until B/C migrate these callers,
-this repo reads/writes that column through SQLAlchemy Core (``_admin_users_tbl``) so
-the ORM mapper stays role-free while behavior is preserved. The role-aware reads
-return lightweight ``AdminUserRow`` rows that quack like the old ORM object
-(``email``/``role``/``added_by``).
+P2: the ORM ``AdminUser`` model is identity-only (no ``role`` column — migration 0033
+moved role to ``memberships`` and dropped the physical column). This repo therefore
+reads/writes through the ORM model directly.
 """
 
-from typing import NamedTuple
+import uuid
 
-from sqlalchemy import (
-    Column,
-    Enum,
-    MetaData,
-    Table,
-    Text,
-    delete,
-    func,
-    select,
-)
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.base import AdminRole
+from usan_api.db.models import AdminUser
 
-# Transitional Core view of admin_users that still includes the physical ``role``
-# column (the ORM model dropped it for P2). Kept in a private MetaData so it never
-# collides with the ORM Base metadata used for migrations/create_all.
-_transitional_metadata = MetaData()
-_admin_users_tbl = Table(
-    "admin_users",
-    _transitional_metadata,
-    Column("email", Text, primary_key=True),
-    Column("role", Enum("admin", "viewer", name="admin_role", create_type=False), nullable=False),
-    Column("added_by", Text),
-)
-
-
-class LastAdminError(Exception):
-    """Refuse an operation that would remove or demote the last remaining admin."""
-
-
-class AdminUserRow(NamedTuple):
-    """Lightweight, role-bearing view of an admin_users row.
-
-    Mirrors the attributes the legacy callers read off the old ORM object
-    (``email``/``role``/``added_by``) without re-mapping ``role`` onto the ORM model.
-    """
-
-    email: str
-    role: AdminRole
-    added_by: str | None
+# DEPRECATED (P2): the legacy single-org admin_users router (routers/admin_users.py)
+# still imports ``AdminUserRow`` + ``list_admin_users`` at module load. That router is
+# replaced by the per-org members router in Task C1; until then these identity-only
+# shims keep the import graph (and therefore test collection) healthy. The role-bearing
+# admin_users.role column was dropped in migration 0033 — role now lives in memberships.
+AdminUserRow = AdminUser
 
 
 def _norm(email: str) -> str:
     return email.strip().lower()
 
 
-def _row(email: str, role_value: str, added_by: str | None) -> AdminUserRow:
-    return AdminUserRow(email=email, role=AdminRole(role_value), added_by=added_by)
+async def get_admin_user(db: AsyncSession, email: str) -> AdminUser | None:
+    """The global identity row for an email (or None). Identity only — no role."""
+    return await db.get(AdminUser, _norm(email))
 
 
-async def count_admins(db: AsyncSession) -> int:
-    # Callers use this in a check-then-act last-admin guard (add/remove). That is a
-    # benign TOCTOU: two concurrent removals could each read count==2 and both proceed.
-    # Acceptable on this single-worker, low-traffic admin plane; if hardened later, do
-    # the count and the DML in one statement or under SELECT ... FOR UPDATE.
-    result = await db.execute(
-        select(func.count())
-        .select_from(_admin_users_tbl)
-        .where(_admin_users_tbl.c.role == AdminRole.ADMIN.value)
-    )
-    return int(result.scalar_one())
+async def list_admin_users(db: AsyncSession) -> list[AdminUser]:
+    """DEPRECATED (P2): all global identities. Superseded by memberships.list_members
+    (per-org). Retained only so the legacy router imports until Task C1 deletes it."""
+    res = await db.execute(select(AdminUser).order_by(AdminUser.email))
+    return list(res.scalars().all())
 
 
-async def get_admin_user(db: AsyncSession, email: str) -> AdminUserRow | None:
-    norm = _norm(email)
-    result = await db.execute(
-        select(
-            _admin_users_tbl.c.email,
-            _admin_users_tbl.c.role,
-            _admin_users_tbl.c.added_by,
-        ).where(_admin_users_tbl.c.email == norm)
-    )
-    row = result.one_or_none()
-    if row is None:
-        return None
-    return _row(row.email, row.role, row.added_by)
+async def ensure_identity(
+    db: AsyncSession, *, email: str, is_super_admin: bool = False
+) -> AdminUser:
+    """Insert the identity if missing (idempotent); return it. Caller commits.
 
-
-async def list_admin_users(db: AsyncSession) -> list[AdminUserRow]:
-    result = await db.execute(
-        select(
-            _admin_users_tbl.c.email,
-            _admin_users_tbl.c.role,
-            _admin_users_tbl.c.added_by,
-        ).order_by(_admin_users_tbl.c.email)
-    )
-    return [_row(r.email, r.role, r.added_by) for r in result.all()]
-
-
-async def add_admin_user(
-    db: AsyncSession, *, email: str, role: AdminRole, added_by: str | None
-) -> AdminUserRow:
-    """Insert (or update the role of) an allow-listed operator. Caller commits.
-
-    Raises LastAdminError if the upsert would demote the only remaining admin.
+    Used by membership creation (the FK target must exist) and by SSO invites. An
+    existing row is left untouched (its ``is_super_admin``/``status`` are not
+    downgraded by a plain invite).
     """
     norm = _norm(email)
-    if role is AdminRole.VIEWER:
-        existing = await get_admin_user(db, norm)
-        if (
-            existing is not None
-            and existing.role is AdminRole.ADMIN
-            and await count_admins(db) <= 1
-        ):
-            raise LastAdminError("cannot demote the last admin")
     stmt = (
-        pg_insert(_admin_users_tbl)
-        .values(email=norm, role=role.value, added_by=added_by)
-        # on_conflict updates ONLY role: re-adding an existing operator intentionally
-        # preserves the original added_by (who first added them); the role change itself
-        # is captured in the admin_audit_log by the calling route.
-        .on_conflict_do_update(index_elements=["email"], set_={"role": role.value})
+        pg_insert(AdminUser)
+        .values(email=norm, is_super_admin=is_super_admin, added_by="invite")
+        .on_conflict_do_nothing(index_elements=["email"])
     )
     await db.execute(stmt)
     await db.flush()
-    user = await get_admin_user(db, norm)
-    assert user is not None  # just inserted/updated
+    user = await db.get(AdminUser, norm)
+    assert user is not None
     return user
 
 
-async def remove_admin_user(db: AsyncSession, email: str) -> bool:
-    """Delete an operator. Returns False if the email was not present. Caller commits.
-
-    Raises LastAdminError if the target is the only remaining admin — deleting it would
-    leave nobody able to perform admin mutations (an unrecoverable lockout).
-    """
-    norm = _norm(email)
-    existing = await get_admin_user(db, norm)
-    if existing is None:
-        return False
-    if existing.role is AdminRole.ADMIN and await count_admins(db) <= 1:
-        raise LastAdminError("cannot remove the last admin")
-    await db.execute(delete(_admin_users_tbl).where(_admin_users_tbl.c.email == norm))
-    await db.flush()
-    return True
+async def set_last_active_org(db: AsyncSession, *, email: str, org_id: uuid.UUID) -> None:
+    """Remember the org the person last switched to (drives login default). Caller commits."""
+    user = await db.get(AdminUser, _norm(email))
+    if user is not None:
+        user.last_active_org_id = org_id
+        await db.flush()
 
 
 async def seed_bootstrap(db: AsyncSession, emails: list[str]) -> int:
-    """Insert any missing bootstrap emails as admins. Returns the count inserted.
+    """Ensure the bootstrap emails are super-admin identities with a usan ADMIN
+    membership. Returns the count of identities created. Idempotent. Caller commits.
 
-    Idempotent: ON CONFLICT DO NOTHING leaves existing rows (and their possibly
-    edited roles) untouched. Caller commits.
+    Without at least one bootstrap super-admin, nobody can log in via SSO.
     """
-    inserted = 0
+    # Lazy import: memberships imports this module, so importing it at module scope
+    # would create a circular import.
+    from usan_api.repositories import memberships as memberships_repo
+    from usan_api.repositories import organizations as organizations_repo
+
+    created = 0
+    usan = await organizations_repo.get_org_by_slug(db, "usan")
     for email in emails:
         norm = _norm(email)
         if not norm:
             continue
-        stmt = (
-            pg_insert(_admin_users_tbl)
-            .values(email=norm, role=AdminRole.ADMIN.value, added_by="bootstrap")
-            .on_conflict_do_nothing(index_elements=["email"])
-        )
-        result = await db.execute(stmt)
-        inserted += getattr(result, "rowcount", 0) or 0
+        existed = await db.get(AdminUser, norm) is not None
+        await ensure_identity(db, email=norm, is_super_admin=True)
+        if not existed:
+            created += 1
+        if usan is not None:
+            await memberships_repo.add_member(
+                db, email=norm, org_id=usan.id, role=AdminRole.ADMIN, added_by="bootstrap"
+            )
     await db.flush()
-    return inserted
+    return created
