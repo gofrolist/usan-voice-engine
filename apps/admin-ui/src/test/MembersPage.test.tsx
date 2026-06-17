@@ -42,6 +42,8 @@ let members: Member[] = [];
 function routeGet(url: string): Promise<unknown> {
   if (url === "/v1/auth/me") return Promise.resolve(meFixture(meRole));
   if (url === "/v1/admin/members") return Promise.resolve(members);
+  // The Pending-invites section (mounted on this page) fetches its own list.
+  if (url === "/v1/admin/invites") return Promise.resolve([]);
   return Promise.reject(new Error(`unexpected GET ${url}`));
 }
 
@@ -95,9 +97,11 @@ describe("MembersPage", () => {
     members = [];
     postMock.mockResolvedValue(member({ email: "new@example.com", role: "viewer" }));
     renderPage();
-    const email = await screen.findByLabelText("Email");
+    // Scope to the members "Add" form: the Pending-invites section adds a second
+    // "Email"/"Role" pair, so query by the form's own field ids.
+    const email = await screen.findByLabelText("Email", { selector: "#m-email" });
     await userEvent.type(email, "New@Example.com");
-    await userEvent.selectOptions(screen.getByLabelText("Role"), "viewer");
+    await userEvent.selectOptions(screen.getByLabelText("Role", { selector: "#m-role" }), "viewer");
     await userEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith("/v1/admin/members", {

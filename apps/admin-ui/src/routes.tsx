@@ -14,6 +14,7 @@ import { AuditPage } from "./features/audit/AuditPage";
 import { MembersPage } from "./features/members/MembersPage";
 import { OrgConsolePage } from "./features/orgs/OrgConsolePage";
 import { CustomVariablesPage } from "./features/customVariables/CustomVariablesPage";
+import { AcceptInvitePage } from "./features/invites/AcceptInvitePage";
 
 // All routes are gated by RequireAuth and rendered inside AppLayout. The api
 // wrapper handles 401 with a full-page redirect to /v1/auth/login.
@@ -49,4 +50,5 @@ export const router = createBrowserRouter([
       { path: "profiles/:id", element: <ProfileEditorPage /> },
     ],
   },
+  { path: "/accept-invite", element: <AcceptInvitePage /> },
 ]);
