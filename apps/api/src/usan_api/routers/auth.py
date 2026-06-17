@@ -21,11 +21,15 @@ from usan_api.admin_session import (
     set_tx_cookie,
 )
 from usan_api.auth import AdminPrincipal, require_admin_session
+from usan_api.db.base import AdminRole
 from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
 from usan_api.repositories import admin_users as admin_users_repo
-from usan_api.schemas.auth import MeResponse
+from usan_api.repositories import memberships as memberships_repo
+from usan_api.repositories import organizations as organizations_repo
+from usan_api.schemas.auth import MeResponse, OrgSummary, SwitchOrgRequest
 from usan_api.settings import Settings, get_settings
+from usan_api.tenant_context import set_tenant_context
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
@@ -96,7 +100,7 @@ async def callback(
     if not email:
         return _fail(status.HTTP_403_FORBIDDEN, "no email in token", settings)
     user = await admin_users_repo.get_admin_user(db, email)
-    if user is None:
+    if user is None or user.status != "active":
         # Per design §9, denials ARE audited (a security trail). Any Google-verified
         # identity reaching here writes one row; the /v1/auth/* rate limit bounds the
         # write rate, which is acceptable for this low-traffic admin plane.
@@ -104,8 +108,31 @@ async def callback(
             db, actor_email=email, action="auth.denied", entity_type="admin_user", entity_id=email
         )
         await db.commit()
-        logger.bind(email=email).warning("SSO login rejected: email not on allow-list")
+        logger.bind(email=email).warning("SSO login rejected: not allow-listed/active")
         return _fail(status.HTTP_403_FORBIDDEN, "not authorized", settings)
+
+    # B3: resolve the active org from the caller's memberships. A 0-membership non-
+    # super-admin has nowhere to land and is denied; a super-admin with no memberships
+    # logs in with no active org (they pick one / act-as via the org console).
+    memberships = await memberships_repo.list_memberships_for_email(db, email)
+    if not memberships and not user.is_super_admin:
+        await admin_audit.record(
+            db, actor_email=email, action="auth.denied", entity_type="admin_user", entity_id=email
+        )
+        await db.commit()
+        logger.bind(email=email).warning("SSO login rejected: no org membership")
+        return _fail(status.HTTP_403_FORBIDDEN, "not authorized", settings)
+
+    active_org_id = None
+    role: AdminRole | None = None
+    if memberships:
+        # Prefer the org the person last used; otherwise the first membership.
+        chosen = next(
+            (m for m in memberships if m.organization_id == user.last_active_org_id),
+            memberships[0],
+        )
+        active_org_id, role = chosen.organization_id, chosen.role
+        await admin_users_repo.set_last_active_org(db, email=email, org_id=active_org_id)
 
     await admin_audit.record(
         db, actor_email=email, action="auth.login", entity_type="admin_user", entity_id=email
@@ -114,14 +141,12 @@ async def callback(
     resp = RedirectResponse(
         settings.admin_post_login_redirect, status_code=status.HTTP_303_SEE_OTHER
     )
-    # B1: mint an identity-only session (no active org yet). Task B3 resolves the
-    # active org from the caller's memberships and re-issues with role/active_org set.
     set_session_cookie(
         resp,
         issue_session(
             email,
-            active_org_id=None,
-            role=None,
+            active_org_id=active_org_id,
+            role=role,
             is_super_admin=user.is_super_admin,
             acting_as=False,
             settings=settings,
@@ -160,7 +185,99 @@ async def logout(
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(principal: AdminPrincipal = Depends(require_admin_session)) -> MeResponse:
-    # B1: role rides the session claims (None when no org is active). Task B3 extends
-    # this to the full org-aware payload (orgs list, active_org, super/act-as flags).
-    return MeResponse(email=principal.email, role=principal.role.value if principal.role else "")
+async def me(
+    principal: AdminPrincipal = Depends(require_admin_session),
+    db: AsyncSession = Depends(get_db),
+) -> MeResponse:
+    """The caller's identity: their memberships (orgs + role), the active org, and the
+    super/act-as flags. Super-admin org browsing for act-as is served separately by
+    Unit C's /v1/admin/organizations (not /me)."""
+    memberships = await memberships_repo.list_memberships_for_email(db, principal.email)
+    role_by_org = {m.organization_id: m.role.value for m in memberships}
+    # Batch-load every org we need (memberships + the active org) in one query,
+    # then build the response from the in-memory dict — no per-row DB round-trips.
+    needed_ids = [m.organization_id for m in memberships]
+    if principal.active_org_id is not None:
+        needed_ids.append(principal.active_org_id)
+    orgs_by_id = await organizations_repo.get_orgs_by_ids(db, needed_ids)
+    summaries: list[OrgSummary] = []
+    for m in memberships:
+        o = orgs_by_id.get(m.organization_id)
+        if o:
+            summaries.append(OrgSummary(id=o.id, name=o.name, slug=o.slug, role=m.role.value))
+    active = None
+    if principal.active_org_id is not None:
+        o = orgs_by_id.get(principal.active_org_id)
+        if o:
+            # An act-as super-admin has no membership row in the active org -> role None.
+            active = OrgSummary(id=o.id, name=o.name, slug=o.slug, role=role_by_org.get(o.id))
+    return MeResponse(
+        email=principal.email,
+        is_super_admin=principal.is_super_admin,
+        acting_as=principal.acting_as,
+        active_org=active,
+        orgs=summaries,
+    )
+
+
+@router.post("/switch-org", response_model=MeResponse)
+async def switch_org(
+    body: SwitchOrgRequest,
+    principal: AdminPrincipal = Depends(require_admin_session),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """Re-issue the session scoped to a different org.
+
+    A member switches to one of their orgs at their membership role. A super-admin
+    switching to a non-member org *acts-as* it (full ADMIN write, audited in the
+    target org). A non-super-admin without a membership in the target is denied.
+    The new active org is remembered as the login default.
+    """
+    org = await organizations_repo.get_org(db, body.organization_id)
+    if org is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
+    m = await memberships_repo.get_membership(db, principal.email, org.id)
+    if m is not None:
+        role, acting_as = m.role, False
+    elif principal.is_super_admin:
+        role, acting_as = AdminRole.ADMIN, True
+        # The act-as audit row lands in the TARGET org (admin_audit_log is RLS-scoped).
+        await set_tenant_context(db, org.id)
+        await admin_audit.record(
+            db,
+            actor_email=principal.email,
+            action="auth.act_as",
+            entity_type="organization",
+            entity_id=str(org.id),
+        )
+    else:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "no access to this organization")
+    await admin_users_repo.set_last_active_org(db, email=principal.email, org_id=org.id)
+    await db.commit()
+    out = MeResponse(
+        email=principal.email,
+        is_super_admin=principal.is_super_admin,
+        acting_as=acting_as,
+        active_org=OrgSummary(
+            id=org.id,
+            name=org.name,
+            slug=org.slug,
+            role=role.value if not acting_as else None,
+        ),
+        orgs=[],  # client refetches /me for the full list
+    )
+    resp = JSONResponse(out.model_dump(mode="json"))
+    set_session_cookie(
+        resp,
+        issue_session(
+            principal.email,
+            active_org_id=org.id,
+            role=role,
+            is_super_admin=principal.is_super_admin,
+            acting_as=acting_as,
+            settings=settings,
+        ),
+        settings,
+    )
+    return resp
