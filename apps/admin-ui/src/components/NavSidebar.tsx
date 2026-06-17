@@ -115,7 +115,17 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
         <div className="truncate text-sm text-ink" title={me?.email}>
           {me?.email}
         </div>
-        <div className="text-xs uppercase tracking-wide text-faint">{me?.role}</div>
+        {me?.active_org ? (
+          <div
+            className="truncate text-xs text-faint"
+            title={me.active_org.name}
+          >
+            {me.active_org.name}
+            {me.active_org.role ? (
+              <span className="uppercase tracking-wide"> · {me.active_org.role}</span>
+            ) : null}
+          </div>
+        ) : null}
         <Button variant="ghost" className="mt-1 px-0" onClick={logout}>
           Log out
         </Button>

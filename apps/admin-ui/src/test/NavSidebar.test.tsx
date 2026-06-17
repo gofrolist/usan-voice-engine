@@ -16,12 +16,13 @@ vi.mock("../lib/api", () => ({
 }));
 
 import { NavSidebar } from "../components/NavSidebar";
+import { meFixture } from "./meFixture";
 
 let role: "admin" | "viewer" = "viewer";
 
 function routeGet(url: string): Promise<unknown> {
   if (url === "/v1/auth/me") {
-    return Promise.resolve({ email: "me@example.com", role });
+    return Promise.resolve(meFixture(role));
   }
   return Promise.reject(new Error(`unexpected GET ${url}`));
 }

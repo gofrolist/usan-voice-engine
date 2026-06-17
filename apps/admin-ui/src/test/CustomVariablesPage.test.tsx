@@ -29,6 +29,7 @@ vi.mock("../lib/api", () => ({
 
 import { CustomVariablesPage } from "../features/customVariables/CustomVariablesPage";
 import type { CustomVariable } from "../features/customVariables/hooks";
+import { meFixture } from "./meFixture";
 
 let role: "admin" | "viewer" = "admin";
 let vars: CustomVariable[] = [];
@@ -48,7 +49,7 @@ function variable(over: Partial<CustomVariable> = {}): CustomVariable {
 
 function routeGet(url: string): Promise<unknown> {
   if (url === "/v1/auth/me") {
-    return Promise.resolve({ email: "me@example.com", role });
+    return Promise.resolve(meFixture(role));
   }
   if (url === "/v1/admin/custom-variables") {
     return Promise.resolve(vars);

@@ -15,6 +15,7 @@ vi.mock("../lib/api", () => ({
 }));
 
 import { AppLayout } from "../components/AppLayout";
+import { meFixture } from "./meFixture";
 
 function renderApp(): void {
   const client = new QueryClient({
@@ -37,7 +38,7 @@ beforeEach(() => {
   getMock.mockReset();
   getMock.mockImplementation((url: string) =>
     url === "/v1/auth/me"
-      ? Promise.resolve({ email: "me@example.com", role: "admin" })
+      ? Promise.resolve(meFixture("admin"))
       : Promise.reject(new Error(`unexpected GET ${url}`)),
   );
   document.documentElement.classList.remove("dark");
