@@ -32,6 +32,7 @@ vi.mock("../components/ui/toast", () => ({
 
 import { QueuesPage } from "../features/queues/QueuesPage";
 import { useFollowUpFlags } from "../features/queues/hooks";
+import { meFixture } from "./meFixture";
 
 let role: "admin" | "viewer" = "admin";
 let flags: FollowupFlagSummary[] = [];
@@ -46,7 +47,7 @@ let summary: QueuesSummary = {
 
 function routeGet(url: string): Promise<unknown> {
   if (url === "/v1/auth/me") {
-    return Promise.resolve({ email: "me@example.com", role });
+    return Promise.resolve(meFixture(role));
   }
   if (url === "/v1/admin/queues/summary") return Promise.resolve(summary);
   if (url.startsWith("/v1/admin/follow-up-flags?")) return Promise.resolve(flags);

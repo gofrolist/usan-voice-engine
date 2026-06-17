@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import type { ContactSummary } from "../types/api";
+import { meFixture } from "./meFixture";
 
 const getMock = vi.fn();
 const putMock = vi.fn();
@@ -32,7 +33,7 @@ import { ContactsPage } from "../features/contacts/ContactsPage";
 let contacts: ContactSummary[] = [];
 
 function routeGet(url: string): Promise<unknown> {
-  if (url === "/v1/auth/me") return Promise.resolve({ email: "me@example.com", role: "admin" });
+  if (url === "/v1/auth/me") return Promise.resolve(meFixture("admin"));
   if (url.startsWith("/v1/admin/contacts")) return Promise.resolve(contacts);
   if (url.startsWith("/v1/admin/profiles")) return Promise.resolve([]);
   return Promise.reject(new Error(`unexpected GET ${url}`));

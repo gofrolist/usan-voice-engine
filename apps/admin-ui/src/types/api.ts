@@ -280,11 +280,54 @@ export interface SetTimezoneRequest {
 
 export type AdminUserRole = "admin" | "viewer";
 
+export interface OrgSummary {
+  id: string;
+  name: string;
+  slug: string;
+  role: AdminUserRole | null; // caller's role in this org; null for an act-as-only super-admin
+}
+
 export interface Me {
+  email: string;
+  is_super_admin: boolean;
+  acting_as: boolean;
+  active_org: OrgSummary | null;
+  orgs: OrgSummary[];
+}
+
+export interface SwitchOrgRequest {
+  organization_id: string;
+}
+
+export interface Member {
+  email: string;
+  role: AdminUserRole;
+  added_by: string | null;
+}
+
+export interface MemberCreate {
   email: string;
   role: AdminUserRole;
 }
 
+export interface MemberRoleUpdate {
+  role: AdminUserRole;
+}
+
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  status: string;
+}
+
+export interface OrgCreate {
+  name: string;
+  slug: string;
+  first_admin_email?: string | null;
+}
+
+// TODO(UI-3): removed when features/adminUsers/ is converted to features/members/.
 export interface AdminUser {
   email: string;
   role: AdminUserRole;

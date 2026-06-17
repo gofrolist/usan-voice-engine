@@ -7,7 +7,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import type { AgentConfig, Me, ProfileDetail } from "../types/api";
+import type { AgentConfig, ProfileDetail } from "../types/api";
+import { meFixture } from "./meFixture";
 
 const getMock = vi.fn();
 const putMock = vi.fn();
@@ -90,7 +91,7 @@ function profile(revision = 1): ProfileDetail {
 
 function routeGet(url: string): Promise<unknown> {
   if (url === "/v1/auth/me") {
-    return Promise.resolve({ email: "me@example.com", role: "admin" } satisfies Me);
+    return Promise.resolve(meFixture("admin"));
   }
   if (url === "/v1/admin/profiles/p1") return Promise.resolve(profile());
   return Promise.reject(new Error(`unexpected GET ${url}`));
