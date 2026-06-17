@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     session_cookie_secure: bool = Field(default=True, alias="SESSION_COOKIE_SECURE")
     # Where /v1/auth/callback redirects the browser after a successful login (the SPA).
     admin_post_login_redirect: str = Field(default="/", alias="ADMIN_POST_LOGIN_REDIRECT")
+    invite_ttl_hours: int = Field(default=168, ge=1, le=720, alias="INVITE_TTL_HOURS")
+    # Absolute public origin of the admin app, used to build invite accept links. When
+    # unset, the origin is derived from GOOGLE_OAUTH_REDIRECT_URI (already configured for
+    # SSO) — so prod needs no new env var. If set, must be absolute (http(s)://host).
+    admin_base_url: str | None = Field(default=None, alias="ADMIN_BASE_URL")
     gcs_bucket: str | None = Field(default=None, alias="GCS_BUCKET")
     recording_signed_url_ttl_s: int = Field(
         default=3600, ge=60, le=3600, alias="RECORDING_SIGNED_URL_TTL_S"
@@ -321,6 +326,13 @@ class Settings(BaseSettings):
         if not v.startswith("/") or v.startswith("//"):
             raise ValueError("ADMIN_POST_LOGIN_REDIRECT must be a relative path starting with '/'")
         return v
+
+    @field_validator("admin_base_url")
+    @classmethod
+    def _absolute_base_url(cls, v: str | None) -> str | None:
+        if v is not None and not v.startswith(("http://", "https://")):
+            raise ValueError("ADMIN_BASE_URL must be absolute (http:// or https://)")
+        return v.rstrip("/") if v else v
 
     @property
     def database_url_async(self) -> str:

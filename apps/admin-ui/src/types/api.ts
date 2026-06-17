@@ -314,6 +314,24 @@ export interface MemberRoleUpdate {
   role: AdminUserRole;
 }
 
+export type InviteStatus = "pending" | "accepted" | "revoked";
+
+export interface Invite {
+  id: string;
+  email: string;
+  role: AdminUserRole;
+  status: InviteStatus;
+  accept_url: string;
+  expires_at: string;
+  created_at: string;
+  invited_by: string | null;
+}
+
+export interface InviteCreate {
+  email: string;
+  role: AdminUserRole;
+}
+
 export interface Organization {
   id: string;
   name: string;

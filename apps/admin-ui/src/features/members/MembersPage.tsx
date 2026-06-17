@@ -8,6 +8,7 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useIsAdmin } from "../../auth/useSession";
 import type { AdminUserRole } from "../../types/api";
 import { useAddMember, useMembers, useRemoveMember, useSetMemberRole } from "./hooks";
+import { InvitesSection } from "../invites/InvitesSection";
 
 // Members of the active org. Whole screen is admin-only; the server enforces the
 // last-admin guard (409 on remove / on demoting the last admin) — we toast it.
@@ -160,6 +161,8 @@ export function MembersPage() {
           remove.mutate(toRemove, { onSuccess: () => setToRemove(null) });
         }}
       />
+
+      <InvitesSection />
     </div>
   );
 }

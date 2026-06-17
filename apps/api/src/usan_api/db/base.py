@@ -34,3 +34,9 @@ class ProfileStatus(enum.Enum):
 class AdminRole(enum.Enum):
     ADMIN = "admin"
     VIEWER = "viewer"
+
+
+class InviteStatus(enum.Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REVOKED = "revoked"

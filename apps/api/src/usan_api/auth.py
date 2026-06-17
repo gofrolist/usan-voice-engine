@@ -24,11 +24,12 @@ _bearer = HTTPBearer(auto_error=False)
 # clients and gateways know how to authenticate.
 _WWW_AUTH = {"WWW-Authenticate": "Bearer"}
 
-# Cookie-borne token types (admin session, OAuth tx) are signed with the same
-# JWT_SIGNING_KEY as the agent service/worker bearer tokens. The agent-plane verifiers
-# must reject them so an operator's session cookie cannot be lifted from the browser
-# and replayed as a Bearer worker/service token (cross-token-type confusion).
-_COOKIE_TOKEN_TYPES = frozenset({"admin_session", "oauth_tx"})
+# Cookie-borne token types (admin session, OAuth tx, OAuth invite) are signed with the
+# same JWT_SIGNING_KEY as the agent service/worker bearer tokens. The agent-plane
+# verifiers must reject them so a browser cookie cannot be lifted and replayed as a
+# Bearer worker/service token (cross-token-type confusion). Any new cookie type MUST be
+# added here or it can be replayed on the agent plane.
+_COOKIE_TOKEN_TYPES = frozenset({"admin_session", "oauth_tx", "oauth_invite"})
 
 
 def _reject_cookie_token(claims: dict[str, Any]) -> None:

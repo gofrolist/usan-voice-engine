@@ -236,7 +236,7 @@ _TRUNCATE_ALL = (
     "custom_variables, webhook_deliveries, webhook_endpoints, "
     "call_batch_targets, call_batches, call_schedules, "
     "agent_profile_versions, agent_profiles, admin_audit_log, "
-    "memberships, admin_users, follow_up_flags, callback_requests, sms_messages, "
+    "invitations, memberships, admin_users, follow_up_flags, callback_requests, sms_messages, "
     "calls, dnc_list, contacts "
     "RESTART IDENTITY CASCADE"
 )
@@ -387,6 +387,9 @@ def client(
     monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "false")
+    # Absolute origin for invite accept-links (invites._origin); without it the builder
+    # raises rather than emit a malformed "://..." URL.
+    monkeypatch.setenv("ADMIN_BASE_URL", "http://testserver")
     get_settings.cache_clear()
 
     test_engine = create_async_engine(async_database_url, poolclass=NullPool)

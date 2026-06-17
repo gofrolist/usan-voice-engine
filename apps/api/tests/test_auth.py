@@ -153,10 +153,10 @@ def test_service_and_worker_401_include_www_authenticate(auth_client):
 
 
 def test_agent_verifiers_reject_cookie_token_types(auth_client):
-    # admin_session / oauth_tx JWTs are signed with the same JWT_SIGNING_KEY as agent
-    # tokens; the service & worker verifiers must reject them by `typ` so an operator's
-    # session cookie cannot be replayed as a Bearer worker/service token.
-    for typ in ("admin_session", "oauth_tx"):
+    # admin_session / oauth_tx / oauth_invite JWTs are signed with the same
+    # JWT_SIGNING_KEY as agent tokens; the service & worker verifiers must reject them by
+    # `typ` so a session/invite cookie cannot be replayed as a Bearer worker/service token.
+    for typ in ("admin_session", "oauth_tx", "oauth_invite"):
         tok = _token(typ=typ)  # carries call_id + exp, so only the typ check can reject it
         assert (
             auth_client.get("/protected", headers={"Authorization": f"Bearer {tok}"}).status_code

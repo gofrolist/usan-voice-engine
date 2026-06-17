@@ -513,3 +513,32 @@ def test_inbound_key_and_spanish_profile_blank_coerce_to_none(monkeypatch, blank
     s = get_settings()
     assert s.telnyx_inbound_public_key is None
     assert s.spanish_profile_id is None
+
+
+def test_invite_settings_defaults_and_validation(monkeypatch):
+    _base_env(monkeypatch)
+    s = Settings()
+    assert s.invite_ttl_hours == 168
+    assert s.admin_base_url is None
+
+
+def test_admin_base_url_must_be_absolute(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("ADMIN_BASE_URL", "admin.example.com")
+    with pytest.raises(ValueError, match="ADMIN_BASE_URL must be absolute"):
+        Settings()
+
+
+def test_admin_base_url_strips_trailing_slash(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("ADMIN_BASE_URL", "https://admin.example.com/")
+    s = Settings()
+    assert s.admin_base_url == "https://admin.example.com"
+
+
+@pytest.mark.parametrize("bad", ["0", "721"])
+def test_invite_ttl_hours_out_of_range_rejected(monkeypatch, bad):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("INVITE_TTL_HOURS", bad)
+    with pytest.raises(ValueError, match="INVITE_TTL_HOURS"):
+        Settings()
