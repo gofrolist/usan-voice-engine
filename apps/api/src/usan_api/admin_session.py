@@ -27,6 +27,10 @@ TX_COOKIE_NAME = "admin_oauth_tx"
 TX_PATH = "/v1/auth"
 TX_TTL_S = 600  # 10 minutes: a login round-trip is seconds; this bounds a stale tab.
 
+INVITE_COOKIE_NAME = "admin_invite_tx"
+INVITE_PATH = "/v1/auth"
+INVITE_TTL_S = 600  # 10 minutes: rides the OAuth round-trip, then dies.
+
 _ALG = "HS256"
 
 
@@ -107,6 +111,48 @@ def clear_session_cookie(resp: Response, settings: Settings) -> None:
         httponly=True,
         secure=settings.session_cookie_secure,
         samesite="strict",
+    )
+
+
+def issue_invite(token: str, settings: Settings) -> str:
+    now = datetime.now(UTC)
+    payload: dict[str, Any] = {
+        "invite_token": token,
+        "typ": "oauth_invite",
+        "iat": now,
+        "exp": now + timedelta(seconds=INVITE_TTL_S),
+    }
+    return jwt.encode(payload, _key(settings), algorithm=_ALG)
+
+
+def decode_invite(token: str, settings: Settings) -> dict[str, Any]:
+    claims: dict[str, Any] = jwt.decode(
+        token, _key(settings), algorithms=[_ALG], options={"require": ["exp", "invite_token"]}
+    )
+    if claims.get("typ") != "oauth_invite":
+        raise jwt.InvalidTokenError("not an oauth-invite token")
+    return claims
+
+
+def set_invite_cookie(resp: Response, token: str, settings: Settings) -> None:
+    resp.set_cookie(
+        INVITE_COOKIE_NAME,
+        token,
+        max_age=INVITE_TTL_S,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        path=INVITE_PATH,
+    )
+
+
+def clear_invite_cookie(resp: Response, settings: Settings) -> None:
+    resp.delete_cookie(
+        INVITE_COOKIE_NAME,
+        path=INVITE_PATH,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
     )
 
 
