@@ -4,6 +4,7 @@ import { useSession, useIsAdmin } from "../auth/useSession";
 import { api } from "../lib/api";
 import { Button } from "./ui/button";
 import { ThemeToggle } from "./ui/ThemeToggle";
+import { OrgSwitcher } from "./OrgSwitcher";
 
 interface NavItem {
   to: string;
@@ -106,6 +107,7 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
         })}
       </nav>
       <div className="border-t border-line px-4 py-3">
+        <OrgSwitcher />
         <div className="mb-2.5 flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">
             Appearance
