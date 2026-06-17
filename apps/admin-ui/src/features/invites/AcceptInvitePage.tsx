@@ -37,9 +37,25 @@ export function AcceptInvitePage() {
     );
   }
 
+  if (token) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <span className="text-slate-600">Redirecting to sign in…</span>
+      </div>
+    );
+  }
+
+  // No token and no error: nothing to accept. Offer a sign-in path instead of a
+  // perpetual spinner.
   return (
-    <div className="flex h-screen items-center justify-center">
-      <span className="text-slate-600">Redirecting to sign in…</span>
+    <div className="flex h-screen items-center justify-center p-6">
+      <div className="max-w-md text-center text-slate-700">
+        <p className="font-medium">No invitation token</p>
+        <p className="mt-1 text-sm text-slate-500">This page needs a valid invitation link.</p>
+        <a className="mt-4 inline-block text-sm text-blue-700 underline" href="/v1/auth/login">
+          Go to sign in
+        </a>
+      </div>
     </div>
   );
 }
