@@ -10,6 +10,7 @@ interface NavItem {
   to: string;
   label: string;
   adminOnly?: boolean;
+  superAdminOnly?: boolean;
 }
 interface NavGroup {
   heading: string;
@@ -39,6 +40,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { to: "/audit", label: "Audit" },
       { to: "/members", label: "Members", adminOnly: true },
+      { to: "/organizations", label: "Organizations", superAdminOnly: true },
     ],
   },
 ];
@@ -69,13 +71,16 @@ function Wordmark() {
 export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const { data: me } = useSession();
   const isAdmin = useIsAdmin();
+  const isSuperAdmin = !!me?.is_super_admin;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Wordmark />
       <nav className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 py-2">
         {GROUPS.map((group) => {
-          const items = group.items.filter((n) => !n.adminOnly || isAdmin);
+          const items = group.items.filter(
+            (n) => (!n.adminOnly || isAdmin) && (!n.superAdminOnly || isSuperAdmin),
+          );
           if (items.length === 0) return null;
           return (
             <div key={group.heading}>
