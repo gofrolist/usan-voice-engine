@@ -1,6 +1,7 @@
 import base64
 import datetime
 import hashlib
+import uuid
 from urllib.parse import parse_qs, urlsplit
 
 import jwt
@@ -31,17 +32,52 @@ def _settings(**overrides) -> Settings:
     return Settings(**{**_ENV, **overrides})  # type: ignore[arg-type]
 
 
+def test_session_round_trips_active_org_and_flags():
+    s = _settings()
+    org = uuid.uuid4()
+    tok = issue_session(
+        "a@x.com",
+        active_org_id=org,
+        role=AdminRole.ADMIN,
+        is_super_admin=True,
+        acting_as=True,
+        settings=s,
+    )
+    c = decode_session(tok, s)
+    assert c["active_org"] == str(org)
+    assert c["role"] == "admin"
+    assert c["super"] is True
+    assert c["acting_as"] is True
+
+
 def test_session_round_trip():
     s = _settings()
-    token = issue_session("admin@example.com", AdminRole.ADMIN, s)
+    token = issue_session(
+        "admin@example.com",
+        active_org_id=None,
+        role=AdminRole.ADMIN,
+        is_super_admin=False,
+        acting_as=False,
+        settings=s,
+    )
     claims = decode_session(token, s)
     assert claims["sub"] == "admin@example.com"
     assert claims["role"] == "admin"
     assert claims["typ"] == "admin_session"
+    assert claims["active_org"] is None
+    assert claims["super"] is False
+    assert claims["acting_as"] is False
 
 
 def test_session_rejects_wrong_key():
-    token = issue_session("admin@example.com", AdminRole.ADMIN, _settings())
+    token = issue_session(
+        "admin@example.com",
+        active_org_id=None,
+        role=AdminRole.ADMIN,
+        is_super_admin=False,
+        acting_as=False,
+        settings=_settings(),
+    )
     other = _settings(JWT_SIGNING_KEY="x" * 32)
     with pytest.raises(jwt.PyJWTError):
         decode_session(token, other)

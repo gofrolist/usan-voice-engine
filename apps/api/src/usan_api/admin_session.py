@@ -12,6 +12,7 @@ Two short-lived HS256 tokens signed with JWT_SIGNING_KEY:
 Both are HttpOnly; Secure follows settings.session_cookie_secure.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -33,11 +34,22 @@ def _key(settings: Settings) -> str:
     return settings.jwt_signing_key.get_secret_value()
 
 
-def issue_session(email: str, role: AdminRole, settings: Settings) -> str:
+def issue_session(
+    email: str,
+    *,
+    active_org_id: uuid.UUID | None,
+    role: AdminRole | None,
+    is_super_admin: bool,
+    acting_as: bool,
+    settings: Settings,
+) -> str:
     now = datetime.now(UTC)
     payload: dict[str, Any] = {
         "sub": email,
-        "role": role.value,
+        "active_org": str(active_org_id) if active_org_id else None,
+        "role": role.value if role else None,
+        "super": is_super_admin,
+        "acting_as": acting_as,
         "typ": "admin_session",
         "iat": now,
         "exp": now + timedelta(seconds=settings.admin_session_ttl_s),

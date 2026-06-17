@@ -234,7 +234,7 @@ _TRUNCATE_ALL = (
     "custom_variables, webhook_deliveries, webhook_endpoints, "
     "call_batch_targets, call_batches, call_schedules, "
     "agent_profile_versions, agent_profiles, admin_audit_log, "
-    "admin_users, follow_up_flags, callback_requests, sms_messages, "
+    "memberships, admin_users, follow_up_flags, callback_requests, sms_messages, "
     "calls, dnc_list, contacts "
     "RESTART IDENTITY CASCADE"
 )
@@ -379,18 +379,43 @@ def sso_client(
         _clear_default_org_cache()
 
 
-async def _seed_admin_user_async(async_database_url: str, email: str, role: str) -> None:
+async def _seed_admin_user_async(
+    async_database_url: str,
+    email: str,
+    role: str,
+    *,
+    is_super_admin: bool = False,
+    with_membership: bool = True,
+) -> uuid.UUID:
+    """Seed a global identity (and, by default, a usan-org membership).
+
+    Returns the usan (default) org id so callers can mint a session scoped to it.
+    Role now lives on the membership, not on admin_users (P2 / migration 0033).
+    """
     engine = create_async_engine(async_database_url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
+            org_id = (
+                await conn.execute(text("SELECT id FROM organizations WHERE slug = 'usan'"))
+            ).scalar_one()
             await conn.execute(
                 text(
-                    "INSERT INTO admin_users (email, role, added_by) "
-                    "VALUES (:email, CAST(:role AS admin_role), 'test') "
-                    "ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role"
+                    "INSERT INTO admin_users (email, is_super_admin, status, added_by) "
+                    "VALUES (:email, :super, 'active', 'test') "
+                    "ON CONFLICT (email) DO UPDATE SET is_super_admin = EXCLUDED.is_super_admin"
                 ),
-                {"email": email.lower(), "role": role},
+                {"email": email.lower(), "super": is_super_admin},
             )
+            if with_membership:
+                await conn.execute(
+                    text(
+                        "INSERT INTO memberships (email, organization_id, role, added_by) "
+                        "VALUES (:email, :org, CAST(:role AS admin_role), 'test') "
+                        "ON CONFLICT (email, organization_id) DO UPDATE SET role = EXCLUDED.role"
+                    ),
+                    {"email": email.lower(), "org": org_id, "role": role},
+                )
+        return org_id
     finally:
         await engine.dispose()
 
@@ -399,14 +424,53 @@ async def _seed_admin_user_async(async_database_url: str, email: str, role: str)
 def admin_session(client: TestClient, async_database_url: str) -> dict[str, str]:
     """Seed an allow-listed admin and return cookies that authenticate as them.
 
-    Sets the cookie on the shared `client` too, so tests can either rely on the
-    client jar or pass `cookies=admin_session` per request.
+    The admin gets an ADMIN membership in the seeded usan (default) org, and the
+    minted session carries that org as the active org (P2). Sets the cookie on the
+    shared `client` too, so tests can rely on the jar or pass `cookies=admin_session`.
     """
     from usan_api.admin_session import SESSION_COOKIE_NAME, issue_session
     from usan_api.db.base import AdminRole
 
     email = "admin@example.com"
-    asyncio.run(_seed_admin_user_async(async_database_url, email, "admin"))
-    token = issue_session(email, AdminRole.ADMIN, get_settings())
+    org_id = asyncio.run(_seed_admin_user_async(async_database_url, email, "admin"))
+    token = issue_session(
+        email,
+        active_org_id=org_id,
+        role=AdminRole.ADMIN,
+        is_super_admin=False,
+        acting_as=False,
+        settings=get_settings(),
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, token)
+    return {SESSION_COOKIE_NAME: token}
+
+
+@pytest.fixture
+def super_admin_session(client: TestClient, async_database_url: str) -> dict[str, str]:
+    """Seed a super-admin identity with NO membership and return its cookies.
+
+    The minted session has `super=True`, `active_org=None`, `acting_as=False` — the
+    state of a USAN staffer who has not yet picked (or acted-as) an org.
+    """
+    from usan_api.admin_session import SESSION_COOKIE_NAME, issue_session
+
+    email = "super@example.com"
+    asyncio.run(
+        _seed_admin_user_async(
+            async_database_url,
+            email,
+            "admin",
+            is_super_admin=True,
+            with_membership=False,
+        )
+    )
+    token = issue_session(
+        email,
+        active_org_id=None,
+        role=None,
+        is_super_admin=True,
+        acting_as=False,
+        settings=get_settings(),
+    )
     client.cookies.set(SESSION_COOKIE_NAME, token)
     return {SESSION_COOKIE_NAME: token}
