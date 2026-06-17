@@ -17,10 +17,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import require_admin_role, require_admin_session
+from usan_api.auth import get_tenant_db, require_admin_role, require_admin_session
 from usan_api.db.base import AdminRole
 from usan_api.db.models import CustomVariable
-from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
 from usan_api.repositories import custom_variables as repo
 from usan_api.schemas.custom_variables import (
@@ -45,14 +44,16 @@ def _to_out(row: CustomVariable) -> CustomVariableOut:
 
 
 @router.get("", response_model=list[CustomVariableOut])
-async def list_custom_variables(db: AsyncSession = Depends(get_db)) -> list[CustomVariableOut]:
+async def list_custom_variables(
+    db: AsyncSession = Depends(get_tenant_db),
+) -> list[CustomVariableOut]:
     """All definitions, alphabetical — readable by every session role."""
     return [_to_out(v) for v in await repo.list_custom_variables(db)]
 
 
 @router.get("/{variable_id}/references", response_model=CustomVariableReferences)
 async def custom_variable_references(
-    variable_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    variable_id: uuid.UUID, db: AsyncSession = Depends(get_tenant_db)
 ) -> CustomVariableReferences:
     """Delete-guard (FR-007): profiles referencing this variable's {{name}} token.
 
@@ -70,7 +71,7 @@ async def custom_variable_references(
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=CustomVariableOut)
 async def create_custom_variable(
     body: CustomVariableCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> CustomVariableOut:
@@ -97,7 +98,7 @@ async def create_custom_variable(
 async def update_custom_variable(
     variable_id: uuid.UUID,
     body: CustomVariableUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> CustomVariableOut:
@@ -128,7 +129,7 @@ async def update_custom_variable(
 @router.delete("/{variable_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_custom_variable(
     variable_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> None:

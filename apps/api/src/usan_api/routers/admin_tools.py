@@ -15,10 +15,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import require_admin_role, require_admin_session
+from usan_api.auth import get_tenant_db, require_admin_role, require_admin_session
 from usan_api.db.base import AdminRole
 from usan_api.db.models import CallbackRequest, FollowUpFlag
-from usan_api.db.session import get_db
 from usan_api.masking import mask_phone
 from usan_api.observability.custom_metrics import ADMIN_QUEUE_TRANSITIONS_TOTAL
 from usan_api.repositories import admin_audit
@@ -111,7 +110,7 @@ async def list_follow_up_flags(
     severity: Literal["routine", "urgent"] | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
 ) -> list[FollowupFlagSummary]:
     rows = await follow_up_flags_repo.list_flags(
@@ -148,7 +147,7 @@ async def list_callback_requests(
     contact_id: uuid.UUID | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
 ) -> list[CallbackRequestSummary]:
     # Paged + status/contact-filtered in SQL (never select the whole table). Callback notes
@@ -180,7 +179,7 @@ async def list_callback_requests(
 async def list_sms_messages(
     status: str | None = Query(default=None, max_length=32),
     limit: int = Query(default=100, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
 ) -> list[SmsMessageSummary]:
     rows = await sms_repo.list_messages(db, status=status, limit=limit)
@@ -218,7 +217,7 @@ async def list_sms_messages(
 
 
 @router.get("/queues/summary", response_model=QueuesSummary)
-async def queues_summary(db: AsyncSession = Depends(get_db)) -> QueuesSummary:
+async def queues_summary(db: AsyncSession = Depends(get_tenant_db)) -> QueuesSummary:
     # PHI-free aggregate (counts only) backing the UI tab badges; may be
     # refetched often. Deliberately UN-audited: no admin_audit row, no commit,
     # no sink line (spec §4.5) — HTTP metrics already account for usage.
@@ -250,7 +249,7 @@ async def queues_summary(db: AsyncSession = Depends(get_db)) -> QueuesSummary:
 async def update_follow_up_flag(
     flag_id: int,
     body: QueueStatusUpdateRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> FollowupFlagSummary:
@@ -312,7 +311,7 @@ async def update_follow_up_flag(
 async def update_callback_request(
     request_id: int,
     body: QueueStatusUpdateRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> CallbackRequestSummary:

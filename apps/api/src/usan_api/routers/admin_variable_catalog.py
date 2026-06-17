@@ -3,8 +3,7 @@ from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api.auth import require_admin_session
-from usan_api.db.session import get_db
+from usan_api.auth import get_tenant_db, require_admin_session
 from usan_api.repositories import custom_variables as custom_variables_repo
 from usan_api.schemas.variable_catalog import BUILTIN_NAMES, BUILTIN_VARIABLES, VariableSpec
 
@@ -20,7 +19,9 @@ class VariableCatalogResponse(BaseModel):
 
 
 @router.get("", response_model=VariableCatalogResponse)
-async def get_variable_catalog(db: AsyncSession = Depends(get_db)) -> VariableCatalogResponse:
+async def get_variable_catalog(
+    db: AsyncSession = Depends(get_tenant_db),
+) -> VariableCatalogResponse:
     """Return the variable catalog for the prompt-editor palette (design §4.6).
 
     Admin-session scope, mirroring the other /v1/admin routers. DB-backed since

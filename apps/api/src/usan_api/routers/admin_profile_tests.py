@@ -28,9 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import livekit_dispatch
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import require_admin_role, require_admin_session
+from usan_api.auth import get_tenant_db, require_admin_role, require_admin_session
 from usan_api.db.base import AdminRole
-from usan_api.db.session import get_db
 from usan_api.prompt_substitution import build_vars, substitute
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
@@ -123,7 +122,7 @@ async def _run_vertex_turn(
 async def run_llm_test(
     profile_id: uuid.UUID,
     body: TestLlmRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     settings: Settings = Depends(get_settings),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
@@ -224,7 +223,7 @@ async def run_llm_test(
 async def run_audio_test(
     profile_id: uuid.UUID,
     body: TestAudioRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     settings: Settings = Depends(get_settings),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
