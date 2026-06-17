@@ -387,6 +387,9 @@ def client(
     monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "false")
+    # Absolute origin for invite accept-links (invites._origin); without it the builder
+    # raises rather than emit a malformed "://..." URL.
+    monkeypatch.setenv("ADMIN_BASE_URL", "http://testserver")
     get_settings.cache_clear()
 
     test_engine = create_async_engine(async_database_url, poolclass=NullPool)

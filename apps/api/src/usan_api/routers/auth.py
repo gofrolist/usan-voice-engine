@@ -49,13 +49,16 @@ _SSO_DISABLED = HTTPException(
 
 
 def _fail(status_code: int, detail: str, settings: Settings) -> JSONResponse:
-    """A JSON error response that also clears the OAuth-tx cookie.
+    """A JSON error response that clears the OAuth-tx AND invite cookies.
 
-    The tx cookie holds a short-lived PKCE verifier + CSRF state; it must not outlive
-    the transaction, so every callback failure path clears it (not only success).
+    The tx cookie holds a short-lived PKCE verifier + CSRF state; the invite cookie holds
+    a pending invite token. Neither must outlive the transaction, so every callback
+    failure path clears both (not only success) — otherwise a failed invite-accept would
+    leave the invite cookie alive for its full TTL and replay on the next callback.
     """
     resp = JSONResponse({"detail": detail}, status_code=status_code)
     clear_tx_cookie(resp, settings)
+    clear_invite_cookie(resp, settings)
     return resp
 
 
@@ -246,7 +249,10 @@ async def _complete_invite_accept(
         return _err("mismatch")
 
     # Idempotent re-click: already a member of the target org -> success, no re-consume.
-    if await memberships_repo.get_membership(db, email, invite.organization_id) is not None:
+    # Issue the session at the LIVE membership role, not invite.role — they differ if the
+    # member's role was changed after this invite was created.
+    existing_membership = await memberships_repo.get_membership(db, email, invite.organization_id)
+    if existing_membership is not None:
         # Still leave a trail for the org entry (audit log is RLS-scoped to the org).
         await set_tenant_context(db, invite.organization_id)
         if invite.status is InviteStatus.PENDING:
@@ -267,7 +273,7 @@ async def _complete_invite_accept(
             settings,
             email=email,
             org_id=invite.organization_id,
-            role=invite.role,
+            role=existing_membership.role,
             is_super_admin=bool(user and user.is_super_admin),
         )
 

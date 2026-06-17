@@ -18,7 +18,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # New enum type. admin_role already exists (0010) — referenced with create_type=False.
+    # New enum type. create_type=False suppresses auto-DDL when the column is built inside
+    # create_table below; the explicit .create(checkfirst=True) here is what actually
+    # creates the type. (admin_role already exists from 0010 — only referenced below with
+    # create_type=False, never re-created.)
     invite_status = postgresql.ENUM(
         "pending", "accepted", "revoked", name="invite_status", create_type=False
     )

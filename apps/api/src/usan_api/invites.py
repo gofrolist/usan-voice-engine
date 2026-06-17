@@ -9,6 +9,14 @@ from usan_api.settings import Settings
 def _origin(settings: Settings) -> str:
     base = settings.admin_base_url or settings.google_oauth_redirect_uri or ""
     parts = urlsplit(base)
+    if not parts.scheme or not parts.netloc:
+        # Fail loudly rather than silently emit a malformed "://..." link. In prod
+        # GOOGLE_OAUTH_REDIRECT_URI is always set (SSO requires it); this guards a
+        # misconfigured env from shipping dead invite links.
+        raise ValueError(
+            "cannot build invite links: set ADMIN_BASE_URL or GOOGLE_OAUTH_REDIRECT_URI "
+            "to an absolute http(s) origin"
+        )
     return f"{parts.scheme}://{parts.netloc}"
 
 

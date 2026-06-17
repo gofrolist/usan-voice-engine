@@ -67,6 +67,7 @@ async def create_invite(
         existing.token = _new_token()
         existing.expires_at = expires
         existing.role = role
+        existing.invited_by = invited_by  # the re-inviter owns the refreshed invite
         await db.flush()
         return existing
     invite = Invitation(

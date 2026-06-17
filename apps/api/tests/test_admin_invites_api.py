@@ -25,7 +25,9 @@ def test_create_invite_returns_accept_url(client, admin_session):
     assert body["email"] == "new@x.com"
     assert body["role"] == "viewer"
     assert body["status"] == "pending"
-    assert "/v1/auth/accept-invite?token=" in body["accept_url"]
+    # Full, well-formed absolute URL (a malformed "://..." origin would still satisfy a
+    # bare substring check — see the _origin guard).
+    assert body["accept_url"].startswith("http://testserver/v1/auth/accept-invite?token=")
 
 
 def test_create_invite_idempotent_reinvite(client, admin_session):
@@ -47,10 +49,14 @@ def test_viewer_cannot_manage_invites(client, async_database_url):
 
     org_id = asyncio.run(_seed_admin_user_async(async_database_url, "view@example.com", "viewer"))
     cookie = _member_cookie("view@example.com", org_id, AdminRole.VIEWER)
-    # ADMIN-only on every endpoint, including list.
+    # ADMIN-only on EVERY endpoint (the role dependency runs before the handler, so an
+    # arbitrary id is fine — a VIEWER never reaches the 404 lookup).
+    rid = uuid.uuid4()
     assert client.get("/v1/admin/invites", cookies=cookie).status_code == 403
-    r = client.post("/v1/admin/invites", json={"email": "x@x.com"}, cookies=cookie)
-    assert r.status_code == 403
+    created = client.post("/v1/admin/invites", json={"email": "x@x.com"}, cookies=cookie)
+    assert created.status_code == 403
+    assert client.delete(f"/v1/admin/invites/{rid}", cookies=cookie).status_code == 403
+    assert client.post(f"/v1/admin/invites/{rid}/resend", cookies=cookie).status_code == 403
 
 
 def test_revoke_and_resend(client, admin_session):
@@ -58,7 +64,7 @@ def test_revoke_and_resend(client, admin_session):
     iid = created["id"]
     resent = client.post(f"/v1/admin/invites/{iid}/resend")
     assert resent.status_code == 200
-    assert "/v1/auth/accept-invite?token=" in resent.json()["accept_url"]
+    assert resent.json()["accept_url"].startswith("http://testserver/v1/auth/accept-invite?token=")
     assert client.delete(f"/v1/admin/invites/{iid}").status_code == 204
     # revoking again -> 409 (not pending)
     assert client.delete(f"/v1/admin/invites/{iid}").status_code == 409

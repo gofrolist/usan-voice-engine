@@ -152,6 +152,30 @@ async def membership_exists(db_url: str, email: str, org_id: uuid.UUID) -> bool:
         await engine.dispose()
 
 
+async def _seed_member(db_url: str, email: str, org_id: uuid.UUID, role: AdminRole) -> None:
+    """Seed an active identity + org membership (superuser engine; non-RLS tables)."""
+    engine = create_async_engine(db_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO admin_users (email, is_super_admin, status, added_by) "
+                    "VALUES (:e, false, 'active', 'test') ON CONFLICT (email) DO NOTHING"
+                ),
+                {"e": email.lower()},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO memberships (email, organization_id, role, added_by) "
+                    "VALUES (:e, :o, CAST(:r AS admin_role), 'test') "
+                    "ON CONFLICT (email, organization_id) DO UPDATE SET role = EXCLUDED.role"
+                ),
+                {"e": email.lower(), "o": org_id, "r": role.value},
+            )
+    finally:
+        await engine.dispose()
+
+
 # ---------------------------------------------------------------------------
 # accept-invite -> Google bounce -> callback, carrying cookies across.
 # ---------------------------------------------------------------------------
@@ -225,6 +249,28 @@ def test_accept_revoked_invite(sso_client, async_database_url, two_orgs, set_ver
     resp = _accept(sso_client, token=token, verified_email="rev@x.com", set_verified=set_verified)
     assert "status=error&reason=revoked" in resp.headers["location"]
     asyncio.run(_cleanup(async_database_url, org_a))
+
+
+def test_accept_already_member_uses_live_role(
+    sso_client, async_database_url, two_orgs, set_verified
+):
+    # Already a VIEWER member; a later invite grants ADMIN. The idempotent re-accept must
+    # issue a session at the LIVE membership role (viewer), NOT the invite's admin role,
+    # and consume the still-pending invite. Exercises the already-member branch + audit.
+    org_a, _ = two_orgs
+    asyncio.run(_seed_member(async_database_url, "member@x.com", org_a, AdminRole.VIEWER))
+    token = asyncio.run(seed_invite(async_database_url, org_a, "member@x.com", AdminRole.ADMIN))
+    resp = _accept(
+        sso_client, token=token, verified_email="member@x.com", set_verified=set_verified
+    )
+    assert resp.status_code == 303
+    session = resp.cookies.get(SESSION_COOKIE_NAME)
+    assert session is not None
+    claims = decode_session(session, get_settings())
+    assert claims["active_org"] == str(org_a)
+    assert claims["role"] == "viewer"  # live membership role, not the invite's admin
+    assert asyncio.run(invite_status(async_database_url, token)) == "accepted"
+    asyncio.run(_cleanup(async_database_url, org_a, identities=("member@x.com",)))
 
 
 def test_accept_missing_token_400(sso_client):
