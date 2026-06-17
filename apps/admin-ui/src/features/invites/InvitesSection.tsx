@@ -4,8 +4,9 @@ import { Input } from "../../components/ui/input";
 import { Select } from "../../components/ui/select";
 import { Button } from "../../components/ui/button";
 import { Spinner } from "../../components/ui/spinner";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { pushToast } from "../../components/ui/toast";
-import type { AdminUserRole } from "../../types/api";
+import type { AdminUserRole, Invite } from "../../types/api";
 import { useCreateInvite, useInvites, useResendInvite, useRevokeInvite } from "./hooks";
 
 async function copy(url: string): Promise<void> {
@@ -25,6 +26,7 @@ export function InvitesSection() {
 
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<AdminUserRole>("admin");
+  const [toRevoke, setToRevoke] = useState<Invite | null>(null);
 
   function handleInvite(e: FormEvent): void {
     e.preventDefault();
@@ -124,7 +126,7 @@ export function InvitesSection() {
                   </Button>
                   <Button
                     variant="secondary"
-                    disabled={resend.isPending}
+                    disabled={resend.isPending && resend.variables === inv.id}
                     onClick={() =>
                       resend.mutate(inv.id, { onSuccess: (fresh) => void copy(fresh.accept_url) })
                     }
@@ -133,8 +135,8 @@ export function InvitesSection() {
                   </Button>
                   <Button
                     variant="danger"
-                    disabled={revoke.isPending}
-                    onClick={() => revoke.mutate(inv.id)}
+                    disabled={revoke.isPending && revoke.variables === inv.id}
+                    onClick={() => setToRevoke(inv)}
                   >
                     Revoke
                   </Button>
@@ -144,6 +146,24 @@ export function InvitesSection() {
           </Tbody>
         </Table>
       )}
+
+      <ConfirmDialog
+        open={toRevoke !== null}
+        title="Revoke invite?"
+        body={
+          <>
+            Revoke the invite for <strong>{toRevoke?.email}</strong>? The link stops working
+            immediately. You can send a fresh invite later.
+          </>
+        }
+        confirmLabel="Revoke"
+        busy={revoke.isPending}
+        onCancel={() => setToRevoke(null)}
+        onConfirm={() => {
+          if (!toRevoke) return;
+          revoke.mutate(toRevoke.id, { onSuccess: () => setToRevoke(null) });
+        }}
+      />
     </div>
   );
 }
