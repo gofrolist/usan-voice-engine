@@ -1,6 +1,6 @@
 import hmac
 import uuid
-from collections.abc import Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_session import SESSION_COOKIE_NAME, decode_session
 from usan_api.db.base import AdminRole
-from usan_api.db.session import get_db
+from usan_api.db.session import get_db, get_session_factory
 from usan_api.repositories import admin_users as admin_users_repo
+from usan_api.repositories import memberships as memberships_repo
 from usan_api.settings import Settings, get_settings
+from usan_api.tenant_context import set_tenant_context
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -158,12 +160,16 @@ async def require_admin_session(
     """Authenticate an admin operator from the session cookie.
 
     The cookie proves authentication (Google verified the human) and carries the
-    active org + role + super/act-as flags (P2 / migration 0033 moved role off the
+    active org + super/act-as flags (P2 / migration 0033 moved role off the
     admin_users row onto memberships). The global ``admin_users`` row still provides
-    live authorization: a removed/blocked operator is rejected immediately even while
-    their cookie is unexpired. 401 (not 403) on a missing/invalid/expired cookie or a
-    no-longer-allow-listed/inactive email. Membership re-validation against the active
-    org is layered on in Task B2.
+    live identity authorization: a removed/blocked operator is rejected immediately
+    even while their cookie is unexpired. The **role** is NOT trusted from the cookie
+    — it is re-read from the live ``memberships`` row for the active org every request,
+    so a removed/demoted membership takes effect instantly (the stale cookie can't
+    grant access it no longer has). act-as is verified against the live super-admin bit.
+    401 (not 403) on a missing/invalid/expired cookie, a no-longer-allow-listed/inactive
+    email, or a forged act-as claim; 403 when the email has no membership in the active
+    org. The session JWT is stateless, so this membership lookup is the revocation seam.
     """
     if not session_cookie:
         raise HTTPException(
@@ -189,15 +195,76 @@ async def require_admin_session(
         )
     active_org_raw = claims.get("active_org")
     active_org_id = uuid.UUID(str(active_org_raw)) if active_org_raw else None
-    role_raw = claims.get("role")
-    role = AdminRole(role_raw) if role_raw else None
+    acting_as = bool(claims.get("acting_as"))
+    role: AdminRole | None = None
+    if active_org_id is not None:
+        if acting_as:
+            # Act-as is a super-admin-only capability; the cookie's super bit alone is
+            # not enough — re-check the live identity so a revoked super-admin (or a
+            # forged acting_as claim from a non-super cookie) cannot impersonate an org.
+            if not user.is_super_admin:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="not authorized",
+                    headers=_COOKIE_AUTH,
+                )
+            role = AdminRole.ADMIN
+        else:
+            # Live membership re-validation: role rides the row, not the cookie.
+            membership = await memberships_repo.get_membership(db, email, active_org_id)
+            if membership is None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="no access to this organization",
+                )
+            role = membership.role
     return AdminPrincipal(
         email=email,
         active_org_id=active_org_id,
         role=role,
-        is_super_admin=bool(claims.get("super")),
-        acting_as=bool(claims.get("acting_as")),
+        is_super_admin=user.is_super_admin,
+        acting_as=acting_as,
     )
+
+
+async def get_tenant_db(
+    principal: AdminPrincipal = Depends(require_admin_session),
+) -> AsyncIterator[AsyncSession]:
+    """Org-scoped DB session for admin routes: opens its own session and sets the
+    RLS tenant context to the principal's active org so P1's policies scope every read.
+
+    Distinct from ``get_db`` (which sets the *default* org baseline): this binds the
+    session to the authenticated operator's active org. 409 when no org is active —
+    the operator (e.g. a super-admin who hasn't picked one) must select an org first.
+    Handlers commit explicitly; on error we roll back and let the context manager close.
+    """
+    if principal.active_org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="select an organization first",
+        )
+    async with get_session_factory()() as session:
+        try:
+            await set_tenant_context(session, principal.active_org_id)
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+
+
+def require_super_admin(
+    principal: AdminPrincipal = Depends(require_admin_session),
+) -> AdminPrincipal:
+    """Dependency: allow only USAN staff (super-admins). 403 otherwise.
+
+    Guards the platform-level control plane (org console, cross-org act-as targets).
+    """
+    if not principal.is_super_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="super-admin required",
+        )
+    return principal
 
 
 def require_admin_role(
