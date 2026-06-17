@@ -501,11 +501,33 @@ class AgentProfileVersion(Base, TenantScoped):
 
 
 class AdminUser(Base):
-    """Global operator allow-list — NOT tenant-scoped in P1; gains organization_id in P2."""
+    """Global identity — the person. Per-org role lives in Membership (P2)."""
 
     __tablename__ = "admin_users"
 
     email: Mapped[str] = mapped_column(Text, primary_key=True)
+    is_super_admin: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    last_active_org_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"))
+    added_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class Membership(Base):
+    """Many-to-many: which person has which role in which org. Global, non-RLS."""
+
+    __tablename__ = "memberships"
+
+    email: Mapped[str] = mapped_column(
+        ForeignKey("admin_users.email", ondelete="CASCADE"), primary_key=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
     role: Mapped[AdminRole] = mapped_column(
         SAEnum(
             AdminRole,
@@ -514,7 +536,6 @@ class AdminUser(Base):
             create_type=False,
         ),
         nullable=False,
-        server_default=AdminRole.ADMIN.value,
     )
     added_by: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(

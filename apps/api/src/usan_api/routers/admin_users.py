@@ -4,10 +4,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from usan_api.admin_actor import get_actor_email
 from usan_api.auth import require_admin_role, require_admin_session
 from usan_api.db.base import AdminRole
-from usan_api.db.models import AdminUser
 from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
 from usan_api.repositories import admin_users as repo
+from usan_api.repositories.admin_users import AdminUserRow
 from usan_api.schemas.auth import AdminUserCreate, AdminUserOut
 
 router = APIRouter(
@@ -17,7 +17,7 @@ router = APIRouter(
 )
 
 
-def _to_out(user: AdminUser) -> AdminUserOut:
+def _to_out(user: AdminUserRow) -> AdminUserOut:
     return AdminUserOut(email=user.email, role=user.role.value, added_by=user.added_by)
 
 
