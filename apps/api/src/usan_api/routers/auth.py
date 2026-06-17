@@ -1,5 +1,7 @@
 import contextlib
 import secrets
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -9,22 +11,30 @@ from starlette.responses import JSONResponse, RedirectResponse
 
 from usan_api import oauth
 from usan_api.admin_session import (
+    INVITE_COOKIE_NAME,
     SESSION_COOKIE_NAME,
     TX_COOKIE_NAME,
+    clear_invite_cookie,
     clear_session_cookie,
     clear_tx_cookie,
+    decode_invite,
     decode_session,
     decode_tx,
+    issue_invite,
     issue_session,
     issue_tx,
+    set_invite_cookie,
     set_session_cookie,
     set_tx_cookie,
 )
 from usan_api.auth import AdminPrincipal, require_admin_session
-from usan_api.db.base import AdminRole
+from usan_api.db.base import AdminRole, InviteStatus
+from usan_api.db.models import Invitation
 from usan_api.db.session import get_db
+from usan_api.invites import build_accept_error_url
 from usan_api.repositories import admin_audit
 from usan_api.repositories import admin_users as admin_users_repo
+from usan_api.repositories import invitations as invitations_repo
 from usan_api.repositories import memberships as memberships_repo
 from usan_api.repositories import organizations as organizations_repo
 from usan_api.schemas.auth import MeResponse, OrgSummary, SwitchOrgRequest
@@ -59,6 +69,26 @@ async def login(settings: Settings = Depends(get_settings)) -> RedirectResponse:
     url = oauth.build_authorization_url(settings, state=state, code_challenge=challenge)
     resp = RedirectResponse(url, status_code=status.HTTP_302_FOUND)
     set_tx_cookie(resp, issue_tx(state, verifier, settings), settings)
+    return resp
+
+
+@router.get("/accept-invite")
+async def accept_invite(
+    token: str | None = None,
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """Begin invite acceptance: stash the invite token in a short-lived cookie and
+    bounce through Google OAuth. The callback consumes the invite on return."""
+    if not settings.sso_enabled:
+        raise _SSO_DISABLED
+    if not token or not token.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing invite token")
+    state = oauth.new_state()
+    verifier, challenge = oauth.new_pkce()
+    url = oauth.build_authorization_url(settings, state=state, code_challenge=challenge)
+    resp = RedirectResponse(url, status_code=status.HTTP_302_FOUND)
+    set_tx_cookie(resp, issue_tx(state, verifier, settings), settings)
+    set_invite_cookie(resp, issue_invite(token, settings), settings)
     return resp
 
 
@@ -99,6 +129,13 @@ async def callback(
     email = str(claims.get("email", "")).lower()
     if not email:
         return _fail(status.HTTP_403_FORBIDDEN, "no email in token", settings)
+
+    # Invite-accept bounce: a valid pending invite for this Google-verified email is
+    # the authorization, so it runs BEFORE (and bypasses) the allow-list check below.
+    invite_cookie = request.cookies.get(INVITE_COOKIE_NAME)
+    if invite_cookie:
+        return await _complete_invite_accept(db, settings, email=email, invite_cookie=invite_cookie)
+
     user = await admin_users_repo.get_admin_user(db, email)
     if user is None or user.status != "active":
         # Per design §9, denials ARE audited (a security trail). Any Google-verified
@@ -154,6 +191,140 @@ async def callback(
         settings,
     )
     clear_tx_cookie(resp, settings)
+    return resp
+
+
+async def _complete_invite_accept(
+    db: AsyncSession,
+    settings: Settings,
+    *,
+    email: str,
+    invite_cookie: str,
+) -> Response:
+    """Consume a pending invite for the Google-verified email and issue a session.
+
+    A valid pending invite is the authorization for a brand-new (non-allow-listed)
+    person — the deliberate allow-list bypass. The exact email match against the
+    Google-verified identity is the security gate; the token is not a secret.
+    """
+
+    def _err(reason: str) -> Response:
+        resp = RedirectResponse(
+            build_accept_error_url(settings, reason), status_code=status.HTTP_303_SEE_OTHER
+        )
+        clear_tx_cookie(resp, settings)
+        clear_invite_cookie(resp, settings)
+        return resp
+
+    async def _audit_denied(invite: Invitation, reason: str) -> None:
+        await set_tenant_context(db, invite.organization_id)
+        await admin_audit.record(
+            db,
+            actor_email=email,
+            action="invite.accept_denied",
+            entity_type="invitation",
+            entity_id=invite.email,
+            detail={"invite_email": invite.email, "attempted_email": email, "reason": reason},
+        )
+        await db.commit()
+
+    try:
+        claims = decode_invite(invite_cookie, settings)
+        token = str(claims["invite_token"])
+    except Exception:  # noqa: BLE001 - any bad/tampered invite cookie is "invalid"
+        return _err("invalid")
+
+    invite = await invitations_repo.get_by_token(db, token)
+    if invite is None:
+        logger.warning("invite accept: unknown token")
+        return _err("invalid")
+
+    # Email is checked first and unconditionally — never leak invite state to a
+    # mismatched identity.
+    if invite.email != email:
+        await _audit_denied(invite, "mismatch")
+        return _err("mismatch")
+
+    # Idempotent re-click: already a member of the target org -> success, no re-consume.
+    if await memberships_repo.get_membership(db, email, invite.organization_id) is not None:
+        if invite.status is InviteStatus.PENDING:
+            await invitations_repo.mark_accepted(db, invite)
+            await db.commit()
+        user = await admin_users_repo.get_admin_user(db, email)
+        return _issue_invite_session(
+            settings,
+            email=email,
+            org_id=invite.organization_id,
+            role=invite.role,
+            is_super_admin=bool(user and user.is_super_admin),
+        )
+
+    now = datetime.now(UTC)
+    if invite.status is not InviteStatus.PENDING:
+        await _audit_denied(invite, invite.status.value)
+        return _err("revoked" if invite.status is InviteStatus.REVOKED else "invalid")
+    if invite.expires_at <= now:
+        await _audit_denied(invite, "expired")
+        return _err("expired")
+
+    # Valid -> consume. add_member ensures the identity (FK target) exists, so a
+    # brand-new invitee gets their admin_users row created here.
+    await set_tenant_context(db, invite.organization_id)
+    user = await admin_users_repo.ensure_identity(db, email=email)
+    await memberships_repo.add_member(
+        db,
+        email=email,
+        org_id=invite.organization_id,
+        role=invite.role,
+        added_by=f"invite:{invite.invited_by}",
+    )
+    await invitations_repo.mark_accepted(db, invite)
+    await admin_audit.record(
+        db,
+        actor_email=email,
+        action="invite.accept",
+        entity_type="invitation",
+        entity_id=invite.email,
+    )
+    await admin_audit.record(
+        db, actor_email=email, action="auth.login", entity_type="admin_user", entity_id=email
+    )
+    await admin_users_repo.set_last_active_org(db, email=email, org_id=invite.organization_id)
+    await db.commit()
+    return _issue_invite_session(
+        settings,
+        email=email,
+        org_id=invite.organization_id,
+        role=invite.role,
+        is_super_admin=user.is_super_admin,
+    )
+
+
+def _issue_invite_session(
+    settings: Settings,
+    *,
+    email: str,
+    org_id: uuid.UUID,
+    role: AdminRole,
+    is_super_admin: bool,
+) -> Response:
+    resp = RedirectResponse(
+        settings.admin_post_login_redirect, status_code=status.HTTP_303_SEE_OTHER
+    )
+    set_session_cookie(
+        resp,
+        issue_session(
+            email,
+            active_org_id=org_id,
+            role=role,
+            is_super_admin=is_super_admin,
+            acting_as=False,
+            settings=settings,
+        ),
+        settings,
+    )
+    clear_tx_cookie(resp, settings)
+    clear_invite_cookie(resp, settings)
     return resp
 
 
