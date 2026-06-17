@@ -3,6 +3,7 @@ import { Table, Tbody, Td, Th, Thead, Tr } from "../../components/ui/table";
 import { Input } from "../../components/ui/input";
 import { Select } from "../../components/ui/select";
 import { Button } from "../../components/ui/button";
+import { Spinner } from "../../components/ui/spinner";
 import { pushToast } from "../../components/ui/toast";
 import type { AdminUserRole } from "../../types/api";
 import { useCreateInvite, useInvites, useResendInvite, useRevokeInvite } from "./hooks";
@@ -82,55 +83,67 @@ export function InvitesSection() {
         </Button>
       </form>
 
-      <Table>
-        <Thead>
-          <Tr>
-            <Th>Email</Th>
-            <Th>Role</Th>
-            <Th>Invited by</Th>
-            <Th>Expires</Th>
-            <Th className="text-right">Actions</Th>
-          </Tr>
-        </Thead>
-        <Tbody>
-          {list.length === 0 ? (
+      {invites.isLoading ? (
+        <div className="flex items-center gap-2 text-slate-600">
+          <Spinner /> Loading invites…
+        </div>
+      ) : invites.isError ? (
+        <p className="text-sm text-red-700">
+          Failed to load invites: {(invites.error as Error)?.message}
+        </p>
+      ) : (
+        <Table>
+          <Thead>
             <Tr>
-              <Td className="text-slate-500" colSpan={5}>
-                No pending invites.
-              </Td>
+              <Th>Email</Th>
+              <Th>Role</Th>
+              <Th>Invited by</Th>
+              <Th>Expires</Th>
+              <Th className="text-right">Actions</Th>
             </Tr>
-          ) : null}
-          {list.map((inv) => (
-            <Tr key={inv.id}>
-              <Td className="font-medium">{inv.email}</Td>
-              <Td>{inv.role}</Td>
-              <Td className="text-xs text-slate-500">{inv.invited_by ?? "—"}</Td>
-              <Td className="text-xs text-slate-500">
-                {new Date(inv.expires_at).toLocaleString()}
-              </Td>
-              <Td className="space-x-2 text-right">
-                <Button variant="secondary" onClick={() => void copy(inv.accept_url)}>
-                  Copy link
-                </Button>
-                <Button
-                  variant="secondary"
-                  disabled={resend.isPending}
-                  onClick={() => resend.mutate(inv.id)}
-                >
-                  Resend
-                </Button>
-                <Button
-                  variant="danger"
-                  disabled={revoke.isPending}
-                  onClick={() => revoke.mutate(inv.id)}
-                >
-                  Revoke
-                </Button>
-              </Td>
-            </Tr>
-          ))}
-        </Tbody>
-      </Table>
+          </Thead>
+          <Tbody>
+            {list.length === 0 ? (
+              <Tr>
+                <Td className="text-slate-500" colSpan={5}>
+                  No pending invites.
+                </Td>
+              </Tr>
+            ) : null}
+            {list.map((inv) => (
+              <Tr key={inv.id}>
+                <Td className="font-medium">{inv.email}</Td>
+                <Td>{inv.role}</Td>
+                <Td className="text-xs text-slate-500">{inv.invited_by ?? "—"}</Td>
+                <Td className="text-xs text-slate-500">
+                  {new Date(inv.expires_at).toLocaleString()}
+                </Td>
+                <Td className="space-x-2 text-right">
+                  <Button variant="secondary" onClick={() => void copy(inv.accept_url)}>
+                    Copy link
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={resend.isPending}
+                    onClick={() =>
+                      resend.mutate(inv.id, { onSuccess: (fresh) => void copy(fresh.accept_url) })
+                    }
+                  >
+                    Resend
+                  </Button>
+                  <Button
+                    variant="danger"
+                    disabled={revoke.isPending}
+                    onClick={() => revoke.mutate(inv.id)}
+                  >
+                    Revoke
+                  </Button>
+                </Td>
+              </Tr>
+            ))}
+          </Tbody>
+        </Table>
+      )}
     </div>
   );
 }
