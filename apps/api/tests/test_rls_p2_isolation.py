@@ -399,3 +399,54 @@ def test_members_api_cannot_see_other_orgs(isolation_client, two_orgs):
     emails = {m["email"] for m in listing.json()}
     assert "owner@example.com" in emails
     assert "stranger@example.com" not in emails
+
+
+# ---------------------------------------------------------------------------
+# 6. sentinel: the REAL get_tenant_db keeps the active org after a commit
+# ---------------------------------------------------------------------------
+
+
+async def test_get_tenant_db_reapplies_active_org_after_commit(
+    app_async_database_url, app_role_password, two_orgs, monkeypatch
+):
+    """Guard the real ``get_tenant_db`` after_begin re-apply (review MEDIUM-1).
+
+    Every other test runs ``get_tenant_db`` through an *override* that mirrors it, so
+    a silent break in the real dependency (e.g. a SQLAlchemy change that stops the
+    ``after_begin`` listener firing) would slip through CI — RLS would quietly fall
+    back to the connect-time *default* org for any post-commit read. This drives the
+    REAL ``get_tenant_db`` against a usan_app engine carrying the production connect
+    baseline (injected via ``get_session_factory`` — no global engine/settings churn),
+    and asserts the active org is set initially AND still set after a COMMIT (the
+    ``is_local`` set is cleared at commit; only the listener restores it on the next
+    transaction). ``org_b`` is a non-default org, so a missing re-apply would surface
+    the *usan* baseline instead.
+    """
+    from usan_api.db.session import _install_default_org_context
+
+    _, org_b = two_orgs
+    # A locally-owned usan_app engine with the prod connect baseline (default org),
+    # injected into the REAL get_tenant_db via get_session_factory.
+    engine = create_async_engine(app_async_database_url, poolclass=NullPool)
+    _install_default_org_context(engine)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr("usan_api.auth.get_session_factory", lambda: factory)
+    try:
+        principal = AdminPrincipal(
+            email="sentinel@x.com",
+            active_org_id=org_b,
+            role=AdminRole.ADMIN,
+            is_super_admin=True,
+            acting_as=True,
+        )
+        agen = get_tenant_db(principal)
+        session = await agen.__anext__()
+        try:
+            current = text("SELECT current_setting('app.current_org', true)")
+            assert (await session.execute(current)).scalar_one() == str(org_b)
+            await session.commit()  # clears is_local; next txn must re-apply via after_begin
+            assert (await session.execute(current)).scalar_one() == str(org_b)
+        finally:
+            await agen.aclose()
+    finally:
+        await engine.dispose()
