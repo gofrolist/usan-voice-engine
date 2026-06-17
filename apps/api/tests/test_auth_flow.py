@@ -11,13 +11,14 @@ from usan_api.settings import get_settings
 
 
 async def _seed(async_database_url: str, email: str) -> None:
+    """Seed an identity-only admin_users row (role moved to memberships, P2 / 0033)."""
     engine = create_async_engine(async_database_url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "INSERT INTO admin_users (email, role, added_by) "
-                    "VALUES (:e, CAST('admin' AS admin_role), 'test') "
+                    "INSERT INTO admin_users (email, status, added_by) "
+                    "VALUES (:e, 'active', 'test') "
                     "ON CONFLICT (email) DO NOTHING"
                 ),
                 {"e": email.lower()},

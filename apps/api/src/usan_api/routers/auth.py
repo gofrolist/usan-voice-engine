@@ -114,7 +114,20 @@ async def callback(
     resp = RedirectResponse(
         settings.admin_post_login_redirect, status_code=status.HTTP_303_SEE_OTHER
     )
-    set_session_cookie(resp, issue_session(email, user.role, settings), settings)
+    # B1: mint an identity-only session (no active org yet). Task B3 resolves the
+    # active org from the caller's memberships and re-issues with role/active_org set.
+    set_session_cookie(
+        resp,
+        issue_session(
+            email,
+            active_org_id=None,
+            role=None,
+            is_super_admin=user.is_super_admin,
+            acting_as=False,
+            settings=settings,
+        ),
+        settings,
+    )
     clear_tx_cookie(resp, settings)
     return resp
 
@@ -148,4 +161,6 @@ async def logout(
 
 @router.get("/me", response_model=MeResponse)
 async def me(principal: AdminPrincipal = Depends(require_admin_session)) -> MeResponse:
-    return MeResponse(email=principal.email, role=principal.role.value)
+    # B1: role rides the session claims (None when no org is active). Task B3 extends
+    # this to the full org-aware payload (orgs list, active_org, super/act-as flags).
+    return MeResponse(email=principal.email, role=principal.role.value if principal.role else "")

@@ -382,7 +382,7 @@ def sso_client(
 async def _seed_admin_user_async(
     async_database_url: str,
     email: str,
-    role: str,
+    role: str | None = None,
     *,
     is_super_admin: bool = False,
     with_membership: bool = True,
@@ -391,13 +391,27 @@ async def _seed_admin_user_async(
 
     Returns the usan (default) org id so callers can mint a session scoped to it.
     Role now lives on the membership, not on admin_users (P2 / migration 0033).
+
+    ``role`` is required only when ``with_membership`` is True (it sets the
+    membership role); passing it with ``with_membership=False`` is a mistake — the
+    membership row that would carry it is never written — so we reject that combo
+    rather than silently dropping the argument.
     """
+    if with_membership and role is None:
+        raise ValueError("role is required when with_membership=True")
+    if not with_membership and role is not None:
+        raise ValueError("role is ignored when with_membership=False; omit it")
     engine = create_async_engine(async_database_url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
             org_id = (
                 await conn.execute(text("SELECT id FROM organizations WHERE slug = 'usan'"))
-            ).scalar_one()
+            ).scalar_one_or_none()
+            if org_id is None:
+                raise RuntimeError(
+                    "seed precondition failed: no organization with slug='usan' "
+                    "(the connect-baseline org seed must run before admin fixtures)"
+                )
             await conn.execute(
                 text(
                     "INSERT INTO admin_users (email, is_super_admin, status, added_by) "
@@ -459,7 +473,6 @@ def super_admin_session(client: TestClient, async_database_url: str) -> dict[str
         _seed_admin_user_async(
             async_database_url,
             email,
-            "admin",
             is_super_admin=True,
             with_membership=False,
         )

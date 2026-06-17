@@ -1,4 +1,5 @@
 import hmac
+import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
@@ -135,10 +136,18 @@ _COOKIE_AUTH = {"WWW-Authenticate": "Cookie"}
 
 @dataclass(frozen=True)
 class AdminPrincipal:
-    """The authenticated admin operator for the current request."""
+    """The authenticated admin operator for the current request (P2, org-aware).
+
+    ``role`` is the caller's role in ``active_org_id`` (None when no org is active).
+    ``is_super_admin`` and ``acting_as`` ride the session claims; act-as means the
+    active org came from a super-admin switch, not a membership.
+    """
 
     email: str
-    role: AdminRole
+    active_org_id: uuid.UUID | None
+    role: AdminRole | None
+    is_super_admin: bool
+    acting_as: bool
 
 
 async def require_admin_session(
@@ -148,10 +157,13 @@ async def require_admin_session(
 ) -> AdminPrincipal:
     """Authenticate an admin operator from the session cookie.
 
-    The cookie proves authentication (Google verified the human); the admin_users
-    row provides current authorization + the live role. A removed/blocked operator
-    is rejected immediately even while their cookie is unexpired. 401 (not 403) on a
-    missing/invalid/expired cookie or a no-longer-allow-listed email.
+    The cookie proves authentication (Google verified the human) and carries the
+    active org + role + super/act-as flags (P2 / migration 0033 moved role off the
+    admin_users row onto memberships). The global ``admin_users`` row still provides
+    live authorization: a removed/blocked operator is rejected immediately even while
+    their cookie is unexpired. 401 (not 403) on a missing/invalid/expired cookie or a
+    no-longer-allow-listed/inactive email. Membership re-validation against the active
+    org is layered on in Task B2.
     """
     if not session_cookie:
         raise HTTPException(
@@ -169,13 +181,23 @@ async def require_admin_session(
         ) from exc
     email = str(claims["sub"]).lower()
     user = await admin_users_repo.get_admin_user(db, email)
-    if user is None:
+    if user is None or user.status != "active":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="not authorized",
             headers=_COOKIE_AUTH,
         )
-    return AdminPrincipal(email=email, role=user.role)
+    active_org_raw = claims.get("active_org")
+    active_org_id = uuid.UUID(str(active_org_raw)) if active_org_raw else None
+    role_raw = claims.get("role")
+    role = AdminRole(role_raw) if role_raw else None
+    return AdminPrincipal(
+        email=email,
+        active_org_id=active_org_id,
+        role=role,
+        is_super_admin=bool(claims.get("super")),
+        acting_as=bool(claims.get("acting_as")),
+    )
 
 
 def require_admin_role(
