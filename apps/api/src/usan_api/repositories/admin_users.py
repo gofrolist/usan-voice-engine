@@ -13,19 +13,11 @@ reads/writes through the ORM model directly.
 
 import uuid
 
-from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.base import AdminRole
 from usan_api.db.models import AdminUser
-
-# DEPRECATED (P2): the legacy single-org admin_users router (routers/admin_users.py)
-# still imports ``AdminUserRow`` + ``list_admin_users`` at module load. That router is
-# replaced by the per-org members router in Task C1; until then these identity-only
-# shims keep the import graph (and therefore test collection) healthy. The role-bearing
-# admin_users.role column was dropped in migration 0033 — role now lives in memberships.
-AdminUserRow = AdminUser
 
 
 def _norm(email: str) -> str:
@@ -35,13 +27,6 @@ def _norm(email: str) -> str:
 async def get_admin_user(db: AsyncSession, email: str) -> AdminUser | None:
     """The global identity row for an email (or None). Identity only — no role."""
     return await db.get(AdminUser, _norm(email))
-
-
-async def list_admin_users(db: AsyncSession) -> list[AdminUser]:
-    """DEPRECATED (P2): all global identities. Superseded by memberships.list_members
-    (per-org). Retained only so the legacy router imports until Task C1 deletes it."""
-    res = await db.execute(select(AdminUser).order_by(AdminUser.email))
-    return list(res.scalars().all())
 
 
 async def ensure_identity(
