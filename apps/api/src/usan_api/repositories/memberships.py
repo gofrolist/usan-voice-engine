@@ -48,6 +48,24 @@ async def count_org_admins(db: AsyncSession, org_id: uuid.UUID) -> int:
     return int(res.scalar_one())
 
 
+async def _locked_org_admin_count(db: AsyncSession, org_id: uuid.UUID) -> int:
+    """Count an org's ADMIN memberships while holding a row lock on each.
+
+    The last-admin guard is a read-then-write: a plain count lets two concurrent
+    demotions/removals both observe ``2`` and both proceed, leaving the org with zero
+    admins (an unrecoverable lockout). Locking the ADMIN rows ``FOR UPDATE`` serializes
+    those transactions — the second blocks until the first commits, then re-reads the
+    now-reduced count and is correctly refused. ``FOR UPDATE`` is not allowed with an
+    aggregate, so we lock the rows and count them in Python.
+    """
+    res = await db.execute(
+        select(Membership.email)
+        .where(Membership.organization_id == org_id, Membership.role == AdminRole.ADMIN)
+        .with_for_update()
+    )
+    return len(res.scalars().all())
+
+
 async def add_member(
     db: AsyncSession,
     *,
@@ -84,7 +102,7 @@ async def set_member_role(
     if (
         m.role is AdminRole.ADMIN
         and role is AdminRole.VIEWER
-        and await count_org_admins(db, org_id) <= 1
+        and await _locked_org_admin_count(db, org_id) <= 1
     ):
         raise LastOrgAdminError("cannot demote the last admin of this org")
     m.role = role
@@ -97,7 +115,7 @@ async def remove_member(db: AsyncSession, *, email: str, org_id: uuid.UUID) -> b
     m = await db.get(Membership, (norm, org_id))
     if m is None:
         return False
-    if m.role is AdminRole.ADMIN and await count_org_admins(db, org_id) <= 1:
+    if m.role is AdminRole.ADMIN and await _locked_org_admin_count(db, org_id) <= 1:
         raise LastOrgAdminError("cannot remove the last admin of this org")
     await db.execute(
         delete(Membership).where(Membership.email == norm, Membership.organization_id == org_id)

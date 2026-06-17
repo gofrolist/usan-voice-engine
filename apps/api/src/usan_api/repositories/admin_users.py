@@ -13,6 +13,7 @@ reads/writes through the ORM model directly.
 
 import uuid
 
+from sqlalchemy import or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,14 +36,18 @@ async def ensure_identity(
     """Insert the identity if missing (idempotent); return it. Caller commits.
 
     Used by membership creation (the FK target must exist) and by SSO invites. An
-    existing row is left untouched (its ``is_super_admin``/``status`` are not
-    downgraded by a plain invite).
+    existing row is never *downgraded*: ``is_super_admin`` is OR-ed (so a bootstrap
+    re-run with ``is_super_admin=True`` promotes a pre-existing non-super identity, and
+    a plain invite with the default ``False`` leaves a super-admin super), and
+    ``status``/``added_by`` are left untouched.
     """
     norm = _norm(email)
-    stmt = (
-        pg_insert(AdminUser)
-        .values(email=norm, is_super_admin=is_super_admin, added_by="invite")
-        .on_conflict_do_nothing(index_elements=["email"])
+    insert_stmt = pg_insert(AdminUser).values(
+        email=norm, is_super_admin=is_super_admin, added_by="invite"
+    )
+    stmt = insert_stmt.on_conflict_do_update(
+        index_elements=["email"],
+        set_={"is_super_admin": or_(AdminUser.is_super_admin, insert_stmt.excluded.is_super_admin)},
     )
     await db.execute(stmt)
     await db.flush()

@@ -239,20 +239,22 @@ async def switch_org(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     m = await memberships_repo.get_membership(db, principal.email, org.id)
     if m is not None:
-        role, acting_as = m.role, False
+        role, acting_as, action = m.role, False, "auth.switch_org"
     elif principal.is_super_admin:
-        role, acting_as = AdminRole.ADMIN, True
-        # The act-as audit row lands in the TARGET org (admin_audit_log is RLS-scoped).
-        await set_tenant_context(db, org.id)
-        await admin_audit.record(
-            db,
-            actor_email=principal.email,
-            action="auth.act_as",
-            entity_type="organization",
-            entity_id=str(org.id),
-        )
+        role, acting_as, action = AdminRole.ADMIN, True, "auth.act_as"
     else:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "no access to this organization")
+    # Every org-context change is audited in the TARGET org (admin_audit_log is
+    # RLS-scoped) with the real operator's email — a member switch and a super-admin
+    # act-as both gate all subsequent data access, so both leave a trail (design §9).
+    await set_tenant_context(db, org.id)
+    await admin_audit.record(
+        db,
+        actor_email=principal.email,
+        action=action,
+        entity_type="organization",
+        entity_id=str(org.id),
+    )
     await admin_users_repo.set_last_active_org(db, email=principal.email, org_id=org.id)
     await db.commit()
     out = MeResponse(

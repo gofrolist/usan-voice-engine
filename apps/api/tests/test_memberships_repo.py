@@ -122,3 +122,22 @@ async def test_remove_last_org_admin_raises(two_orgs, app_session):
     )
     with pytest.raises(repo.LastOrgAdminError):
         await repo.remove_member(app_session, email="a@x.com", org_id=org_a)
+
+
+async def test_ensure_identity_elevates_super_admin_on_reseed(app_session):
+    """A bootstrap re-run promotes a pre-existing non-super identity, and a later plain
+    invite never downgrades a super-admin (ON CONFLICT OR-s is_super_admin)."""
+    from usan_api.repositories import admin_users as users_repo
+
+    await users_repo.ensure_identity(app_session, email="boss@x.com", is_super_admin=False)
+    await users_repo.ensure_identity(app_session, email="boss@x.com", is_super_admin=True)
+    app_session.expire_all()  # Core UPDATE bypasses the identity map; force a re-read.
+    u = await users_repo.get_admin_user(app_session, "boss@x.com")
+    assert u is not None
+    assert u.is_super_admin is True
+
+    await users_repo.ensure_identity(app_session, email="boss@x.com", is_super_admin=False)
+    app_session.expire_all()
+    u2 = await users_repo.get_admin_user(app_session, "boss@x.com")
+    assert u2 is not None
+    assert u2.is_super_admin is True

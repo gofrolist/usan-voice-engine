@@ -265,6 +265,29 @@ def test_switch_org_to_membership_org_succeeds(client, async_database_url):
     assert claims["acting_as"] is False
 
 
+def test_switch_org_member_path_writes_switch_audit(client, async_database_url):
+    """A plain member switch is audited too (not only act-as) — design §9. A bare org
+    switch gates all subsequent data access, so it must leave a trail."""
+    usan = _usan_org_id(async_database_url)
+    other = _make_org(async_database_url, "auditteam")
+    _seed_identity(async_database_url, "aud@x.com")
+    _add_membership(async_database_url, "aud@x.com", usan, "admin")
+    _add_membership(async_database_url, "aud@x.com", other, "viewer")
+    token = issue_session(
+        "aud@x.com",
+        active_org_id=usan,
+        role=AdminRole.ADMIN,
+        is_super_admin=False,
+        acting_as=False,
+        settings=get_settings(),
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, token)
+
+    r = client.post("/v1/auth/switch-org", json={"organization_id": str(other)})
+    assert r.status_code == 200
+    assert ("auth.switch_org", str(other)) in _audit_actions(async_database_url, "aud@x.com")
+
+
 def test_switch_org_super_admin_to_non_member_is_act_as(client, async_database_url):
     other = _make_org(async_database_url, "actasteam")
     _seed_identity(async_database_url, "su@x.com", is_super=True)
