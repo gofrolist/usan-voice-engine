@@ -3,7 +3,7 @@
 //   - schemas/agent_config.py (AgentConfig + 8 sub-configs)
 //   - schemas/agent_profile.py (Profile/Version summaries + details + requests)
 //   - schemas/admin.py (AuditEntryOut, ContactSummary, AssignProfileRequest)
-//   - schemas/auth.py (MeResponse, AdminUserOut, AdminUserCreate)
+//   - schemas/auth.py (MeResponse, MemberOut, MemberCreate, OrgSummary)
 //   - schemas/admin_calls.py (AdminCallSummary, AdminCallDetail + CallOrigin,
 //     TranscriptSegment from schemas/call.py)
 //   - schemas/admin_tools.py (FollowupFlagSummary, CallbackRequestSummary, QueuesSummary)
@@ -280,20 +280,51 @@ export interface SetTimezoneRequest {
 
 export type AdminUserRole = "admin" | "viewer";
 
-export interface Me {
-  email: string;
-  role: AdminUserRole;
+export interface OrgSummary {
+  id: string;
+  name: string;
+  slug: string;
+  role: AdminUserRole | null; // caller's role in this org; null for an act-as-only super-admin
 }
 
-export interface AdminUser {
+export interface Me {
+  email: string;
+  is_super_admin: boolean;
+  acting_as: boolean;
+  active_org: OrgSummary | null;
+  orgs: OrgSummary[];
+}
+
+export interface SwitchOrgRequest {
+  organization_id: string;
+}
+
+export interface Member {
   email: string;
   role: AdminUserRole;
   added_by: string | null;
 }
 
-export interface AdminUserCreate {
+export interface MemberCreate {
   email: string;
   role: AdminUserRole;
+}
+
+export interface MemberRoleUpdate {
+  role: AdminUserRole;
+}
+
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  status: string;
+}
+
+export interface OrgCreate {
+  name: string;
+  slug: string;
+  first_admin_email?: string | null;
 }
 
 // ---------------------------------------------------------------------------

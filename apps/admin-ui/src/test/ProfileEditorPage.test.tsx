@@ -3,7 +3,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import type { AgentConfig, Me, ProfileDetail, VersionDetail } from "../types/api";
+import type { AgentConfig, ProfileDetail, VersionDetail } from "../types/api";
+import { meFixture } from "./meFixture";
 
 // Mock the api module: getMock serves the page/session/version reads, putMock is the
 // saveDraft (the behavior under test), postMock would be the publish confirm.
@@ -86,7 +87,7 @@ function profile(): ProfileDetail {
 
 function routeGet(url: string): Promise<unknown> {
   if (url === "/v1/auth/me") {
-    return Promise.resolve({ email: "me@example.com", role: "admin" } satisfies Me);
+    return Promise.resolve(meFixture("admin"));
   }
   if (url === "/v1/admin/profiles/p1") return Promise.resolve(profile());
   if (url === "/v1/admin/profiles/p1/versions/1") {
@@ -222,7 +223,7 @@ function profileWithSmsTemplate(): ProfileDetail {
 
 function routeGetWithSms(url: string): Promise<unknown> {
   if (url === "/v1/auth/me") {
-    return Promise.resolve({ email: "me@example.com", role: "admin" } satisfies Me);
+    return Promise.resolve(meFixture("admin"));
   }
   if (url === "/v1/admin/profiles/p1") return Promise.resolve(profileWithSmsTemplate());
   if (url === "/v1/admin/profiles/p1/versions/1") {

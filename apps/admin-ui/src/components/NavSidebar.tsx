@@ -4,11 +4,13 @@ import { useSession, useIsAdmin } from "../auth/useSession";
 import { api } from "../lib/api";
 import { Button } from "./ui/button";
 import { ThemeToggle } from "./ui/ThemeToggle";
+import { OrgSwitcher } from "./OrgSwitcher";
 
 interface NavItem {
   to: string;
   label: string;
   adminOnly?: boolean;
+  superAdminOnly?: boolean;
 }
 interface NavGroup {
   heading: string;
@@ -37,7 +39,8 @@ const GROUPS: NavGroup[] = [
     heading: "System",
     items: [
       { to: "/audit", label: "Audit" },
-      { to: "/admin-users", label: "Admin Users", adminOnly: true },
+      { to: "/members", label: "Members", adminOnly: true },
+      { to: "/organizations", label: "Organizations", superAdminOnly: true },
     ],
   },
 ];
@@ -68,13 +71,16 @@ function Wordmark() {
 export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const { data: me } = useSession();
   const isAdmin = useIsAdmin();
+  const isSuperAdmin = !!me?.is_super_admin;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Wordmark />
       <nav className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 py-2">
         {GROUPS.map((group) => {
-          const items = group.items.filter((n) => !n.adminOnly || isAdmin);
+          const items = group.items.filter(
+            (n) => (!n.adminOnly || isAdmin) && (!n.superAdminOnly || isSuperAdmin),
+          );
           if (items.length === 0) return null;
           return (
             <div key={group.heading}>
@@ -106,6 +112,7 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
         })}
       </nav>
       <div className="border-t border-line px-4 py-3">
+        <OrgSwitcher />
         <div className="mb-2.5 flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">
             Appearance
@@ -115,7 +122,17 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
         <div className="truncate text-sm text-ink" title={me?.email}>
           {me?.email}
         </div>
-        <div className="text-xs uppercase tracking-wide text-faint">{me?.role}</div>
+        {me?.active_org ? (
+          <div
+            className="truncate text-xs text-faint"
+            title={me.active_org.name}
+          >
+            {me.active_org.name}
+            {me.active_org.role ? (
+              <span className="uppercase tracking-wide"> · {me.active_org.role}</span>
+            ) : null}
+          </div>
+        ) : null}
         <Button variant="ghost" className="mt-1 px-0" onClick={logout}>
           Log out
         </Button>

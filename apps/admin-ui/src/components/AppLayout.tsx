@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { NavSidebar, SidebarNav } from "./NavSidebar";
+import { ActingAsBanner } from "./ActingAsBanner";
 import { ErrorToast } from "./ErrorToast";
 import { ThemeToggle } from "./ui/ThemeToggle";
 
@@ -107,6 +108,7 @@ export function AppLayout() {
           <ThemeToggle />
         </header>
 
+        <ActingAsBanner />
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <Outlet />
         </main>

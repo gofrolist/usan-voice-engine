@@ -14,5 +14,7 @@ export function useSession() {
 
 export function useIsAdmin(): boolean {
   const { data } = useSession();
-  return data?.role === "admin";
+  // A super-admin counts as admin everywhere — including while acting-as another
+  // org, where active_org.role is null but is_super_admin is true.
+  return !!data && (data.is_super_admin || data.active_org?.role === "admin");
 }
