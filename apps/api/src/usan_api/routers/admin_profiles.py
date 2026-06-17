@@ -5,9 +5,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import require_admin_role, require_admin_session
+from usan_api.auth import get_tenant_db, require_admin_role, require_admin_session
 from usan_api.db.base import AdminRole
-from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
 from usan_api.repositories import custom_variables as custom_variables_repo
@@ -43,7 +42,7 @@ router = APIRouter(
 
 
 @router.get("", response_model=list[ProfileSummary])
-async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[ProfileSummary]:
+async def list_profiles(db: AsyncSession = Depends(get_tenant_db)) -> list[ProfileSummary]:
     profiles = await repo.list_profiles(db)
     summaries: list[ProfileSummary] = []
     # TODO(perf): N+1 — has_unpublished_draft + count_assigned_contacts run per profile.
@@ -62,7 +61,7 @@ async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[ProfileSumma
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ProfileSummary)
 async def create_profile(
     body: ProfileCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ProfileSummary:
@@ -94,7 +93,9 @@ async def create_profile(
 
 
 @router.get("/{profile_id}", response_model=ProfileDetail)
-async def get_profile(profile_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> ProfileDetail:
+async def get_profile(
+    profile_id: uuid.UUID, db: AsyncSession = Depends(get_tenant_db)
+) -> ProfileDetail:
     profile = await repo.get_profile(db, profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
@@ -105,7 +106,7 @@ async def get_profile(profile_id: uuid.UUID, db: AsyncSession = Depends(get_db))
 async def update_draft(
     profile_id: uuid.UUID,
     body: DraftUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ProfileDetail:
@@ -195,7 +196,7 @@ async def update_draft(
 async def publish(
     profile_id: uuid.UUID,
     body: PublishRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> VersionSummary:
@@ -231,7 +232,7 @@ async def publish(
 
 @router.get("/{profile_id}/versions", response_model=list[VersionSummary])
 async def list_versions(
-    profile_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    profile_id: uuid.UUID, db: AsyncSession = Depends(get_tenant_db)
 ) -> list[VersionSummary]:
     if await repo.get_profile(db, profile_id) is None:
         raise HTTPException(status_code=404, detail="profile not found")
@@ -241,7 +242,7 @@ async def list_versions(
 
 @router.get("/{profile_id}/versions/{version}", response_model=VersionDetail)
 async def get_version(
-    profile_id: uuid.UUID, version: int, db: AsyncSession = Depends(get_db)
+    profile_id: uuid.UUID, version: int, db: AsyncSession = Depends(get_tenant_db)
 ) -> VersionDetail:
     row = await repo.get_version(db, profile_id, version)
     if row is None:
@@ -257,7 +258,7 @@ async def get_version(
 async def rollback(
     profile_id: uuid.UUID,
     version: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> VersionSummary:
@@ -299,7 +300,7 @@ async def rollback(
 async def set_default(
     profile_id: uuid.UUID,
     body: SetDefaultRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ProfileDetail:
@@ -326,7 +327,7 @@ async def set_default(
 @router.post("/{profile_id}/archive", response_model=ProfileDetail)
 async def archive(
     profile_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ProfileDetail:

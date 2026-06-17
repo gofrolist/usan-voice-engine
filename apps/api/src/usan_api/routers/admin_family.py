@@ -14,9 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import notifications
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import require_admin_role, require_admin_session
+from usan_api.auth import get_tenant_db, require_admin_role, require_admin_session
 from usan_api.db.base import AdminRole
-from usan_api.db.session import get_db
 from usan_api.repositories import admin_audit
 from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import family_contacts as family_contacts_repo
@@ -45,7 +44,7 @@ router = APIRouter(
 @router.post("/family-contacts", response_model=FamilyContactOut, status_code=201)
 async def create_family_contact(
     body: FamilyContactCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> FamilyContactOut:
@@ -75,7 +74,7 @@ async def create_family_contact(
 @router.get("/family-contacts", response_model=list[FamilyContactOut])
 async def list_family_contacts(
     contact_id: uuid.UUID = Query(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ) -> list[FamilyContactOut]:
     rows = await family_contacts_repo.list_family_contacts(db, contact_id=contact_id)
     return [FamilyContactOut.model_validate(r) for r in rows]
@@ -85,7 +84,7 @@ async def list_family_contacts(
 async def update_family_contact(
     family_contact_id: uuid.UUID,
     body: FamilyContactUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> FamilyContactOut:
@@ -108,7 +107,7 @@ async def update_family_contact(
 @router.delete("/family-contacts/{family_contact_id}", status_code=204)
 async def delete_family_contact(
     family_contact_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> Response:
@@ -146,7 +145,7 @@ async def list_family_tasks(
     status: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ) -> list[FamilyTaskOut]:
     rows = await family_tasks_repo.list_family_tasks(
         db, contact_id=contact_id, status=status, limit=limit, offset=offset
@@ -158,7 +157,7 @@ async def list_family_tasks(
 async def patch_family_task(
     task_id: int,
     body: FamilyTaskPatch,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> FamilyTaskOut:
@@ -191,7 +190,7 @@ async def list_family_reports(
     contact_id: uuid.UUID | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ) -> list[FamilyReportOut]:
     # Session-gated read; the rich trend detail is the operator plane's (BAA) job. The
     # family SMS stays PHI-minimized — that is enforced at send time, not here.
@@ -207,7 +206,7 @@ async def list_family_reports(
 @router.post("/family-reports/{report_id}/resend", response_model=FamilyReportOut)
 async def resend_family_report(
     report_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> FamilyReportOut:

@@ -3,20 +3,24 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import jwt
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
 
+from usan_api.auth import get_tenant_db
 from usan_api.db.session import get_db
 from usan_api.main import create_app
 from usan_api.settings import get_settings
+from usan_api.tenant_context import set_tenant_context
 
 API_DIR = Path(__file__).resolve().parents[1]
 TEST_SECRET = "a" * 32
@@ -136,6 +140,92 @@ def app_database_url(database_url: str) -> str:
     return database_url.replace("usan:usan@", "usan_app:usan_app@", 1)
 
 
+@pytest.fixture(scope="session")
+def app_async_database_url(app_database_url: str) -> str:
+    """The async (asyncpg) usan_app DSN — the RLS-subject role for repo/route tests."""
+    return app_database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+
+@pytest.fixture
+def two_orgs(async_database_url: str) -> tuple[uuid.UUID, uuid.UUID]:
+    """Insert org A + org B via the superuser engine; yield their ids.
+
+    On teardown, delete the two orgs and their memberships. The membership delete
+    runs first (FK), then the orgs; ON DELETE CASCADE would also cover memberships,
+    but the explicit delete keeps the cleanup independent of the FK action.
+    """
+
+    async def _setup() -> tuple[uuid.UUID, uuid.UUID]:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                a = (
+                    await conn.execute(
+                        text(
+                            "INSERT INTO organizations (name, slug) VALUES ('A', :s) RETURNING id"
+                        ),
+                        {"s": f"a-{uuid.uuid4().hex[:8]}"},
+                    )
+                ).scalar_one()
+                b = (
+                    await conn.execute(
+                        text(
+                            "INSERT INTO organizations (name, slug) VALUES ('B', :s) RETURNING id"
+                        ),
+                        {"s": f"b-{uuid.uuid4().hex[:8]}"},
+                    )
+                ).scalar_one()
+            return a, b
+        finally:
+            await engine.dispose()
+
+    async def _teardown(org_a: uuid.UUID, org_b: uuid.UUID) -> None:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                # Safety net: never hang if a test left an open transaction holding an
+                # FK lock on these orgs (membership insert takes FOR KEY SHARE) — fail
+                # fast instead. The app_session fixture rolls back before this runs, so
+                # under correct fixture ordering the lock is already released.
+                await conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                await conn.execute(
+                    text("DELETE FROM memberships WHERE organization_id IN (:a, :b)"),
+                    {"a": org_a, "b": org_b},
+                )
+                await conn.execute(
+                    text("DELETE FROM organizations WHERE id IN (:a, :b)"),
+                    {"a": org_a, "b": org_b},
+                )
+        finally:
+            await engine.dispose()
+
+    org_a, org_b = asyncio.run(_setup())
+    try:
+        yield org_a, org_b
+    finally:
+        asyncio.run(_teardown(org_a, org_b))
+
+
+@pytest_asyncio.fixture
+async def app_session(app_async_database_url: str, app_role_password: None):
+    """A usan_app async session (NullPool) for repo-level tests.
+
+    Connects as the non-superuser RLS-subject role. memberships + admin_users are
+    GLOBAL (non-RLS) tables, so repo tests need no org context; tests that exercise
+    RLS-scoped tables must call set_tenant_context(session, org_id) themselves.
+    Rolls back on teardown so each test is isolated even without a TRUNCATE.
+    """
+    engine = create_async_engine(app_async_database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    session = factory()
+    try:
+        yield session
+    finally:
+        await session.rollback()
+        await session.close()
+        await engine.dispose()
+
+
 # Every table a `client` test may touch, wiped as one statement. RESTART IDENTITY
 # CASCADE so dependent rows (e.g. webhook_deliveries -> webhook_endpoints) go too.
 _TRUNCATE_ALL = (
@@ -146,7 +236,7 @@ _TRUNCATE_ALL = (
     "custom_variables, webhook_deliveries, webhook_endpoints, "
     "call_batch_targets, call_batches, call_schedules, "
     "agent_profile_versions, agent_profiles, admin_audit_log, "
-    "admin_users, follow_up_flags, callback_requests, sms_messages, "
+    "memberships, admin_users, follow_up_flags, callback_requests, sms_messages, "
     "calls, dnc_list, contacts "
     "RESTART IDENTITY CASCADE"
 )
@@ -189,9 +279,101 @@ def _routed_app() -> FastAPI:
     return _ROUTED_APP
 
 
+async def _resolve_usan_org_id(super_url: str) -> uuid.UUID:
+    """The seeded default (usan) org id, read via the superuser engine.
+
+    Used as the default active org for the `get_tenant_db` test override so admin
+    routes scope to the same org the `admin_session` fixture mints into.
+    """
+    engine = create_async_engine(super_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as conn:
+            org_id = (
+                await conn.execute(text("SELECT id FROM organizations WHERE slug = 'usan'"))
+            ).scalar_one_or_none()
+            if org_id is None:
+                raise RuntimeError(
+                    "default organization (slug='usan') is not seeded; "
+                    "the connect-baseline org seed must run before the test override"
+                )
+            return org_id
+    finally:
+        await engine.dispose()
+
+
+def act_as_org(app: FastAPI, org_id: uuid.UUID) -> None:
+    """Repoint the `get_tenant_db` test override at ``org_id``.
+
+    Admin routes resolve their org from the session principal in production; under
+    test the `get_tenant_db` override scopes the usan_app session to a single
+    test-controlled active org (default: the seeded usan org). Multi-org / act-as
+    tests call this to read/write as a different active org without minting a new
+    cookie. State lives on ``app.state`` so the override closure reads it per request.
+    """
+    app.state.test_active_org_id = org_id
+
+
+def _install_tenant_db_override(
+    app: FastAPI, app_async_database_url: str, default_org_id: uuid.UUID
+) -> AsyncEngine:
+    """Override `get_tenant_db` with a per-test usan_app session under RLS context.
+
+    The production dependency opens a session on the process-global engine — bound to
+    a different event loop than the per-test TestClient, which crashes with
+    "attached to a different loop". This override mirrors the `get_db` override: a
+    per-test asyncpg engine (NullPool) connecting as the non-superuser usan_app role
+    so RLS applies, with the tenant context set to the test-controlled active org
+    (mutable via `act_as_org`, default the seeded usan org).
+    """
+    from usan_api.db.session import _install_default_org_context
+
+    app.state.test_active_org_id = default_org_id
+    tenant_engine = create_async_engine(app_async_database_url, poolclass=NullPool)
+    # Mirror production: get_tenant_db runs on the process-global engine, which installs
+    # the default-org connect baseline (set_config is_local=false — session-level, so it
+    # survives COMMIT). Handlers commit then db.refresh(); without this baseline the
+    # post-commit refresh SELECT would run context-free and RLS would hide the just-
+    # written row ("Could not refresh instance"). set_tenant_context (is_local=true) still
+    # overrides per-transaction; at txn end it reverts to this connect default.
+    _install_default_org_context(tenant_engine)
+    factory = async_sessionmaker(tenant_engine, expire_on_commit=False)
+
+    async def _override_get_tenant_db():
+        org_id = str(app.state.test_active_org_id)
+
+        def _reapply_org_context(_session, _transaction, connection) -> None:
+            # Mirror production get_tenant_db: set_tenant_context is is_local=true, so it
+            # reverts to the connect baseline at COMMIT. A handler that reads after commit
+            # (create_profile's db.refresh) would then run under the default-org baseline
+            # and RLS would hide a row written into a non-default active org (act-as).
+            # Re-apply per transaction so post-commit reads stay scoped to the active org.
+            connection.execute(
+                text("SELECT set_config('app.current_org', :org, true)"), {"org": org_id}
+            )
+
+        async with factory() as session:
+            event.listen(session.sync_session, "after_begin", _reapply_org_context)
+            try:
+                await set_tenant_context(session, app.state.test_active_org_id)
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                event.remove(session.sync_session, "after_begin", _reapply_org_context)
+
+    app.dependency_overrides[get_tenant_db] = _override_get_tenant_db
+    return tenant_engine
+
+
 @pytest.fixture
 def client(
-    database_url: str, async_database_url: str, app_database_url: str, monkeypatch
+    database_url: str,
+    async_database_url: str,
+    app_database_url: str,
+    app_async_database_url: str,
+    app_role_password: None,
+    monkeypatch,
 ) -> TestClient:
     # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
     monkeypatch.setenv("DATABASE_URL", app_database_url)
@@ -225,13 +407,17 @@ def client(
                 await session.rollback()
                 raise
 
+    usan_org_id = asyncio.run(_resolve_usan_org_id(async_database_url))
     app = _routed_app()
     app.dependency_overrides[get_db] = _override_get_db
+    tenant_engine = _install_tenant_db_override(app, app_async_database_url, usan_org_id)
     try:
         yield TestClient(app)
     finally:
         asyncio.run(_truncate_and_dispose(test_engine))
+        asyncio.run(tenant_engine.dispose())
         app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_tenant_db, None)
         get_settings.cache_clear()
         from usan_api.tenant_context import _clear_default_org_cache
 
@@ -245,7 +431,12 @@ def operator_headers() -> dict[str, str]:
 
 @pytest.fixture
 def sso_client(
-    database_url: str, async_database_url: str, app_database_url: str, monkeypatch
+    database_url: str,
+    async_database_url: str,
+    app_database_url: str,
+    app_async_database_url: str,
+    app_role_password: None,
+    monkeypatch,
 ) -> TestClient:
     """Like `client`, but with Google SSO configured (for /v1/auth flow tests)."""
     # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
@@ -277,32 +468,75 @@ def sso_client(
                 await session.rollback()
                 raise
 
+    usan_org_id = asyncio.run(_resolve_usan_org_id(async_database_url))
     app = _routed_app()
     app.dependency_overrides[get_db] = _override_get_db
+    tenant_engine = _install_tenant_db_override(app, app_async_database_url, usan_org_id)
     try:
         # follow_redirects off so the login 302 to Google is observable.
         yield TestClient(app, follow_redirects=False)
     finally:
         asyncio.run(_truncate_and_dispose(test_engine))
+        asyncio.run(tenant_engine.dispose())
         app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_tenant_db, None)
         get_settings.cache_clear()
         from usan_api.tenant_context import _clear_default_org_cache
 
         _clear_default_org_cache()
 
 
-async def _seed_admin_user_async(async_database_url: str, email: str, role: str) -> None:
+async def _seed_admin_user_async(
+    async_database_url: str,
+    email: str,
+    role: str | None = None,
+    *,
+    is_super_admin: bool = False,
+    with_membership: bool = True,
+) -> uuid.UUID:
+    """Seed a global identity (and, by default, a usan-org membership).
+
+    Returns the usan (default) org id so callers can mint a session scoped to it.
+    Role now lives on the membership, not on admin_users (P2 / migration 0033).
+
+    ``role`` is required only when ``with_membership`` is True (it sets the
+    membership role); passing it with ``with_membership=False`` is a mistake — the
+    membership row that would carry it is never written — so we reject that combo
+    rather than silently dropping the argument.
+    """
+    if with_membership and role is None:
+        raise ValueError("role is required when with_membership=True")
+    if not with_membership and role is not None:
+        raise ValueError("role is ignored when with_membership=False; omit it")
     engine = create_async_engine(async_database_url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
+            org_id = (
+                await conn.execute(text("SELECT id FROM organizations WHERE slug = 'usan'"))
+            ).scalar_one_or_none()
+            if org_id is None:
+                raise RuntimeError(
+                    "seed precondition failed: no organization with slug='usan' "
+                    "(the connect-baseline org seed must run before admin fixtures)"
+                )
             await conn.execute(
                 text(
-                    "INSERT INTO admin_users (email, role, added_by) "
-                    "VALUES (:email, CAST(:role AS admin_role), 'test') "
-                    "ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role"
+                    "INSERT INTO admin_users (email, is_super_admin, status, added_by) "
+                    "VALUES (:email, :super, 'active', 'test') "
+                    "ON CONFLICT (email) DO UPDATE SET is_super_admin = EXCLUDED.is_super_admin"
                 ),
-                {"email": email.lower(), "role": role},
+                {"email": email.lower(), "super": is_super_admin},
             )
+            if with_membership:
+                await conn.execute(
+                    text(
+                        "INSERT INTO memberships (email, organization_id, role, added_by) "
+                        "VALUES (:email, :org, CAST(:role AS admin_role), 'test') "
+                        "ON CONFLICT (email, organization_id) DO UPDATE SET role = EXCLUDED.role"
+                    ),
+                    {"email": email.lower(), "org": org_id, "role": role},
+                )
+        return org_id
     finally:
         await engine.dispose()
 
@@ -311,14 +545,52 @@ async def _seed_admin_user_async(async_database_url: str, email: str, role: str)
 def admin_session(client: TestClient, async_database_url: str) -> dict[str, str]:
     """Seed an allow-listed admin and return cookies that authenticate as them.
 
-    Sets the cookie on the shared `client` too, so tests can either rely on the
-    client jar or pass `cookies=admin_session` per request.
+    The admin gets an ADMIN membership in the seeded usan (default) org, and the
+    minted session carries that org as the active org (P2). Sets the cookie on the
+    shared `client` too, so tests can rely on the jar or pass `cookies=admin_session`.
     """
     from usan_api.admin_session import SESSION_COOKIE_NAME, issue_session
     from usan_api.db.base import AdminRole
 
     email = "admin@example.com"
-    asyncio.run(_seed_admin_user_async(async_database_url, email, "admin"))
-    token = issue_session(email, AdminRole.ADMIN, get_settings())
+    org_id = asyncio.run(_seed_admin_user_async(async_database_url, email, "admin"))
+    token = issue_session(
+        email,
+        active_org_id=org_id,
+        role=AdminRole.ADMIN,
+        is_super_admin=False,
+        acting_as=False,
+        settings=get_settings(),
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, token)
+    return {SESSION_COOKIE_NAME: token}
+
+
+@pytest.fixture
+def super_admin_session(client: TestClient, async_database_url: str) -> dict[str, str]:
+    """Seed a super-admin identity with NO membership and return its cookies.
+
+    The minted session has `super=True`, `active_org=None`, `acting_as=False` — the
+    state of a USAN staffer who has not yet picked (or acted-as) an org.
+    """
+    from usan_api.admin_session import SESSION_COOKIE_NAME, issue_session
+
+    email = "super@example.com"
+    asyncio.run(
+        _seed_admin_user_async(
+            async_database_url,
+            email,
+            is_super_admin=True,
+            with_membership=False,
+        )
+    )
+    token = issue_session(
+        email,
+        active_org_id=None,
+        role=None,
+        is_super_admin=True,
+        acting_as=False,
+        settings=get_settings(),
+    )
     client.cookies.set(SESSION_COOKIE_NAME, token)
     return {SESSION_COOKIE_NAME: token}

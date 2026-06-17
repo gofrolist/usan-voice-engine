@@ -19,7 +19,14 @@ def test_custom_variable_columns_and_defaults():
         "organization_id",
     }
     assert not cols["name"].nullable
-    assert cols["name"].unique is True
+    # Per-org uniqueness (migration 0034): uniqueness moved from a single-column
+    # unique to a composite UNIQUE(name, organization_id) in __table_args__.
+    uniques = {
+        tuple(c.name for c in con.columns)
+        for con in CustomVariable.__table__.constraints
+        if con.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("name", "organization_id") in uniques
     assert "false" in str(cols["phi"].server_default.arg)
     assert cols["description"].server_default is not None
     assert cols["example"].server_default is not None

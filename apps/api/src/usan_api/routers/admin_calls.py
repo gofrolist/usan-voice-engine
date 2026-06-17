@@ -15,11 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import phi_audit, recording_urls
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import require_admin_session
+from usan_api.auth import get_tenant_db, require_admin_session
 from usan_api.client_ip import client_ip
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
-from usan_api.db.session import get_db
 from usan_api.masking import mask_phone
 from usan_api.repositories import admin_audit
 from usan_api.repositories import admin_calls as admin_calls_repo
@@ -75,7 +74,7 @@ async def list_calls(
     created_to: datetime | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
 ) -> list[AdminCallSummary]:
     created_from = _assume_utc(created_from)
@@ -126,7 +125,7 @@ async def list_calls(
 async def get_call_detail(
     call_id: uuid.UUID,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     settings: Settings = Depends(get_settings),
     actor: str = Depends(get_actor_email),
 ) -> AdminCallDetail:

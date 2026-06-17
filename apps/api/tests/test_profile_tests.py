@@ -35,7 +35,8 @@ def _draft_config_json() -> dict:
     return DEFAULT_AGENT_CONFIG.model_dump(mode="json")
 
 
-async def _seed_admin_user(async_database_url: str, email: str, role: str) -> None:
+async def _seed_admin_user(async_database_url: str, email: str) -> None:
+    """Seed an identity-only admin_users row (role moved to memberships, P2 / 0033)."""
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import NullPool
@@ -45,11 +46,11 @@ async def _seed_admin_user(async_database_url: str, email: str, role: str) -> No
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "INSERT INTO admin_users (email, role, added_by) "
-                    "VALUES (:e, CAST(:r AS admin_role), 'test') "
-                    "ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role"
+                    "INSERT INTO admin_users (email, status, added_by) "
+                    "VALUES (:e, 'active', 'test') "
+                    "ON CONFLICT (email) DO NOTHING"
                 ),
-                {"e": email.lower(), "r": role},
+                {"e": email.lower()},
             )
     finally:
         await engine.dispose()
@@ -59,8 +60,15 @@ def _as_viewer(client: TestClient, async_database_url: str) -> None:
     from usan_api.admin_session import SESSION_COOKIE_NAME, issue_session
     from usan_api.settings import get_settings
 
-    asyncio.run(_seed_admin_user(async_database_url, "viewer@example.com", "viewer"))
-    token = issue_session("viewer@example.com", AdminRole.VIEWER, get_settings())
+    asyncio.run(_seed_admin_user(async_database_url, "viewer@example.com"))
+    token = issue_session(
+        "viewer@example.com",
+        active_org_id=None,
+        role=AdminRole.VIEWER,
+        is_super_admin=False,
+        acting_as=False,
+        settings=get_settings(),
+    )
     client.cookies.set(SESSION_COOKIE_NAME, token)
 
 

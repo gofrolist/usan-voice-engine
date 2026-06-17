@@ -44,7 +44,14 @@ def test_call_batch_columns_and_defaults():
     assert CallBatch.__tablename__ == "call_batches"
     cols = CallBatch.__table__.columns
     assert not cols["payload_digest"].nullable
-    assert cols["idempotency_key"].unique is True
+    # Per-org uniqueness (migration 0034): the single-column unique on
+    # idempotency_key became a composite UNIQUE(idempotency_key, organization_id).
+    uniques = {
+        tuple(c.name for c in con.columns)
+        for con in CallBatch.__table__.constraints
+        if con.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("idempotency_key", "organization_id") in uniques
     assert "'scheduled'" in str(cols["status"].server_default.arg)
     assert cols["window_start_local"].nullable
     assert cols["max_concurrency"].nullable

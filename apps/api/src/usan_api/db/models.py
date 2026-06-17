@@ -10,11 +10,13 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     SmallInteger,
     Text,
     Time,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy import Enum as SAEnum
@@ -57,13 +59,19 @@ class TenantScoped:
 
 class Contact(Base, TenantScoped):
     __tablename__ = "contacts"
+    # Per-org uniqueness (migration 0034): the natural keys are unique within an
+    # org, not globally — two orgs may legitimately share a phone/external_id.
+    __table_args__ = (
+        UniqueConstraint("phone_e164", "organization_id", name="uq_contacts_phone_e164_org"),
+        UniqueConstraint("external_id", "organization_id", name="uq_contacts_external_id_org"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    external_id: Mapped[str | None] = mapped_column(Text, unique=True)
+    external_id: Mapped[str | None] = mapped_column(Text)
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    phone_e164: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    phone_e164: Mapped[str] = mapped_column(Text, nullable=False)
     timezone: Mapped[str] = mapped_column(Text, nullable=False)
     preferred_voice: Mapped[str | None] = mapped_column(Text)
     agent_profile_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -97,6 +105,11 @@ class DNCEntry(Base, TenantScoped):
 
 class Call(Base, TenantScoped):
     __tablename__ = "calls"
+    # Per-org uniqueness (migration 0034); NULLs stay distinct so unkeyed calls
+    # never collide.
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", "organization_id", name="uq_calls_idempotency_key_org"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -123,7 +136,7 @@ class Call(Base, TenantScoped):
         nullable=False,
         server_default=CallStatus.QUEUED.value,
     )
-    idempotency_key: Mapped[str | None] = mapped_column(Text, unique=True)
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
     livekit_room: Mapped[str | None] = mapped_column(Text)
     sip_call_id: Mapped[str | None] = mapped_column(Text)
     dynamic_vars: Mapped[dict[str, Any]] = mapped_column(
@@ -436,11 +449,15 @@ class CallMetrics(Base, TenantScoped):
 
 class AgentProfile(Base, TenantScoped):
     __tablename__ = "agent_profiles"
+    # Per-org uniqueness (migration 0034): profile names are unique within an org.
+    __table_args__ = (
+        UniqueConstraint("name", "organization_id", name="uq_agent_profiles_name_org"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[ProfileStatus] = mapped_column(
         SAEnum(
@@ -501,11 +518,33 @@ class AgentProfileVersion(Base, TenantScoped):
 
 
 class AdminUser(Base):
-    """Global operator allow-list — NOT tenant-scoped in P1; gains organization_id in P2."""
+    """Global identity — the person. Per-org role lives in Membership (P2)."""
 
     __tablename__ = "admin_users"
 
     email: Mapped[str] = mapped_column(Text, primary_key=True)
+    is_super_admin: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    last_active_org_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"))
+    added_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class Membership(Base):
+    """Many-to-many: which person has which role in which org. Global, non-RLS."""
+
+    __tablename__ = "memberships"
+
+    email: Mapped[str] = mapped_column(
+        ForeignKey("admin_users.email", ondelete="CASCADE"), primary_key=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
     role: Mapped[AdminRole] = mapped_column(
         SAEnum(
             AdminRole,
@@ -514,7 +553,6 @@ class AdminUser(Base):
             create_type=False,
         ),
         nullable=False,
-        server_default=AdminRole.ADMIN.value,
     )
     added_by: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
@@ -612,6 +650,18 @@ class CallbackRequest(Base, TenantScoped):
 
 class SmsMessage(Base, TenantScoped):
     __tablename__ = "sms_messages"
+    # Per-org uniqueness (migration 0034): dedupe_key is unique within an org. It
+    # is enforced by a UNIQUE *index* (not a constraint) to match the original
+    # 0017 DDL; NULLs stay distinct so in-call rows never collide.
+    # telnyx_message_id stays provider-global (no cross-org collision).
+    __table_args__ = (
+        Index(
+            "uq_sms_messages_dedupe_key_org",
+            "dedupe_key",
+            "organization_id",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -634,7 +684,7 @@ class SmsMessage(Base, TenantScoped):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
     # Idempotency key for family notifications (e.g. 'crisis:{flag_id}'); unique-where-
     # not-null (0017, NULLs distinct in PG). NULL for in-call rows.
-    dedupe_key: Mapped[str | None] = mapped_column(Text, unique=True)
+    dedupe_key: Mapped[str | None] = mapped_column(Text)
     telnyx_message_id: Mapped[str | None] = mapped_column(Text, unique=True)
     error: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -699,13 +749,19 @@ class CallSchedule(Base, TenantScoped):
 
 class CallBatch(Base, TenantScoped):
     __tablename__ = "call_batches"
+    # Per-org uniqueness (migration 0034); NULLs stay distinct.
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", "organization_id", name="uq_call_batches_idempotency_key_org"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
     # Operator label; PHI-free by convention (spec §8).
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    idempotency_key: Mapped[str | None] = mapped_column(Text, unique=True)
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
     # sha256 of the canonical payload (spec §4.2 replay guard).
     payload_digest: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'scheduled'"))
@@ -853,11 +909,15 @@ class CustomVariable(Base, TenantScoped):
     """
 
     __tablename__ = "custom_variables"
+    # Per-org uniqueness (migration 0034): variable names are unique within an org.
+    __table_args__ = (
+        UniqueConstraint("name", "organization_id", name="uq_custom_variables_name_org"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     example: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     phi: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))

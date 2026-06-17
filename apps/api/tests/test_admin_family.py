@@ -64,14 +64,15 @@ def _viewer_cookies(async_database_url: str) -> dict[str, str]:
     email = "viewer@example.com"
 
     async def _seed():
+        # Identity-only row (role moved to memberships, P2 / 0033).
         engine = create_async_engine(async_database_url, poolclass=NullPool)
         try:
             async with engine.begin() as conn:
                 await conn.execute(
                     text(
-                        "INSERT INTO admin_users (email, role, added_by) "
-                        "VALUES (:e, CAST('viewer' AS admin_role), 'test') "
-                        "ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role"
+                        "INSERT INTO admin_users (email, status, added_by) "
+                        "VALUES (:e, 'active', 'test') "
+                        "ON CONFLICT (email) DO NOTHING"
                     ),
                     {"e": email},
                 )
@@ -79,7 +80,16 @@ def _viewer_cookies(async_database_url: str) -> dict[str, str]:
             await engine.dispose()
 
     asyncio.run(_seed())
-    return {SESSION_COOKIE_NAME: issue_session(email, AdminRole.VIEWER, get_settings())}
+    return {
+        SESSION_COOKIE_NAME: issue_session(
+            email,
+            active_org_id=None,
+            role=AdminRole.VIEWER,
+            is_super_admin=False,
+            acting_as=False,
+            settings=get_settings(),
+        )
+    }
 
 
 def test_family_endpoints_require_session(client):

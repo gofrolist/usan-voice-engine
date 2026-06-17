@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api.auth import require_admin_session
-from usan_api.db.session import get_db
+from usan_api.auth import get_tenant_db, require_admin_session
 from usan_api.repositories import admin_audit as repo
 from usan_api.schemas.admin import AuditEntryOut
 
@@ -20,7 +19,7 @@ async def list_audit(
     # `limit` rows (a compliance screen must not show a false "no matching entries").
     actor: str | None = Query(default=None, max_length=320),
     action: str | None = Query(default=None, max_length=100),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ) -> list[AuditEntryOut]:
     rows = await repo.list_recent(db, limit=limit, actor=actor, action=action)
     return [

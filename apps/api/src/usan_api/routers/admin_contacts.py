@@ -5,10 +5,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import require_admin_role, require_admin_session
+from usan_api.auth import get_tenant_db, require_admin_role, require_admin_session
 from usan_api.db.base import AdminRole
 from usan_api.db.models import Contact
-from usan_api.db.session import get_db
 from usan_api.masking import mask_phone
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as profiles_repo
@@ -37,7 +36,7 @@ def _summary(contact: Contact, profile_name: str | None) -> ContactSummary:
 async def list_contacts(
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ) -> list[ContactSummary]:
     # Paged: the roster can be large, so never select the whole table at once.
     rows = await contacts_repo.list_with_profile(db, limit=limit, offset=offset)
@@ -48,7 +47,7 @@ async def list_contacts(
 async def assign_profile(
     contact_id: uuid.UUID,
     body: AssignProfileRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ContactSummary:
@@ -81,7 +80,7 @@ async def assign_profile(
 async def set_timezone(
     contact_id: uuid.UUID,
     body: SetTimezoneRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ContactSummary:

@@ -125,7 +125,10 @@ def test_custom_variables_table_shape(async_database_url: str) -> None:
     assert "ck_custom_variables_name_slug" in checks
 
     idx = asyncio.run(_indexes(async_database_url, "custom_variables"))
-    assert "custom_variables_name_key" in idx
+    # Migration 0034 replaced the single-column unique on `name` with a composite
+    # per-org unique (UNIQUE(name, organization_id)); its backing index is the new name.
+    assert "uq_custom_variables_name_org" in idx
+    assert "custom_variables_name_key" not in idx
 
 
 def test_slug_check_enforced(async_database_url: str) -> None:

@@ -11,14 +11,25 @@ from usan_api.settings import get_settings
 
 
 async def _seed(async_database_url: str, email: str) -> None:
+    """Seed an identity + a usan-org membership (P2 / 0033: a 0-membership non-super
+    admin is denied at the callback, so the success path needs at least one membership)."""
     engine = create_async_engine(async_database_url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "INSERT INTO admin_users (email, role, added_by) "
-                    "VALUES (:e, CAST('admin' AS admin_role), 'test') "
+                    "INSERT INTO admin_users (email, status, added_by) "
+                    "VALUES (:e, 'active', 'test') "
                     "ON CONFLICT (email) DO NOTHING"
+                ),
+                {"e": email.lower()},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO memberships (email, organization_id, role, added_by) "
+                    "SELECT :e, id, CAST('admin' AS admin_role), 'test' "
+                    "FROM organizations WHERE slug='usan' "
+                    "ON CONFLICT (email, organization_id) DO NOTHING"
                 ),
                 {"e": email.lower()},
             )
@@ -87,7 +98,12 @@ def test_callback_state_mismatch_is_400(sso_client):
 def test_me_requires_session_then_returns_identity(client, admin_session):
     r = client.get("/v1/auth/me")
     assert r.status_code == 200
-    assert r.json() == {"email": "admin@example.com", "role": "admin"}
+    body = r.json()
+    assert body["email"] == "admin@example.com"
+    assert body["is_super_admin"] is False
+    assert body["acting_as"] is False
+    assert body["active_org"]["role"] == "admin"
+    assert [o["role"] for o in body["orgs"]] == ["admin"]
 
 
 def test_logout_clears_cookie(client, admin_session):
