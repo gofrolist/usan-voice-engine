@@ -247,9 +247,21 @@ async def _complete_invite_accept(
 
     # Idempotent re-click: already a member of the target org -> success, no re-consume.
     if await memberships_repo.get_membership(db, email, invite.organization_id) is not None:
+        # Still leave a trail for the org entry (audit log is RLS-scoped to the org).
+        await set_tenant_context(db, invite.organization_id)
         if invite.status is InviteStatus.PENDING:
             await invitations_repo.mark_accepted(db, invite)
-            await db.commit()
+            await admin_audit.record(
+                db,
+                actor_email=email,
+                action="invite.accept",
+                entity_type="invitation",
+                entity_id=invite.email,
+            )
+        await admin_audit.record(
+            db, actor_email=email, action="auth.login", entity_type="admin_user", entity_id=email
+        )
+        await db.commit()
         user = await admin_users_repo.get_admin_user(db, email)
         return _issue_invite_session(
             settings,

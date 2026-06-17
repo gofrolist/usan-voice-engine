@@ -568,6 +568,8 @@ class Invitation(Base):
     __tablename__ = "invitations"
     __table_args__ = (
         # At most one LIVE invite per email per org; re-inviting regenerates this row.
+        # ``email`` is always stored lowercased by the repository (``_norm``), so this
+        # raw-email index is equivalent to the spec's lower(email) for every app write.
         Index(
             "uq_invitations_org_email_pending",
             "organization_id",
@@ -575,6 +577,9 @@ class Invitation(Base):
             unique=True,
             postgresql_where=text("status = 'pending'"),
         ),
+        # Explicit named unique index on token, matching migration 0035 exactly (keeps
+        # autogenerate clean — the column therefore does NOT set unique=True).
+        Index("uq_invitations_token", "token", unique=True),
         Index("ix_invitations_organization_id", "organization_id"),
     )
 
@@ -591,7 +596,7 @@ class Invitation(Base):
         SAEnum(AdminRole, name="admin_role", values_callable=_enum_values, create_type=False),
         nullable=False,
     )
-    token: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    token: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[InviteStatus] = mapped_column(
         SAEnum(InviteStatus, name="invite_status", values_callable=_enum_values, create_type=False),
         nullable=False,

@@ -50,6 +50,9 @@ def upgrade() -> None:
     )
     op.create_index("uq_invitations_token", "invitations", ["token"], unique=True)
     op.create_index("ix_invitations_organization_id", "invitations", ["organization_id"])
+    # One live invite per email per org. email is invariably stored lowercased by the
+    # repository (_norm), so indexing the raw column is equivalent to lower(email) for
+    # every application write.
     op.create_index(
         "uq_invitations_org_email_pending",
         "invitations",
