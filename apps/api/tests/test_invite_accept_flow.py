@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 from usan_api import oauth
-from usan_api.admin_session import SESSION_COOKIE_NAME, decode_session
+from usan_api.admin_session import INVITE_COOKIE_NAME, SESSION_COOKIE_NAME, decode_session
 from usan_api.db.base import AdminRole
 from usan_api.settings import get_settings
 
@@ -275,3 +275,21 @@ def test_accept_already_member_uses_live_role(
 
 def test_accept_missing_token_400(sso_client):
     assert sso_client.get("/v1/auth/accept-invite", follow_redirects=False).status_code == 400
+
+
+def test_login_clears_stale_invite_cookie(sso_client):
+    """A normal /login must clear any leftover invite cookie from an abandoned accept,
+    so the stale cookie cannot hijack the next callback into the invite-accept branch."""
+    sso_client.cookies.set(INVITE_COOKIE_NAME, "stale-token", path="/v1/auth")
+    r = sso_client.get("/v1/auth/login", follow_redirects=False)
+    assert r.status_code == 302
+    cleared = [
+        v
+        for k, v in r.headers.multi_items()
+        if k.lower() == "set-cookie" and v.startswith(f"{INVITE_COOKIE_NAME}=")
+    ]
+    assert cleared, r.headers.multi_items()
+    # Max-Age=0 (+ empty value) is how Starlette expires a cookie, so the browser drops it
+    # and it is not replayed onto the next /callback.
+    assert "Max-Age=0" in cleared[0]
+    assert f'{INVITE_COOKIE_NAME}=""' in cleared[0] or f"{INVITE_COOKIE_NAME}=;" in cleared[0]

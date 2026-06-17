@@ -44,6 +44,21 @@ def test_create_invite_rejects_existing_member(client, admin_session):
     assert r.status_code == 409
 
 
+def test_create_invite_integrity_error_returns_409(client, admin_session, monkeypatch):
+    # A concurrent create racing past the existing-pending SELECT trips the partial unique
+    # index on INSERT; the router must surface a clean 409, not an opaque 500.
+    from sqlalchemy.exc import IntegrityError
+
+    from usan_api.routers import admin_invites
+
+    async def _raise(*args, **kwargs):
+        raise IntegrityError("INSERT INTO invitations", {}, Exception("duplicate key"))
+
+    monkeypatch.setattr(admin_invites.repo, "create_invite", _raise)
+    r = client.post("/v1/admin/invites", json={"email": "race@x.com", "role": "viewer"})
+    assert r.status_code == 409, r.text
+
+
 def test_viewer_cannot_manage_invites(client, async_database_url):
     from tests.conftest import _seed_admin_user_async  # seeds identity + usan membership
 

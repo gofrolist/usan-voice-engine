@@ -95,6 +95,11 @@ async def test_get_by_token(two_orgs, app_session):
     assert found is not None
     assert found.id == inv.id
     assert await repo.get_by_token(app_session, "nope") is None
+    # for_update row-locks the invite for the accept path; same row, no behavior change
+    # for a single session (the lock serializes concurrent accepts).
+    locked = await repo.get_by_token(app_session, inv.token, for_update=True)
+    assert locked is not None
+    assert locked.id == inv.id
 
 
 async def test_revoke(two_orgs, app_session):

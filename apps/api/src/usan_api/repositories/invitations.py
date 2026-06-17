@@ -104,8 +104,20 @@ async def get_invite(
     return res.scalar_one_or_none()
 
 
-async def get_by_token(db: AsyncSession, token: str) -> Invitation | None:
-    res = await db.execute(select(Invitation).where(Invitation.token == token))
+async def get_by_token(
+    db: AsyncSession, token: str, *, for_update: bool = False
+) -> Invitation | None:
+    """Global token lookup (invitations is non-RLS).
+
+    Pass ``for_update=True`` on the accept path to row-lock the invite so two concurrent
+    accepts of the same token serialize and consume it exactly once — without the lock,
+    both could pass the in-Python PENDING/expiry gate before either commits and both run
+    ``mark_accepted``. Mirrors ``memberships._locked_org_admin_count``.
+    """
+    stmt = select(Invitation).where(Invitation.token == token)
+    if for_update:
+        stmt = stmt.with_for_update()
+    res = await db.execute(stmt)
     return res.scalar_one_or_none()
 
 

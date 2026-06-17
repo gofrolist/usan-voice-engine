@@ -64,7 +64,15 @@ def _fail(status_code: int, detail: str, settings: Settings) -> JSONResponse:
 
 @router.get("/login")
 async def login(settings: Settings = Depends(get_settings)) -> RedirectResponse:
-    """Begin Google OAuth: set the PKCE/state tx cookie and redirect to Google."""
+    """Begin Google OAuth: set the PKCE/state tx cookie and redirect to Google.
+
+    Also clears any stale invite cookie: an abandoned /accept-invite bounce leaves the
+    invite cookie alive for its full TTL, and since both cookies are sent to /callback a
+    leftover invite would route this *normal* login through the invite-accept branch (a
+    one-shot 'issued to a different email' failure). The email-match gate stays the real
+    boundary, but clearing here — symmetric with /callback's failure paths — removes the
+    hijack window entirely.
+    """
     if not settings.sso_enabled:
         raise _SSO_DISABLED
     state = oauth.new_state()
@@ -72,6 +80,7 @@ async def login(settings: Settings = Depends(get_settings)) -> RedirectResponse:
     url = oauth.build_authorization_url(settings, state=state, code_challenge=challenge)
     resp = RedirectResponse(url, status_code=status.HTTP_302_FOUND)
     set_tx_cookie(resp, issue_tx(state, verifier, settings), settings)
+    clear_invite_cookie(resp, settings)
     return resp
 
 
@@ -237,7 +246,9 @@ async def _complete_invite_accept(
     except Exception:  # noqa: BLE001 - any bad/tampered invite cookie is "invalid"
         return _err("invalid")
 
-    invite = await invitations_repo.get_by_token(db, token)
+    # Row-lock the invite for the whole consume: serializes two concurrent accepts of the
+    # same token so it is marked accepted exactly once (no duplicate audit/membership work).
+    invite = await invitations_repo.get_by_token(db, token, for_update=True)
     if invite is None:
         logger.warning("invite accept: unknown token")
         return _err("invalid")

@@ -6,6 +6,7 @@ All endpoints require ADMIN — invite links are not shown to viewers."""
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_actor import get_actor_email
@@ -77,6 +78,14 @@ async def create_invite(
         await db.rollback()
         raise HTTPException(
             status.HTTP_409_CONFLICT, "already a member of this organization"
+        ) from e
+    except IntegrityError as e:
+        # A concurrent create for the same (org, email) can race past create_invite's
+        # existing-pending SELECT and trip the partial unique index on INSERT. Surface the
+        # same clean 409 the rest of the codebase returns, not an opaque 500.
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "a pending invite for this email already exists"
         ) from e
     await admin_audit.record(
         db,
