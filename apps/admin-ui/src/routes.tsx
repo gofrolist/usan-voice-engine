@@ -11,7 +11,7 @@ import { CallDetailPage } from "./features/calls/CallDetailPage";
 import { QueuesPage } from "./features/queues/QueuesPage";
 import { DefaultsPage } from "./features/defaults/DefaultsPage";
 import { AuditPage } from "./features/audit/AuditPage";
-import { AdminUsersPage } from "./features/adminUsers/AdminUsersPage";
+import { MembersPage } from "./features/members/MembersPage";
 import { CustomVariablesPage } from "./features/customVariables/CustomVariablesPage";
 
 // All routes are gated by RequireAuth and rendered inside AppLayout. The api
@@ -41,7 +41,7 @@ export const router = createBrowserRouter([
           { path: "defaults", element: <DefaultsPage /> },
           { path: "custom-variables", element: <CustomVariablesPage /> },
           { path: "audit", element: <AuditPage /> },
-          { path: "admin-users", element: <AdminUsersPage /> },
+          { path: "members", element: <MembersPage /> },
         ],
       },
       { path: "profiles/:id", element: <ProfileEditorPage /> },

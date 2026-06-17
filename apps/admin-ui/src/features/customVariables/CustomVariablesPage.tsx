@@ -78,7 +78,7 @@ function EditVariableDialog({
 
 // Catalog CRUD for the "custom" variable tier. The list is readable by every
 // session role; mutations are ADMIN-only (server-enforced, mirrored here by
-// hiding the buttons via useIsAdmin — the AdminUsersPage idiom).
+// hiding the buttons via useIsAdmin — the MembersPage idiom).
 export function CustomVariablesPage() {
   const isAdmin = useIsAdmin();
   const variables = useCustomVariables();
