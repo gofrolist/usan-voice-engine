@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from usan_api.db.base import AdminRole, Base, CallDirection, CallStatus, ProfileStatus
+from usan_api.db.base import AdminRole, Base, CallDirection, CallStatus, InviteStatus, ProfileStatus
 
 
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
@@ -558,6 +558,51 @@ class Membership(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class Invitation(Base):
+    """Pending-token org invitation (P3). Global, non-RLS control-plane table —
+    looked up by token before the accepter has any org context; app code scopes
+    management queries by organization_id (the guard that replaces RLS here)."""
+
+    __tablename__ = "invitations"
+    __table_args__ = (
+        # At most one LIVE invite per email per org; re-inviting regenerates this row.
+        Index(
+            "uq_invitations_org_email_pending",
+            "organization_id",
+            "email",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index("ix_invitations_organization_id", "organization_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[AdminRole] = mapped_column(
+        SAEnum(AdminRole, name="admin_role", values_callable=_enum_values, create_type=False),
+        nullable=False,
+    )
+    token: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    status: Mapped[InviteStatus] = mapped_column(
+        SAEnum(InviteStatus, name="invite_status", values_callable=_enum_values, create_type=False),
+        nullable=False,
+        server_default=InviteStatus.PENDING.value,
+    )
+    invited_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AdminAuditLog(Base, TenantScoped):
