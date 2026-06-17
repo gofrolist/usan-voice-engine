@@ -38,7 +38,7 @@ const GROUPS: NavGroup[] = [
     heading: "System",
     items: [
       { to: "/audit", label: "Audit" },
-      { to: "/admin-users", label: "Admin Users", adminOnly: true },
+      { to: "/members", label: "Members", adminOnly: true },
     ],
   },
 ];

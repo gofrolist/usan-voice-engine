@@ -3,7 +3,7 @@
 //   - schemas/agent_config.py (AgentConfig + 8 sub-configs)
 //   - schemas/agent_profile.py (Profile/Version summaries + details + requests)
 //   - schemas/admin.py (AuditEntryOut, ContactSummary, AssignProfileRequest)
-//   - schemas/auth.py (MeResponse, AdminUserOut, AdminUserCreate)
+//   - schemas/auth.py (MeResponse, MemberOut, MemberCreate, OrgSummary)
 //   - schemas/admin_calls.py (AdminCallSummary, AdminCallDetail + CallOrigin,
 //     TranscriptSegment from schemas/call.py)
 //   - schemas/admin_tools.py (FollowupFlagSummary, CallbackRequestSummary, QueuesSummary)
@@ -325,18 +325,6 @@ export interface OrgCreate {
   name: string;
   slug: string;
   first_admin_email?: string | null;
-}
-
-// TODO(UI-3): removed when features/adminUsers/ is converted to features/members/.
-export interface AdminUser {
-  email: string;
-  role: AdminUserRole;
-  added_by: string | null;
-}
-
-export interface AdminUserCreate {
-  email: string;
-  role: AdminUserRole;
 }
 
 // ---------------------------------------------------------------------------
