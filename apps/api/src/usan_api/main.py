@@ -31,6 +31,7 @@ from usan_api.routers import (
     admin_custom_variables,
     admin_defaults,
     admin_family,
+    admin_invites,
     admin_members,
     admin_model_catalog,
     admin_organizations,
@@ -225,6 +226,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_audit.router)
     app.include_router(admin_contacts.router)
     app.include_router(admin_family.router)
+    app.include_router(admin_invites.router)
     app.include_router(admin_variable_catalog.router)
     app.include_router(admin_custom_variables.router)
     app.include_router(admin_tool_catalog.router)
