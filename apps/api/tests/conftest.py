@@ -16,9 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
 
+from usan_api.auth import get_tenant_db
 from usan_api.db.session import get_db
 from usan_api.main import create_app
 from usan_api.settings import get_settings
+from usan_api.tenant_context import set_tenant_context
 
 API_DIR = Path(__file__).resolve().parents[1]
 TEST_SECRET = "a" * 32
@@ -277,9 +279,86 @@ def _routed_app() -> FastAPI:
     return _ROUTED_APP
 
 
+async def _resolve_usan_org_id(super_url: str) -> uuid.UUID:
+    """The seeded default (usan) org id, read via the superuser engine.
+
+    Used as the default active org for the `get_tenant_db` test override so admin
+    routes scope to the same org the `admin_session` fixture mints into.
+    """
+    engine = create_async_engine(super_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as conn:
+            org_id = (
+                await conn.execute(text("SELECT id FROM organizations WHERE slug = 'usan'"))
+            ).scalar_one_or_none()
+            if org_id is None:
+                raise RuntimeError(
+                    "default organization (slug='usan') is not seeded; "
+                    "the connect-baseline org seed must run before the test override"
+                )
+            return org_id
+    finally:
+        await engine.dispose()
+
+
+def act_as_org(app: FastAPI, org_id: uuid.UUID) -> None:
+    """Repoint the `get_tenant_db` test override at ``org_id``.
+
+    Admin routes resolve their org from the session principal in production; under
+    test the `get_tenant_db` override scopes the usan_app session to a single
+    test-controlled active org (default: the seeded usan org). Multi-org / act-as
+    tests call this to read/write as a different active org without minting a new
+    cookie. State lives on ``app.state`` so the override closure reads it per request.
+    """
+    app.state.test_active_org_id = org_id
+
+
+def _install_tenant_db_override(
+    app: FastAPI, app_async_database_url: str, default_org_id: uuid.UUID
+) -> AsyncEngine:
+    """Override `get_tenant_db` with a per-test usan_app session under RLS context.
+
+    The production dependency opens a session on the process-global engine — bound to
+    a different event loop than the per-test TestClient, which crashes with
+    "attached to a different loop". This override mirrors the `get_db` override: a
+    per-test asyncpg engine (NullPool) connecting as the non-superuser usan_app role
+    so RLS applies, with the tenant context set to the test-controlled active org
+    (mutable via `act_as_org`, default the seeded usan org).
+    """
+    from usan_api.db.session import _install_default_org_context
+
+    app.state.test_active_org_id = default_org_id
+    tenant_engine = create_async_engine(app_async_database_url, poolclass=NullPool)
+    # Mirror production: get_tenant_db runs on the process-global engine, which installs
+    # the default-org connect baseline (set_config is_local=false — session-level, so it
+    # survives COMMIT). Handlers commit then db.refresh(); without this baseline the
+    # post-commit refresh SELECT would run context-free and RLS would hide the just-
+    # written row ("Could not refresh instance"). set_tenant_context (is_local=true) still
+    # overrides per-transaction; at txn end it reverts to this connect default.
+    _install_default_org_context(tenant_engine)
+    factory = async_sessionmaker(tenant_engine, expire_on_commit=False)
+
+    async def _override_get_tenant_db():
+        async with factory() as session:
+            try:
+                await set_tenant_context(session, app.state.test_active_org_id)
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
+
+    app.dependency_overrides[get_tenant_db] = _override_get_tenant_db
+    return tenant_engine
+
+
 @pytest.fixture
 def client(
-    database_url: str, async_database_url: str, app_database_url: str, monkeypatch
+    database_url: str,
+    async_database_url: str,
+    app_database_url: str,
+    app_async_database_url: str,
+    app_role_password: None,
+    monkeypatch,
 ) -> TestClient:
     # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
     monkeypatch.setenv("DATABASE_URL", app_database_url)
@@ -313,13 +392,17 @@ def client(
                 await session.rollback()
                 raise
 
+    usan_org_id = asyncio.run(_resolve_usan_org_id(async_database_url))
     app = _routed_app()
     app.dependency_overrides[get_db] = _override_get_db
+    tenant_engine = _install_tenant_db_override(app, app_async_database_url, usan_org_id)
     try:
         yield TestClient(app)
     finally:
         asyncio.run(_truncate_and_dispose(test_engine))
+        asyncio.run(tenant_engine.dispose())
         app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_tenant_db, None)
         get_settings.cache_clear()
         from usan_api.tenant_context import _clear_default_org_cache
 
@@ -333,7 +416,12 @@ def operator_headers() -> dict[str, str]:
 
 @pytest.fixture
 def sso_client(
-    database_url: str, async_database_url: str, app_database_url: str, monkeypatch
+    database_url: str,
+    async_database_url: str,
+    app_database_url: str,
+    app_async_database_url: str,
+    app_role_password: None,
+    monkeypatch,
 ) -> TestClient:
     """Like `client`, but with Google SSO configured (for /v1/auth flow tests)."""
     # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
@@ -365,14 +453,18 @@ def sso_client(
                 await session.rollback()
                 raise
 
+    usan_org_id = asyncio.run(_resolve_usan_org_id(async_database_url))
     app = _routed_app()
     app.dependency_overrides[get_db] = _override_get_db
+    tenant_engine = _install_tenant_db_override(app, app_async_database_url, usan_org_id)
     try:
         # follow_redirects off so the login 302 to Google is observable.
         yield TestClient(app, follow_redirects=False)
     finally:
         asyncio.run(_truncate_and_dispose(test_engine))
+        asyncio.run(tenant_engine.dispose())
         app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_tenant_db, None)
         get_settings.cache_clear()
         from usan_api.tenant_context import _clear_default_org_cache
 

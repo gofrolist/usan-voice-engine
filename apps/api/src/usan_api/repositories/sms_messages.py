@@ -57,6 +57,11 @@ async def create_notification(
     no dedupe_key, a plain insert. Flush-only; the caller commits. The unique index is
     non-partial — NULLs are distinct in Postgres — so in-call rows (dedupe_key NULL)
     never collide here.
+
+    The unique is per-org (``UNIQUE(dedupe_key, organization_id)`` — migration 0034), so
+    the ON CONFLICT target names both columns; ``organization_id`` is filled by the column
+    server-default (the request's RLS org) before the conflict check, and the
+    collision-fallback SELECT runs under that same RLS context, so it stays org-scoped.
     """
     if dedupe_key is None:
         row = SmsMessage(
@@ -71,7 +76,7 @@ async def create_notification(
         .values(
             contact_id=contact_id, to_number=to_number, kind=kind, body=body, dedupe_key=dedupe_key
         )
-        .on_conflict_do_nothing(index_elements=[SmsMessage.dedupe_key])
+        .on_conflict_do_nothing(index_elements=[SmsMessage.dedupe_key, SmsMessage.organization_id])
         .returning(SmsMessage.id)
     )
     result = await db.execute(stmt)
