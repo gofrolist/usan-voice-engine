@@ -236,7 +236,7 @@ _TRUNCATE_ALL = (
     "custom_variables, webhook_deliveries, webhook_endpoints, "
     "call_batch_targets, call_batches, call_schedules, "
     "agent_profile_versions, agent_profiles, admin_audit_log, "
-    "memberships, admin_users, follow_up_flags, callback_requests, sms_messages, "
+    "invitations, memberships, admin_users, follow_up_flags, callback_requests, sms_messages, "
     "calls, dnc_list, contacts "
     "RESTART IDENTITY CASCADE"
 )
