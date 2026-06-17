@@ -7,6 +7,7 @@ from typing import Any
 import jwt
 from fastapi import Cookie, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_session import SESSION_COOKIE_NAME, decode_session
@@ -237,19 +238,42 @@ async def get_tenant_db(
     session to the authenticated operator's active org. 409 when no org is active —
     the operator (e.g. a super-admin who hasn't picked one) must select an org first.
     Handlers commit explicitly; on error we roll back and let the context manager close.
+
+    ``set_tenant_context`` uses ``is_local=true`` (transaction-scoped), so it is
+    cleared at COMMIT and the connection reverts to its baseline (the *default* org
+    installed at connect). A handler that reads after committing — e.g.
+    ``create_profile``'s ``db.refresh`` — would then run under the default-org context,
+    and RLS would hide a row written into a *non-default* active org (act-as into
+    another org → "Could not refresh instance"). Re-applying the context on every new
+    transaction in this session keeps post-commit reads scoped to the active org. The
+    ``after_begin`` listener is the pooling-safe seam: it re-issues a per-transaction
+    (``is_local=true``) set, so nothing leaks to the next request on a pooled
+    connection (unlike a session-level ``SET``).
     """
     if principal.active_org_id is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="select an organization first",
         )
+    org_id = str(principal.active_org_id)
+
+    def _reapply_org_context(_session: Any, _transaction: Any, connection: Any) -> None:
+        # Sync listener (runs on the underlying DBAPI connection). Mirror
+        # set_tenant_context: transaction-scoped set so it never outlives this request.
+        connection.execute(
+            text("SELECT set_config('app.current_org', :org, true)"), {"org": org_id}
+        )
+
     async with get_session_factory()() as session:
+        event.listen(session.sync_session, "after_begin", _reapply_org_context)
         try:
             await set_tenant_context(session, principal.active_org_id)
             yield session
         except Exception:
             await session.rollback()
             raise
+        finally:
+            event.remove(session.sync_session, "after_begin", _reapply_org_context)
 
 
 def require_super_admin(

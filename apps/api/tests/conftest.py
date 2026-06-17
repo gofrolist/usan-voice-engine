@@ -11,7 +11,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
@@ -339,13 +339,28 @@ def _install_tenant_db_override(
     factory = async_sessionmaker(tenant_engine, expire_on_commit=False)
 
     async def _override_get_tenant_db():
+        org_id = str(app.state.test_active_org_id)
+
+        def _reapply_org_context(_session, _transaction, connection) -> None:
+            # Mirror production get_tenant_db: set_tenant_context is is_local=true, so it
+            # reverts to the connect baseline at COMMIT. A handler that reads after commit
+            # (create_profile's db.refresh) would then run under the default-org baseline
+            # and RLS would hide a row written into a non-default active org (act-as).
+            # Re-apply per transaction so post-commit reads stay scoped to the active org.
+            connection.execute(
+                text("SELECT set_config('app.current_org', :org, true)"), {"org": org_id}
+            )
+
         async with factory() as session:
+            event.listen(session.sync_session, "after_begin", _reapply_org_context)
             try:
                 await set_tenant_context(session, app.state.test_active_org_id)
                 yield session
             except Exception:
                 await session.rollback()
                 raise
+            finally:
+                event.remove(session.sync_session, "after_begin", _reapply_org_context)
 
     app.dependency_overrides[get_tenant_db] = _override_get_tenant_db
     return tenant_engine
