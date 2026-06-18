@@ -55,4 +55,8 @@ jobs:
           file: services/agent/Dockerfile.base
           platforms: linux/amd64
           push: false
+          # Same HF auth as build.yml so the PR build-check doesn't hit anonymous
+          # 429s rebuilding the agent base. Optional — empty secret → anonymous.
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
           cache-from: type=gha,scope=agent-base
