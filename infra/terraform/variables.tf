@@ -127,9 +127,14 @@ variable "cloudflare_account_id" {
 }
 
 variable "grafana_access_emails" {
-  type        = list(string)
-  default     = ["gmrnsk@gmail.com"]
-  description = "Operator emails allowed into Grafana via Cloudflare Access. Keep aligned with ADMIN_BOOTSTRAP_EMAILS."
+  type    = list(string)
+  default = []
+  # REQUIRED (set in tfvars) when cloudflare_account_id is set; keep aligned with
+  # ADMIN_BOOTSTRAP_EMAILS. No committed default (avoids checking PII into VCS). An
+  # empty list is safe: the Access allow policy's `include` is built from the FULL
+  # list, so [] yields no include entries → a fail-closed apply error, never an
+  # allow-all policy.
+  description = "Operator emails allowed into Grafana via Cloudflare Access. REQUIRED (in tfvars) when cloudflare_account_id is set; keep aligned with ADMIN_BOOTSTRAP_EMAILS. Empty is safe (fail-closed, never allow-all)."
 }
 
 variable "cloudflare_access_google_client_id" {

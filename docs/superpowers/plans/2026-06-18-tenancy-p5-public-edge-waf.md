@@ -301,6 +301,8 @@ git commit -m "feat(infra): proxy admin/api/grafana through Cloudflare (lk stays
 
 Zone settings (SSL "Full", Always-Use-HTTPS), zone-level Authenticated Origin Pulls, and the WAF rulesets (one custom-rules ruleset, one rate-limit ruleset). Gated on `local.manage_dns` (defined in `dns.tf`) so it no-ops when Cloudflare isn't managed.
 
+- **Webhook SKIP custom rule:** the custom-rules ruleset's first rule is a `skip` (action_parameters `ruleset = "current"`) on `/v1/webhooks/*`, so the Free **managed ruleset** is bypassed for the Telnyx/LiveKit server-to-server webhook surface. Without it, the managed ruleset (and any Managed Challenge) could challenge or block these unattended machine-to-machine POSTs — there is no browser to solve a challenge — silently breaking inbound-call and telephony callbacks. The skip is scoped to the webhook path only; the rest of the surface stays under the managed ruleset.
+
 - [ ] **Step 1: Create `infra/terraform/cloudflare_edge.tf`**
 
 ```hcl
@@ -347,6 +349,15 @@ resource "cloudflare_ruleset" "waf_custom" {
   phase   = "http_request_firewall_custom"
 
   rules = [
+    {
+      action = "skip"
+      action_parameters = {
+        ruleset = "current"
+      }
+      expression  = "(starts_with(http.request.uri.path, \"/v1/webhooks\"))"
+      description = "Skip the Free managed ruleset for server-to-server webhooks"
+      enabled     = true
+    },
     {
       action      = "block"
       expression  = "(http.request.uri.path eq \"/metrics\")"
@@ -589,6 +600,8 @@ git commit -m "test(api): lock the CF-Connecting-IP real-client-IP contract; fix
 
 A malformed edge config must fail a PR, not the prod deploy. And the deploy must copy the new CA file to the VM.
 
+> **Terraform is now validated on PRs too.** A `terraform-validate` CI job (`terraform fmt -check` + `terraform init -backend=false` + `terraform validate` over `infra/terraform/`) runs alongside `caddy-validate`, so a malformed `cloudflare_edge.tf` / `dns.tf` / variables change fails the PR rather than surfacing only at `terraform apply` (the cutover, Task 11). This makes the per-task `terraform validate` gates used throughout this plan part of the PR-required checks.
+
 - [ ] **Step 1: Add a `caddy-validate` job** to `.github/workflows/build-check.yml` (a sibling of `build-check`). It validates the prod Caddyfile with the CA mounted and dummy domains:
 
 ```yaml
@@ -674,7 +687,7 @@ This is the one manual task (analogous to P4's Task C2). It needs Cloudflare acc
 - [ ] **Step 1: One-time Cloudflare account prerequisites**
   - In the GCP console, create a Google OAuth client (Web application) with the authorized redirect URI `https://<team>.cloudflareaccess.com/cdn-cgi/access/callback`; capture client id/secret into `cloudflare_access_google_client_id` / `cloudflare_access_google_client_secret` (terraform tfvars). *(Skip to use one-time-PIN email auth instead of Google.)*
   - Set `cloudflare_account_id` in tfvars.
-  - Cloudflare dashboard → Security → Bots: enable **Bot Fight Mode** (Free; no stable terraform resource).
+  - Cloudflare dashboard → Security → Bots: **leave Bot Fight Mode OFF by default.** On the Free plan Bot Fight Mode is a global toggle that **cannot be path-exempted** (unlike the managed-ruleset SKIP rule for `/v1/webhooks/*`), so it can challenge or block the Telnyx/LiveKit server-to-server webhooks — there is no browser to solve a challenge — silently breaking inbound calls and telephony callbacks. It may be enabled later **ONLY after** verifying that a real webhook survives it (re-run the Task 11 Step 5 webhook cutover check with Bot Fight Mode on before leaving it on).
 
 - [ ] **Step 2: `terraform plan` then `apply`** in the planned window. Confirm the plan touches only Cloudflare (SSL/AOP/WAF/Access + DNS `proxied`). `apply`. Then capture `terraform output -raw grafana_access_aud` and the team domain.
 
@@ -690,7 +703,8 @@ This is the one manual task (analogous to P4's Task C2). It needs Cloudflare acc
   5. `curl https://api.usanretirement.com/metrics` → blocked/403 at the edge.
   6. Visit `https://grafana.usanretirement.com` → Cloudflare Access Google login; `gmrnsk@gmail.com` admitted and Grafana opens **without** a second login (JWT SSO); a non-allowlisted email is denied.
   7. `lk` + a live inbound and outbound call work (media unaffected).
-  8. Admin browser console shows **no CSP violations** — and you MUST exercise the cross-origin paths the report-only policy is widened for, otherwise a clean console is meaningless: open the Editor and **run a browser test call** (TestAudioPanel → "Start test call", which `room.connect`s to `wss://lk.<domain>`, a different origin governed by `connect-src`) and play a recording in RecordingPlayer (cross-origin GCS `media-src`). Only after these surface no violations is it safe to switch the CSP `header` from `Content-Security-Policy-Report-Only` to the enforcing `Content-Security-Policy` (Task 1). If a violation appears, widen the offending directive in the Task 1 snippet, redeploy, re-verify, then enforce.
+  8. **Webhook cutover check (required gate):** a real inbound call's Telnyx webhook (`/v1/webhooks/*`) completes end-to-end through Cloudflare — i.e. the call's outcome is recorded — confirming the managed-ruleset SKIP rule lets the server-to-server webhook through (and that Bot Fight Mode, if ever turned on, has not started challenging it).
+  9. Admin browser console shows **no CSP violations** — and you MUST exercise the cross-origin paths the report-only policy is widened for, otherwise a clean console is meaningless: open the Editor and **run a browser test call** (TestAudioPanel → "Start test call", which `room.connect`s to `wss://lk.<domain>`, a different origin governed by `connect-src`) and play a recording in RecordingPlayer (cross-origin GCS `media-src`). Only after these surface no violations is it safe to switch the CSP `header` from `Content-Security-Policy-Report-Only` to the enforcing `Content-Security-Policy` (Task 1). If a violation appears, widen the offending directive in the Task 1 snippet, redeploy, re-verify, then enforce.
 
 - [ ] **Step 6: Rollback (only if needed):** `terraform apply` with the `proxied` flags set back to `false` (revert Task 5) + re-deploy the prior tag → back to the CIDR-gated, direct-TLS state. Config-only; no data involved.
 

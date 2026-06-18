@@ -44,6 +44,21 @@ resource "cloudflare_ruleset" "waf_custom" {
   phase   = "http_request_firewall_custom"
 
   rules = [
+    # MUST be first: server-to-server webhooks (Telnyx/LiveKit POST to
+    # api.<domain>/v1/webhooks/*) carry no browser/cookie/JS context, so the
+    # Cloudflare Free Managed Ruleset can mis-score them as bot/attack traffic and
+    # challenge or block them. Skip the managed-firewall phase for that exact path on
+    # the api host. Origin auth (HMAC/signature checks in apps/api) still applies, so
+    # this only removes the edge managed-WAF layer, not request authentication.
+    {
+      action      = "skip"
+      expression  = "(http.host eq \"api.${data.cloudflare_zone.this[0].name}\" and starts_with(http.request.uri.path, \"/v1/webhooks\"))"
+      description = "Webhooks bypass the managed WAF (server-to-server callbacks, verified at the origin)"
+      enabled     = true
+      action_parameters = {
+        phases = ["http_request_firewall_managed"]
+      }
+    },
     {
       action      = "block"
       expression  = "(http.request.uri.path eq \"/metrics\")"
