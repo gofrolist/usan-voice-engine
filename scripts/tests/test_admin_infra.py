@@ -146,9 +146,11 @@ def test_terraform_has_admin_dns_record():
 
 def test_env_examples_document_admin_keys():
     prod = (INFRA / ".env.prod.example").read_text()
+    # ADMIN_ALLOWED_CIDR is intentionally NOT required: Tenancy P5 removed the
+    # operator-CIDR gate (admin is proxied through Cloudflare; access is enforced
+    # by Google SSO + RLS), so the env example no longer advertises that key.
     for k in (
         "ADMIN_DOMAIN",
-        "ADMIN_ALLOWED_CIDR",
         "GOOGLE_OAUTH_CLIENT_ID",
         "GOOGLE_OAUTH_CLIENT_SECRET",
         "GOOGLE_OAUTH_REDIRECT_URI",
