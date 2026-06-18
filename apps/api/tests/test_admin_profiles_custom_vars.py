@@ -38,7 +38,7 @@ def _with_sms_bodies(cfg: dict, *bodies: str) -> dict:
     return cfg
 
 
-def test_declared_custom_absent_from_unknown_warnings(client, admin_session):
+def test_declared_custom_absent_from_unknown_warnings(client, super_admin_acting_session):
     _create_custom(client, "pet_name")
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     cfg = _draft_config(client, pid)
@@ -48,7 +48,7 @@ def test_declared_custom_absent_from_unknown_warnings(client, admin_session):
     assert "pet_name" not in r.json()["warnings"]
 
 
-def test_undeclared_token_still_warns(client, admin_session):
+def test_undeclared_token_still_warns(client, super_admin_acting_session):
     _create_custom(client, "pet_name")
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     cfg = _draft_config(client, pid)
@@ -58,7 +58,7 @@ def test_undeclared_token_still_warns(client, admin_session):
     assert "mystery" in r.json()["warnings"]
 
 
-def test_custom_phi_in_sensitive_field_warns(client, admin_session):
+def test_custom_phi_in_sensitive_field_warns(client, super_admin_acting_session):
     # Custom phi=true token in voicemail_message: same advisory as builtin PHI,
     # warn-don't-block — the save still returns 200.
     _create_custom(client, "diagnosis", phi=True)
@@ -75,7 +75,7 @@ def test_custom_phi_in_sensitive_field_warns(client, admin_session):
 # --- custom-PHI-in-SMS 422 at save/publish/rollback (spec §3.2.1, plan C6) ----
 
 
-def test_save_422_custom_phi_in_sms_body(client, admin_session):
+def test_save_422_custom_phi_in_sms_body(client, super_admin_acting_session):
     _create_custom(client, "diagnosis", phi=True)
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     before = _draft_config(client, pid)
@@ -89,7 +89,7 @@ def test_save_422_custom_phi_in_sms_body(client, admin_session):
     assert _draft_config(client, pid) == before
 
 
-def test_publish_422_after_phi_flip(client, admin_session):
+def test_publish_422_after_phi_flip(client, super_admin_acting_session):
     # Save while x is phi=False (200 + renders-empty warning), flip to phi=True,
     # then publish — the helper re-runs on draft_config and 422s.
     var = _create_custom(client, "x")
@@ -109,7 +109,7 @@ def test_publish_422_after_phi_flip(client, admin_session):
     assert detail[0]["type"] == "value_error.custom_phi_sms"
 
 
-def test_rollback_422_when_snapshot_references_now_phi_custom(client, admin_session):
+def test_rollback_422_when_snapshot_references_now_phi_custom(client, super_admin_acting_session):
     # The no-pydantic-re-entry hole (spec §3.2.1): repo.rollback → repo.publish
     # republishes the old snapshot with no validation — the router gate must 422.
     var = _create_custom(client, "x")
@@ -136,7 +136,7 @@ def test_rollback_422_when_snapshot_references_now_phi_custom(client, admin_sess
     assert client.post(f"/v1/admin/profiles/{pid}/rollback/2").status_code == 201
 
 
-def test_save_warns_renders_empty_for_non_phi_custom_in_sms(client, admin_session):
+def test_save_warns_renders_empty_for_non_phi_custom_in_sms(client, super_admin_acting_session):
     # Non-PHI custom AND undeclared tokens both warn (declared-vs-undeclared
     # parity, spec §3.2.1); builtin non-PHI tokens DO substitute, so no warning.
     _create_custom(client, "pet_name")
@@ -155,7 +155,7 @@ def test_save_warns_renders_empty_for_non_phi_custom_in_sms(client, admin_sessio
 # --- AgentConfig.policy JSONB round-trip (spec §3.3.1, plan D1) ----
 
 
-def test_policy_jsonb_roundtrip_preserves_hhmm_strings(client, admin_session):
+def test_policy_jsonb_roundtrip_preserves_hhmm_strings(client, super_admin_acting_session):
     # The form.reset contract (spec §3.3.1): the saved draft must hand back
     # "09:30" exactly — a str, never "09:30:00" — or the admin-ui zod HH:MM
     # mirror rejects the value on form.reset(profile.draft_config).

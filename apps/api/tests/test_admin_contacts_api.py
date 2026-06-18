@@ -27,6 +27,32 @@ async def _seed_contact(async_database_url: str, name: str, phone: str) -> str:
     return eid
 
 
+async def _seed_profile(async_database_url: str, name: str) -> str:
+    """Insert an agent_profile directly into the usan (default) org and return its id.
+
+    P4 makes ``POST /v1/admin/profiles`` super-admin only, but contacts management is a
+    plain-ADMIN surface. These tests only need a profile to ASSIGN, so seed it via the DB
+    (mirrors ``_seed_contact``) rather than coupling a contacts test to the operator-only
+    profile-create endpoint. ``draft_config`` is JSONB NOT NULL with no server default.
+    """
+    pid = str(uuid.uuid4())
+    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO agent_profiles (id, organization_id, name, status, draft_config) "
+                    "VALUES (CAST(:id AS uuid), "
+                    "(SELECT id FROM organizations WHERE slug = 'usan'), "
+                    ":n, 'active', CAST('{}' AS jsonb))"
+                ),
+                {"id": pid, "n": name},
+            )
+    finally:
+        await engine.dispose()
+    return pid
+
+
 async def _seed_admin(async_database_url: str, email: str) -> None:
     """Seed an identity-only admin_users row (role moved to memberships, P2 / 0033)."""
     engine = create_async_engine(async_database_url, poolclass=NullPool)
@@ -50,7 +76,7 @@ def test_contacts_requires_session(client):
 
 def test_list_and_assign_profile(client, admin_session, async_database_url):
     eid = asyncio.run(_seed_contact(async_database_url, "Ada Lovelace", "+15551230001"))
-    pid = client.post("/v1/admin/profiles", json={"name": "p-contact"}).json()["id"]
+    pid = asyncio.run(_seed_profile(async_database_url, "p-contact"))
 
     listed = client.get("/v1/admin/contacts").json()
     me = next(e for e in listed if e["id"] == eid)
@@ -100,7 +126,7 @@ def test_assign_profile_audit_detail_has_no_phi(client, admin_session, async_dat
     # HIPAA invariant: the contact.assign_profile audit detail carries ONLY the profile
     # UUID — never the contact's name or phone. Lock it so a future writer can't leak PHI.
     eid = asyncio.run(_seed_contact(async_database_url, "Ada Lovelace", "+15551239999"))
-    pid = client.post("/v1/admin/profiles", json={"name": "p-phi"}).json()["id"]
+    pid = asyncio.run(_seed_profile(async_database_url, "p-phi"))
     client.put(f"/v1/admin/contacts/{eid}/profile", json={"agent_profile_id": pid})
     rows = client.get("/v1/admin/audit?action=contact.assign_profile").json()
     entry = next(e for e in rows if e["entity_id"] == eid)

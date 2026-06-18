@@ -274,16 +274,20 @@ def isolation_client(client, app_async_database_url):
 
 
 def test_profiles_are_isolated_between_orgs(isolation_client, two_orgs):
+    # Profiles became super-admin only in P4, so the cross-org isolation proof now runs
+    # as a USAN operator acting-as each org in turn (the act-as session carries the
+    # active org, which `isolation_client` scopes the RLS session to). The isolation
+    # guarantee — a profile in org A is invisible when acting-as org B, and vice versa —
+    # is unchanged; only the actor tier changed.
     client, super_url = isolation_client
     org_a, org_b = two_orgs
     pid_a = asyncio.run(_seed_profile_in_org(super_url, org_a, "Profile A"))
     pid_b = asyncio.run(_seed_profile_in_org(super_url, org_b, "Profile B"))
-    asyncio.run(_seed_member(super_url, "multi@example.com", org_a, "admin"))
-    asyncio.run(_seed_member(super_url, "multi@example.com", org_b, "admin"))
+    asyncio.run(_seed_super_admin(super_url, "staff@usan.com"))
     try:
         in_a = client.get(
             "/v1/admin/profiles",
-            cookies=_member_cookie("multi@example.com", org_a, AdminRole.ADMIN),
+            cookies=_act_as_cookie("staff@usan.com", org_a),
         )
         assert in_a.status_code == 200
         ids_a = {p["id"] for p in in_a.json()}
@@ -292,7 +296,7 @@ def test_profiles_are_isolated_between_orgs(isolation_client, two_orgs):
 
         in_b = client.get(
             "/v1/admin/profiles",
-            cookies=_member_cookie("multi@example.com", org_b, AdminRole.ADMIN),
+            cookies=_act_as_cookie("staff@usan.com", org_b),
         )
         assert in_b.status_code == 200
         ids_b = {p["id"] for p in in_b.json()}
@@ -354,17 +358,21 @@ def test_act_as_full_write_lands_in_target_org_and_is_audited(
 
 
 def test_membership_deletion_revokes_on_next_request(isolation_client, two_orgs):
+    # Revocation is a property of require_admin_session, independent of the route. Use a
+    # non-operator org-scoped route (P4 made profiles super-admin only) so a plain client
+    # ADMIN can read while the membership exists, then loses access the instant it is
+    # revoked.
     client, super_url = isolation_client
     org_a, _ = two_orgs
     asyncio.run(_seed_member(super_url, "revoke@example.com", org_a, "admin"))
     cookie = _member_cookie("revoke@example.com", org_a, AdminRole.ADMIN)
 
     # Member can read while the membership exists.
-    assert client.get("/v1/admin/profiles", cookies=cookie).status_code == 200
+    assert client.get("/v1/admin/contacts", cookies=cookie).status_code == 200
 
     # Revoke the membership; the stale (unexpired) cookie must lose access at once.
     asyncio.run(_delete_membership(super_url, "revoke@example.com", org_a))
-    revoked = client.get("/v1/admin/profiles", cookies=cookie)
+    revoked = client.get("/v1/admin/contacts", cookies=cookie)
     assert revoked.status_code == 403
 
 

@@ -19,10 +19,11 @@ import { NavSidebar } from "../components/NavSidebar";
 import { meFixture } from "./meFixture";
 
 let role: "admin" | "viewer" = "viewer";
+let superAdmin = false;
 
 function routeGet(url: string): Promise<unknown> {
   if (url === "/v1/auth/me") {
-    return Promise.resolve(meFixture(role));
+    return Promise.resolve(meFixture(role, superAdmin ? { is_super_admin: true } : {}));
   }
   return Promise.reject(new Error(`unexpected GET ${url}`));
 }
@@ -44,6 +45,7 @@ beforeEach(() => {
   getMock.mockReset();
   getMock.mockImplementation(routeGet);
   role = "viewer";
+  superAdmin = false;
 });
 
 describe("NavSidebar Operate group", () => {
@@ -78,14 +80,40 @@ describe("NavSidebar Operate group", () => {
     expect(screen.getByRole("link", { name: "Queues" })).toBeInTheDocument();
   });
 
-  it("shows Variables under Config for a viewer (not adminOnly)", async () => {
+  it("hides Variables/Defaults/Profiles for a non-super user (operator-only in P4)", async () => {
+    role = "admin"; // a client ADMIN is still not an operator
     renderSidebar();
     await screen.findByText("me@example.com");
-    expect(screen.getByText("Config")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Variables" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Defaults" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Profiles" })).not.toBeInTheDocument();
+  });
+
+  it("shows Profiles/Defaults/Variables for a super-admin operator", async () => {
+    role = "admin";
+    superAdmin = true;
+    renderSidebar();
+    await screen.findByText("me@example.com");
+    expect(screen.getByRole("link", { name: "Profiles" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Defaults" })).toHaveAttribute("href", "/defaults");
     expect(screen.getByRole("link", { name: "Variables" })).toHaveAttribute(
       "href",
       "/custom-variables",
     );
+  });
+
+  it("hides Audit for a viewer (P4 ADMIN-gated)", async () => {
+    role = "viewer";
+    renderSidebar();
+    await screen.findByText("me@example.com");
+    expect(screen.queryByRole("link", { name: "Audit" })).not.toBeInTheDocument();
+  });
+
+  it("shows Audit for a client admin (P4 ADMIN-gated)", async () => {
+    role = "admin";
+    renderSidebar();
+    await screen.findByText("me@example.com");
+    expect(screen.getByRole("link", { name: "Audit" })).toHaveAttribute("href", "/audit");
   });
 
   it("renders a decorative icon inside every nav link without changing link names", async () => {
@@ -105,7 +133,9 @@ describe("NavSidebar Operate group", () => {
     expect(screen.getByRole("link", { name: "Calls" })).toBeInTheDocument();
   });
 
-  it("groups render in order Build, Config, Operate, System", async () => {
+  it("groups render in order Build, Config, Operate, System for an operator", async () => {
+    role = "admin";
+    superAdmin = true;
     renderSidebar();
     await screen.findByText("me@example.com");
     const expectFollows = (first: HTMLElement, second: HTMLElement) => {

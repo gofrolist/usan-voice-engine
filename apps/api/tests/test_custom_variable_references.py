@@ -32,19 +32,19 @@ def _save_greeting(client, pid: str, text: str) -> None:
     assert r.status_code == 200, r.text
 
 
-def test_references_missing_variable_returns_404(client, admin_session):
+def test_references_missing_variable_returns_404(client, super_admin_acting_session):
     r = client.get(f"/v1/admin/custom-variables/{uuid.uuid4()}/references")
     assert r.status_code == 404
 
 
-def test_unreferenced_variable_has_empty_profiles(client, admin_session):
+def test_unreferenced_variable_has_empty_profiles(client, super_admin_acting_session):
     vid = _make_var(client, "promo")
     r = client.get(f"/v1/admin/custom-variables/{vid}/references")
     assert r.status_code == 200
     assert r.json()["profiles"] == []
 
 
-def test_reference_in_draft_is_reported(client, admin_session):
+def test_reference_in_draft_is_reported(client, super_admin_acting_session):
     vid = _make_var(client, "promo")
     pid = _new_profile(client)
     _save_greeting(client, pid, "Hello, special {{promo}} today!")
@@ -54,7 +54,7 @@ def test_reference_in_draft_is_reported(client, admin_session):
     assert any(w.startswith("draft") and "greeting" in w for w in entries[pid]["where"])
 
 
-def test_reference_in_published_version_is_reported(client, admin_session):
+def test_reference_in_published_version_is_reported(client, super_admin_acting_session):
     # The scan MUST include immutable version snapshots, not just the live draft.
     vid = _make_var(client, "promo")
     pid = _new_profile(client)
@@ -68,7 +68,7 @@ def test_reference_in_published_version_is_reported(client, admin_session):
     assert any("v1" in w and "greeting" in w for w in entries[pid]["where"])
 
 
-def test_reference_match_is_exact_not_substring(client, admin_session):
+def test_reference_match_is_exact_not_substring(client, super_admin_acting_session):
     # "state" must NOT match "{{state_full}}" (exact token, not substring).
     vid = _make_var(client, "state")
     pid = _new_profile(client)
@@ -77,7 +77,7 @@ def test_reference_match_is_exact_not_substring(client, admin_session):
     assert body["profiles"] == []
 
 
-def test_references_leak_no_prompt_text(client, admin_session):
+def test_references_leak_no_prompt_text(client, super_admin_acting_session):
     # Names/locations only — the response must never echo the prompt body.
     vid = _make_var(client, "promo")
     pid = _new_profile(client)

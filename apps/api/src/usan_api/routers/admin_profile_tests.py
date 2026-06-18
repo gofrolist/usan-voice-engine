@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import livekit_dispatch
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import get_tenant_db, require_admin_role, require_admin_session
+from usan_api.auth import get_tenant_db, require_admin_role, require_super_admin
 from usan_api.db.base import AdminRole
 from usan_api.prompt_substitution import build_vars, substitute
 from usan_api.repositories import admin_audit
@@ -48,7 +48,7 @@ from usan_api.vertex_test import VertexTurn, run_vertex_turn
 router = APIRouter(
     prefix="/v1/admin/profiles",
     tags=["admin-profile-tests"],
-    dependencies=[Depends(require_admin_session)],
+    dependencies=[Depends(require_super_admin)],
 )
 
 # Bound the model→stub-tool→continue loop so a misbehaving prompt cannot rack up

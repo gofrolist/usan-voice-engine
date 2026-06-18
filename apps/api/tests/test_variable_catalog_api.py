@@ -37,7 +37,7 @@ def test_variable_catalog_requires_admin_session(client):
     assert r.status_code == 401
 
 
-def test_variable_catalog_returns_builtins_in_order(client, admin_session):
+def test_variable_catalog_returns_builtins_in_order(client, super_admin_acting_session):
     r = client.get("/v1/admin/variable-catalog")
     assert r.status_code == 200
     body = r.json()
@@ -46,7 +46,7 @@ def test_variable_catalog_returns_builtins_in_order(client, admin_session):
     assert [v["name"] for v in variables] == BUILTIN_ORDER
 
 
-def test_variable_catalog_each_entry_has_contract_shape(client, admin_session):
+def test_variable_catalog_each_entry_has_contract_shape(client, super_admin_acting_session):
     variables = client.get("/v1/admin/variable-catalog").json()["variables"]
     for v in variables:
         assert set(v.keys()) == {"name", "tier", "description", "default", "example", "phi"}
@@ -57,7 +57,7 @@ def test_variable_catalog_each_entry_has_contract_shape(client, admin_session):
     assert by_name["today_meds"]["default"] == ""
 
 
-def test_variable_catalog_phi_field_values(client, admin_session):
+def test_variable_catalog_phi_field_values(client, super_admin_acting_session):
     variables = client.get("/v1/admin/variable-catalog").json()["variables"]
     by_name = {v["name"]: v for v in variables}
     phi_names = {
@@ -94,7 +94,7 @@ async def _insert_custom_raw(async_database_url: str, name: str) -> None:
         await engine.dispose()
 
 
-def test_catalog_merges_customs_after_builtins(client, admin_session):
+def test_catalog_merges_customs_after_builtins(client, super_admin_acting_session):
     # Customs declared via the CRUD API show up after the builtins, alphabetical,
     # with tier="custom" and default="" (definitions carry no values — spec §3.2).
     for name, phi in (("zebra_var", False), ("apple_var", True)):
@@ -118,14 +118,16 @@ def test_catalog_merges_customs_after_builtins(client, admin_session):
     assert by_name["zebra_var"]["phi"] is False
 
 
-def test_catalog_empty_table_identical_to_builtin_constant(client, admin_session):
+def test_catalog_empty_table_identical_to_builtin_constant(client, super_admin_acting_session):
     # Ship-inert pin (spec §9): an empty custom_variables table reproduces the
     # pre-A4 static catalog byte-for-byte.
     body = client.get("/v1/admin/variable-catalog").json()
     assert body["variables"] == [v.model_dump(mode="json") for v in BUILTIN_VARIABLES]
 
 
-def test_builtin_shadowed_custom_dropped_and_logged(client, admin_session, async_database_url):
+def test_builtin_shadowed_custom_dropped_and_logged(
+    client, super_admin_acting_session, async_database_url
+):
     # Create-time validation rejects collisions with *today's* builtins, but a
     # future builtin can collide with a pre-existing custom row. The merge drops
     # the custom and warns with the name only (spec §3.2).

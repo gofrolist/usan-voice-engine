@@ -31,14 +31,17 @@ interface NavGroup {
 }
 
 const GROUPS: NavGroup[] = [
-  { heading: "Build", items: [{ to: "/", label: "Profiles", icon: ProfilesIcon }] },
+  {
+    heading: "Build",
+    items: [{ to: "/", label: "Profiles", icon: ProfilesIcon, superAdminOnly: true }],
+  },
   {
     heading: "Config",
     items: [
       { to: "/contacts", label: "Contacts", icon: ContactsIcon, adminOnly: true },
-      { to: "/defaults", label: "Defaults", icon: DefaultsIcon },
-      // List view is all-roles (mutations are ADMIN-gated inside the page).
-      { to: "/custom-variables", label: "Variables", icon: VariablesIcon },
+      // Operator-only in P4 (profile authoring is not exposed to client orgs).
+      { to: "/defaults", label: "Defaults", icon: DefaultsIcon, superAdminOnly: true },
+      { to: "/custom-variables", label: "Variables", icon: VariablesIcon, superAdminOnly: true },
     ],
   },
   {
@@ -51,7 +54,8 @@ const GROUPS: NavGroup[] = [
   {
     heading: "System",
     items: [
-      { to: "/audit", label: "Audit", icon: AuditIcon },
+      // ADMIN-gated in P4: a client ADMIN reads its own org's audit; viewers do not.
+      { to: "/audit", label: "Audit", icon: AuditIcon, adminOnly: true },
       { to: "/members", label: "Members", icon: MembersIcon, adminOnly: true },
       {
         to: "/organizations",
