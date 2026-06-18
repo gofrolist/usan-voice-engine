@@ -120,6 +120,31 @@ variable "cloudflare_zone_id" {
   description = "Cloudflare zone ID for the domain. Empty (or empty token) = manage DNS by hand."
 }
 
+variable "cloudflare_account_id" {
+  type        = string
+  default     = ""
+  description = "Cloudflare account ID (for Zero Trust Access). Empty = skip Access (manage by hand)."
+}
+
+variable "grafana_access_emails" {
+  type        = list(string)
+  default     = ["gmrnsk@gmail.com"]
+  description = "Operator emails allowed into Grafana via Cloudflare Access. Keep aligned with ADMIN_BOOTSTRAP_EMAILS."
+}
+
+variable "cloudflare_access_google_client_id" {
+  type        = string
+  default     = ""
+  description = "Google OAuth client ID for the Cloudflare Access Google IdP. Empty = fall back to one-time-PIN email auth."
+}
+
+variable "cloudflare_access_google_client_secret" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Google OAuth client secret for the Cloudflare Access Google IdP."
+}
+
 variable "audit_log_retention_days" {
   type        = number
   default     = 2190

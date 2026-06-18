@@ -82,3 +82,61 @@ resource "cloudflare_ruleset" "rate_limit" {
     },
   ]
 }
+
+# Cloudflare Access (Zero Trust) for grafana.<domain>. Access apps/policies/IdPs
+# are account-scoped in v5. Gated on the account id being set so DNS-only setups
+# (or hand-managed Access) stay no-ops.
+locals {
+  manage_access  = local.manage_dns && var.cloudflare_account_id != ""
+  use_google_idp = local.manage_dns && var.cloudflare_account_id != "" && var.cloudflare_access_google_client_id != ""
+}
+
+# Google IdP (only when a Google client is provided; otherwise Access uses its
+# built-in one-time-PIN email auth).
+resource "cloudflare_zero_trust_access_identity_provider" "google" {
+  count      = local.use_google_idp ? 1 : 0
+  account_id = var.cloudflare_account_id
+  name       = "Google"
+  type       = "google"
+  config = {
+    client_id     = var.cloudflare_access_google_client_id
+    client_secret = var.cloudflare_access_google_client_secret
+  }
+}
+
+# Allow policy: the operator email allowlist (OR-combined include entries).
+resource "cloudflare_zero_trust_access_policy" "grafana_operators" {
+  count      = local.manage_access ? 1 : 0
+  account_id = var.cloudflare_account_id
+  name       = "USAN operators"
+  decision   = "allow"
+  include = [
+    {
+      email = {
+        email = var.grafana_access_emails[0]
+      }
+    },
+  ]
+}
+
+# Access application gating grafana.<domain>.
+resource "cloudflare_zero_trust_access_application" "grafana" {
+  count                     = local.manage_access ? 1 : 0
+  account_id                = var.cloudflare_account_id
+  name                      = "USAN Grafana"
+  domain                    = "grafana.${data.cloudflare_zone.this[0].name}"
+  type                      = "self_hosted"
+  session_duration          = "24h"
+  policies                  = [cloudflare_zero_trust_access_policy.grafana_operators[0].id]
+  allowed_idps              = local.use_google_idp ? [cloudflare_zero_trust_access_identity_provider.google[0].id] : null
+  auto_redirect_to_identity = local.use_google_idp
+}
+
+output "grafana_access_aud" {
+  value = local.manage_access ? cloudflare_zero_trust_access_application.grafana[0].aud : ""
+  # Marked sensitive because the app's computed aud carries forward the sensitive
+  # mark from its dependency closure (the Google IdP client_secret) under the v5
+  # provider. Read it at cutover with `terraform output -raw grafana_access_aud`.
+  sensitive   = true
+  description = "Cloudflare Access AUD for the Grafana app (set as GF_AUTH_JWT_EXPECT_CLAIMS aud)."
+}
