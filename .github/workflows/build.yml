@@ -89,6 +89,11 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-agent-base:${{ steps.tag.outputs.value }}
+          # Authenticated HF downloads avoid the anonymous-IP 429s that fail the
+          # model pre-warm on shared runners. Empty when the secret is unset →
+          # anonymous fallback (Dockerfile.base treats the token as optional).
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
           cache-from: type=gha,scope=agent-base
           cache-to: type=gha,mode=max,scope=agent-base
 
