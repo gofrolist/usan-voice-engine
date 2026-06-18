@@ -1,8 +1,9 @@
-# === Cloudflare DNS (optional) ===
-# When cloudflare_api_token + cloudflare_zone_id are set, Terraform creates the
-# api.<domain> and lk.<domain> A records pointing at the VM's static IP.
-# proxied = false: Cloudflare's proxy cannot pass WebRTC/SIP UDP, and Caddy's
-# Let's Encrypt HTTP-01/TLS-ALPN challenge needs the origin reachable directly.
+# === Cloudflare DNS ===
+# admin/api/grafana are PROXIED (orange-cloud) so they sit behind Cloudflare's
+# WAF/DDoS/Access (Tenancy P5). lk stays proxied=false: Cloudflare's proxy can't
+# pass WebRTC/SIP UDP, and lk uses Caddy's Let's Encrypt cert directly. The
+# proxied origins use Authenticated Origin Pulls + a self-signed cert (see
+# infra/Caddyfile) so only Cloudflare can reach them.
 
 provider "cloudflare" {
   api_token = var.cloudflare_api_token
@@ -18,7 +19,7 @@ resource "cloudflare_dns_record" "api" {
   name    = "api"
   type    = "A"
   content = google_compute_address.usan.address
-  proxied = false
+  proxied = true
   ttl     = 300
 }
 
@@ -38,7 +39,7 @@ resource "cloudflare_dns_record" "grafana" {
   name    = "grafana" # -> grafana.<zone domain>
   type    = "A"
   content = google_compute_address.usan.address
-  proxied = false
+  proxied = true
   ttl     = 300
 }
 
@@ -48,6 +49,6 @@ resource "cloudflare_dns_record" "admin" {
   name    = "admin" # -> admin.<zone domain> (Admin UI console, Plan admin-5)
   type    = "A"
   content = google_compute_address.usan.address
-  proxied = false
+  proxied = true
   ttl     = 300
 }
