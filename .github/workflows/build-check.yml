@@ -90,8 +90,11 @@ jobs:
         # PR instead of at `terraform apply`. -backend=false skips remote state
         # (no GCP creds needed); validate still loads the provider schemas.
         run: |
+          # --entrypoint /bin/sh: the image's entrypoint is `terraform`, so without
+          # this the `sh -ec ...` args are parsed as a terraform subcommand.
           docker run --rm \
+            --entrypoint /bin/sh \
             -v "$PWD/infra/terraform:/workspace" \
             -w /workspace \
             hashicorp/terraform:1.9 \
-            sh -ec 'terraform fmt -check && terraform init -backend=false && terraform validate'
+            -ec 'terraform fmt -check && terraform init -backend=false && terraform validate'
