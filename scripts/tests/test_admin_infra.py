@@ -41,7 +41,11 @@ def test_admin_overlay_caddy_env():
     doc = _load_yaml("infra/docker-compose.admin.yml")
     keys = _env_keys(doc["services"]["caddy"]["environment"])
     assert "ADMIN_DOMAIN" in keys
-    assert "ADMIN_ALLOWED_CIDR" in keys
+    # Tenancy P5 dropped the operator-CIDR gate (admin is proxied through
+    # Cloudflare; access is enforced by Google SSO + RLS), so the caddy env
+    # must NOT carry ADMIN_ALLOWED_CIDR — its `:?required` guard would otherwise
+    # fail the boot.
+    assert "ADMIN_ALLOWED_CIDR" not in keys
 
 
 def test_api_env_passes_sso_settings():
@@ -60,21 +64,33 @@ def test_api_env_passes_sso_settings():
         assert k in keys, f"api service must pass {k} to the container"
 
 
-def test_caddyfile_admin_block_is_cidr_gated():
+def test_caddyfile_admin_block_is_sso_gated():
+    # Tenancy P5 removed the operator-CIDR gate: admin is proxied through
+    # Cloudflare and access is enforced at the app layer (Google SSO + RLS),
+    # with the origin locked down by Authenticated Origin Pulls (mTLS). The
+    # admin block must therefore have NO remote_ip/respond-403 CIDR gate, and
+    # MUST require Cloudflare's AOP client cert.
     text = (INFRA / "Caddyfile").read_text()
-    assert "{$ADMIN_DOMAIN}" in text
-    assert "remote_ip {$ADMIN_ALLOWED_CIDR}" in text
+    # Split on the site-block opener ("{$ADMIN_DOMAIN} {"), not the bare
+    # placeholder — the latter also appears in the security_headers snippet
+    # comment near the top of the file, which would swallow the whole config.
+    assert "{$ADMIN_DOMAIN} {" in text
+    admin_block = text.split("{$ADMIN_DOMAIN} {", 1)[1]
+    # The old CIDR gate is gone.
+    assert "ADMIN_ALLOWED_CIDR" not in admin_block
+    assert "remote_ip" not in admin_block
+    assert "respond 403" not in admin_block
     # Same-origin: /v1 to the API, everything else to the SPA container.
-    assert "admin-ui:8080" in text
-    # The 403 gate must exist in the admin block (default-deny outside the CIDR).
-    admin_block = text.split("{$ADMIN_DOMAIN}", 1)[1]
-    assert "respond 403" in admin_block
+    assert "admin-ui:8080" in admin_block
+    # Origin lockdown: only Cloudflare (presenting the AOP client cert) gets in.
+    assert "require_and_verify" in admin_block
+    assert "cloudflare-origin-pull-ca.pem" in admin_block
 
 
 def test_api_origin_does_not_expose_admin_plane():
     # Defense in depth: the admin/auth plane must be reachable ONLY via the
-    # CIDR-gated admin.<domain> origin, so the ungated api.<domain> block must 403
-    # the /v1/admin/* and /v1/auth/* prefixes.
+    # admin.<domain> origin (Cloudflare-proxied; app-layer SSO + RLS), so the
+    # api.<domain> block must 403 the /v1/admin/* and /v1/auth/* prefixes.
     text = (INFRA / "Caddyfile").read_text()
     # Anchor on the site headers ("<domain> {"), not the leading comment that also
     # mentions both placeholders.
@@ -141,14 +157,17 @@ def test_terraform_has_admin_dns_record():
     assert 'cloudflare_dns_record" "admin"' in text
     block = text.split('"admin"', 1)[1]
     assert 'name    = "admin"' in block
-    assert "proxied = false" in block
+    # Tenancy P5 proxies admin through Cloudflare (orange-cloud) for WAF/DDoS/Access.
+    assert "proxied = true" in block
 
 
 def test_env_examples_document_admin_keys():
     prod = (INFRA / ".env.prod.example").read_text()
+    # ADMIN_ALLOWED_CIDR is intentionally NOT required: Tenancy P5 removed the
+    # operator-CIDR gate (admin is proxied through Cloudflare; access is enforced
+    # by Google SSO + RLS), so the env example no longer advertises that key.
     for k in (
         "ADMIN_DOMAIN",
-        "ADMIN_ALLOWED_CIDR",
         "GOOGLE_OAUTH_CLIENT_ID",
         "GOOGLE_OAUTH_CLIENT_SECRET",
         "GOOGLE_OAUTH_REDIRECT_URI",

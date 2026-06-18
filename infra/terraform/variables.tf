@@ -120,6 +120,36 @@ variable "cloudflare_zone_id" {
   description = "Cloudflare zone ID for the domain. Empty (or empty token) = manage DNS by hand."
 }
 
+variable "cloudflare_account_id" {
+  type        = string
+  default     = ""
+  description = "Cloudflare account ID (for Zero Trust Access). Empty = skip Access (manage by hand)."
+}
+
+variable "grafana_access_emails" {
+  type    = list(string)
+  default = []
+  # REQUIRED (set in tfvars) when cloudflare_account_id is set; keep aligned with
+  # ADMIN_BOOTSTRAP_EMAILS. No committed default (avoids checking PII into VCS). An
+  # empty list is safe: the Access allow policy's `include` is built from the FULL
+  # list, so [] yields no include entries → a fail-closed apply error, never an
+  # allow-all policy.
+  description = "Operator emails allowed into Grafana via Cloudflare Access. REQUIRED (in tfvars) when cloudflare_account_id is set; keep aligned with ADMIN_BOOTSTRAP_EMAILS. Empty is safe (fail-closed, never allow-all)."
+}
+
+variable "cloudflare_access_google_client_id" {
+  type        = string
+  default     = ""
+  description = "Google OAuth client ID for the Cloudflare Access Google IdP. Empty = fall back to one-time-PIN email auth."
+}
+
+variable "cloudflare_access_google_client_secret" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Google OAuth client secret for the Cloudflare Access Google IdP."
+}
+
 variable "audit_log_retention_days" {
   type        = number
   default     = 2190

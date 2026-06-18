@@ -1,6 +1,34 @@
+# Common security response headers for the Cloudflare-proxied sites
+# (admin/api/grafana). The Content-Security-Policy is admin-SPA-specific, so it
+# is NOT set here — it lives on the {$ADMIN_DOMAIN} site below. Grafana serves
+# its own UI (it would need a different policy) and the API serves JSON (no
+# document for a CSP to govern), so neither carries the admin CSP.
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
 # {$API_DOMAIN} and {$LIVEKIT_DOMAIN} come from the Caddy container env.
 {$API_DOMAIN} {
 	encode zstd gzip
+	import security_headers
+	# Cloudflare-proxied origin: serve a self-signed cert (CF SSL mode "Full"
+	# accepts it) and REQUIRE Cloudflare's Authenticated-Origin-Pulls client cert
+	# so only Cloudflare can reach this origin (direct-to-IP hits are rejected).
+	tls {
+		issuer internal
+		client_auth {
+			mode require_and_verify
+			trust_pool file {
+				pem_file /etc/caddy/cloudflare-origin-pull-ca.pem
+			}
+		}
+	}
 	# Cap request bodies at the edge so the unauthenticated, signature-gated webhook
 	# routes (/v1/webhooks/telnyx, /v1/webhooks/livekit) can't be used to exhaust API
 	# memory with a giant POST before the signature check reads the body. 1MB is ample
@@ -20,19 +48,23 @@
 	respond @metrics 403
 
 	# The admin-console plane (session-cookie auth) and the Google-SSO endpoints are
-	# served ONLY via the CIDR-gated admin.<domain> origin below. Block them on this
-	# ungated public api host so the admin plane has a single gated entry point
-	# (defense in depth: a stolen session cookie can't be replayed off-CIDR here, and
-	# the OAuth routes aren't probeable). The SPA + /v1 are same-origin on admin.<domain>;
-	# the agent (/v1/runtime, /v1/calls/*) and operator (/v1/contacts, /v1/dnc, /v1/calls)
-	# planes do not use these prefixes, so nothing legitimate is blocked.
+	# served ONLY via the admin.<domain> origin below (Cloudflare-proxied; app-layer
+	# auth = Google SSO + RLS). Block them on this api host so the admin plane has a
+	# single entry point (defense in depth: the OAuth routes aren't probeable here, and
+	# a stolen session cookie can't be replayed against this origin). The SPA + /v1 are
+	# same-origin on admin.<domain>; the agent (/v1/runtime, /v1/calls/*) and operator
+	# (/v1/contacts, /v1/dnc, /v1/calls) planes do not use these prefixes, so nothing
+	# legitimate is blocked.
 	@adminplane path /v1/admin/* /v1/auth/*
 	respond @adminplane 403
 
 	reverse_proxy api:8000 {
-		# Overwrite X-Forwarded-For with the direct client so the API rate
-		# limiter keys on the real (non-spoofable) caller IP, not this proxy's.
-		header_up X-Forwarded-For {remote_host}
+		# Behind Cloudflare the socket peer is the CF edge; the true client is in
+		# CF-Connecting-IP. Feed THAT to the API rate limiter (real caller IP), not
+		# this proxy's or the Cloudflare edge IP. Non-spoofable ONLY because the
+		# `tls client_auth require_and_verify` above rejects any non-Cloudflare peer
+		# (AOP mTLS), so a direct-to-origin client can't inject a forged header.
+		header_up X-Forwarded-For {http.request.header.Cf-Connecting-Ip}
 	}
 }
 
@@ -46,37 +78,67 @@
 
 {$GRAFANA_DOMAIN} {
 	encode zstd gzip
-	# Operator-CIDR allowlist enforced at L7 (443 is shared across api/lk/grafana
-	# by SNI, so this cannot be a VM firewall rule). Anyone outside the CIDR gets
-	# 403; allowed clients hit Grafana (which also requires its own login).
-	@operator remote_ip {$GRAFANA_ALLOWED_CIDR}
-	handle @operator {
-		reverse_proxy grafana:3000
+	import security_headers
+	# Cloudflare-proxied origin: serve a self-signed cert (CF SSL mode "Full"
+	# accepts it) and REQUIRE Cloudflare's Authenticated-Origin-Pulls client cert
+	# so only Cloudflare can reach this origin (direct-to-IP hits are rejected).
+	tls {
+		issuer internal
+		client_auth {
+			mode require_and_verify
+			trust_pool file {
+				pem_file /etc/caddy/cloudflare-origin-pull-ca.pem
+			}
+		}
 	}
-	respond 403
+	# Public reachability via Cloudflare; operator-only access is enforced at the
+	# Cloudflare Access (Zero Trust) layer in front of this origin, not a CIDR gate.
+	reverse_proxy grafana:3000
 }
 
 {$ADMIN_DOMAIN} {
 	encode zstd gzip
-	# Operator-CIDR allowlist enforced at L7 (443 is SNI-shared across all sites,
-	# so this cannot be a VM firewall rule). Outside the CIDR -> 403. The admin SPA
-	# and the API share THIS origin, so the SameSite=Strict session cookie set by
-	# /v1/auth works (no cross-site cookie, no CORS).
-	@operator remote_ip {$ADMIN_ALLOWED_CIDR}
-	handle @operator {
-		# Same-origin API: admin/auth/runtime endpoints go to the api container.
-		@api path /v1/*
-		handle @api {
-			reverse_proxy api:8000 {
-				# Real (non-spoofable) client IP for the API rate limiter.
-				header_up X-Forwarded-For {remote_host}
+	import security_headers
+	# Content-Security-Policy for the admin SPA. Report-Only first; promote to the
+	# enforcing `Content-Security-Policy` header once the cutover console is clean.
+	# Set here (not in the shared snippet) because it is specific to the SPA's real
+	# origins:
+	#   - script-src carries the sha256 of the inline anti-FOUC theme-init block in
+	#     apps/admin-ui/dist/index.html; recompute it if that inline <script> changes.
+	#   - media-src https://storage.googleapis.com lets RecordingPlayer's <audio src>
+	#     load presigned GCS recording URLs.
+	#   - connect-src wss://{$LIVEKIT_DOMAIN} lets TestAudioPanel's room.connect() open
+	#     the LiveKit signalling socket (a different origin). Promotion gate: plan
+	#     Task 11 Step 5.8 must run an Editor browser test call before enforcing.
+	header Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-2LGxY21tnJOtIvjiiSPWY3DCRtf00gIB3ndHy3XHHgQ='; connect-src 'self' wss://{$LIVEKIT_DOMAIN}; media-src 'self' https://storage.googleapis.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+	# Cloudflare-proxied origin: serve a self-signed cert (CF SSL mode "Full"
+	# accepts it) and REQUIRE Cloudflare's Authenticated-Origin-Pulls client cert
+	# so only Cloudflare can reach this origin (direct-to-IP hits are rejected).
+	tls {
+		issuer internal
+		client_auth {
+			mode require_and_verify
+			trust_pool file {
+				pem_file /etc/caddy/cloudflare-origin-pull-ca.pem
 			}
 		}
-		# Everything else is the React SPA static container (client-side routing is
-		# handled inside that container via try_files -> /index.html).
-		handle {
-			reverse_proxy admin-ui:8080
+	}
+	# The admin SPA and the API share THIS origin, so the SameSite=Strict session
+	# cookie set by /v1/auth works (no cross-site cookie, no CORS). Reachability is
+	# public via Cloudflare; auth is enforced at the app layer (Google SSO + RLS).
+	@api path /v1/*
+	handle @api {
+		reverse_proxy api:8000 {
+			# Behind Cloudflare the socket peer is the CF edge; the true client is in
+			# CF-Connecting-IP. Feed THAT to the API (rate limiter + PHI audit log).
+			# Non-spoofable ONLY because the `tls client_auth require_and_verify`
+			# above rejects any non-Cloudflare peer (AOP mTLS).
+			header_up X-Forwarded-For {http.request.header.Cf-Connecting-Ip}
 		}
 	}
-	respond 403
+	# Everything else is the React SPA static container (client-side routing handled
+	# inside that container via try_files -> /index.html).
+	handle {
+		reverse_proxy admin-ui:8080
+	}
 }

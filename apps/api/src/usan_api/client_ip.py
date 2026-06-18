@@ -1,11 +1,12 @@
 """Real client IP extraction, shared by rate limiting and PHI access audit logs.
 
-Behind Caddy the socket peer is the proxy container, not the operator. Caddy
-overwrites ``X-Forwarded-For`` with the direct, non-spoofable client (see
-``infra/Caddyfile``: ``header_up X-Forwarded-For {remote_host}``), so its first
-hop is the true external client. Both the rate-limit key and the audit trail
+Behind Caddy the socket peer is the proxy container (and, once Cloudflare-proxied,
+the Cloudflare edge), not the operator. Caddy overwrites ``X-Forwarded-For`` with
+the true client — ``CF-Connecting-IP`` behind Cloudflare (see ``infra/Caddyfile``:
+``header_up X-Forwarded-For {http.request.header.Cf-Connecting-Ip}``) — so its
+first hop is the real external client. Both the rate-limit key and the audit trail
 must use that, not ``request.client.host`` — otherwise every request collapses
-into the single proxy IP.
+into the single proxy/edge IP.
 """
 
 from starlette.requests import Request

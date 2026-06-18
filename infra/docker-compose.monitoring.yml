@@ -7,7 +7,8 @@
 #     -f infra/docker-compose.monitoring.yml up -d
 #
 # Requires in .env: GF_SECURITY_ADMIN_PASSWORD, GF_POSTGRES_RO_PASSWORD,
-# GRAFANA_DB_HOST, GRAFANA_DB_SSLMODE, GRAFANA_DOMAIN (+ GRAFANA_ALLOWED_CIDR for Caddy).
+# GRAFANA_DB_HOST, GRAFANA_DB_SSLMODE, GRAFANA_DOMAIN. Operator access to Grafana
+# is gated by Cloudflare Access (Zero Trust) at the edge, not a CIDR allowlist.
 services:
   prometheus:
     image: prom/prometheus:v3.12.0
@@ -45,11 +46,34 @@ services:
       GF_POSTGRES_RO_PASSWORD: ${GF_POSTGRES_RO_PASSWORD}
       GRAFANA_DB_HOST: ${GRAFANA_DB_HOST}
       GRAFANA_DB_SSLMODE: ${GRAFANA_DB_SSLMODE:-require}
+      # Single sign-on via Cloudflare Access: Grafana trusts the signed CF Access
+      # JWT (header Cf-Access-Jwt-Assertion), so the edge Google login flows in
+      # with no second Grafana login. AUD + team domain come from the Access app
+      # (terraform, Task 7). All non-secret. GF_SECURITY_ADMIN_PASSWORD stays as
+      # the break-glass local login (reachable only after passing CF Access).
+      #
+      # SECURITY NOTES (P5 review):
+      #   - EXPECT_CLAIMS must ALWAYS pin `aud` to the Access app's AUD. A wrong/
+      #     placeholder value fails CLOSED (rejects all JWTs -> break-glass only);
+      #     an EMPTY EXPECT_CLAIMS would fail OPEN (accept any JWT from this team
+      #     domain). Replace REPLACE_WITH_ACCESS_APP_AUD at cutover (Task 11 Step 3)
+      #     and verify SSO before relying on it (Task 11 Step 5.6). Never blank it.
+      #   - Revocation lag: a removed CF Access user keeps any live Grafana session
+      #     cookie until it expires. Acceptable for the single-operator setup; for a
+      #     larger team, shorten Grafana's session lifetime / tighten post-GA.
+      GF_AUTH_JWT_ENABLED: "true"
+      GF_AUTH_JWT_HEADER_NAME: "Cf-Access-Jwt-Assertion"
+      GF_AUTH_JWT_EMAIL_CLAIM: "email"
+      GF_AUTH_JWT_USERNAME_CLAIM: "email"
+      GF_AUTH_JWT_JWK_SET_URL: "https://usanretirement.cloudflareaccess.com/cdn-cgi/access/certs"
+      GF_AUTH_JWT_EXPECT_CLAIMS: '{"aud":"REPLACE_WITH_ACCESS_APP_AUD"}'
+      GF_AUTH_JWT_AUTO_SIGN_UP: "true"
+      GF_AUTH_JWT_ROLE_ATTRIBUTE_STRICT: "false"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
-    # No published port: Caddy reverse-proxies grafana:3000 (operator-CIDR gated).
+    # No published port: Caddy reverse-proxies grafana:3000 (gated by Cloudflare Access).
     restart: unless-stopped
     logging:
       driver: journald
