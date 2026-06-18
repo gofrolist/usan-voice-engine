@@ -22,5 +22,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Pre-warm models so first call doesn't pay download cost.
 # - Silero VAD: small, loads on import via VAD.load()
 # - Turn detector: downloads ONNX weights via download-files command
-RUN uv run python -c "from livekit.plugins import silero; silero.VAD.load()" && \
+# An optional HF token (BuildKit secret `hf_token`, supplied by CI) authenticates
+# the Hugging Face downloads so they dodge the anonymous-IP 429 rate limits that
+# break shared CI runners. The mount is not required: local `make base` builds
+# without the secret fall back to anonymous downloads (token stays empty).
+RUN --mount=type=secret,id=hf_token \
+    export HF_TOKEN="$(cat /run/secrets/hf_token 2>/dev/null || true)" && \
+    export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" && \
+    uv run python -c "from livekit.plugins import silero; silero.VAD.load()" && \
     uv run python -m livekit.agents download-files
