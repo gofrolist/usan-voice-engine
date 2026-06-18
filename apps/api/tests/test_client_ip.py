@@ -29,3 +29,10 @@ def test_client_ip_falls_back_to_peer_when_first_hop_blank():
 
 def test_client_ip_unknown_without_client_or_xff():
     assert client_ip(_req(xff=None, client=None)) == "unknown"
+
+
+def test_client_ip_reads_cloudflare_real_client():
+    # Behind Cloudflare, Caddy sets X-Forwarded-For to CF-Connecting-IP (the true
+    # external client). client_ip() must surface that, not the Cloudflare edge IP
+    # (which would be request.client.host / the proxy peer).
+    assert client_ip(_req(xff="198.51.100.23", client=("10.0.0.1", 1234))) == "198.51.100.23"
