@@ -1,6 +1,7 @@
 # Admin UI overlay (prod) — the React SPA static container, fronted by the edge
-# Caddy at ADMIN_DOMAIN and gated to ADMIN_ALLOWED_CIDR at L7 (same pattern as
-# Grafana). Layer LAST, after the tls + monitoring overlays:
+# Caddy at ADMIN_DOMAIN and proxied through Cloudflare (WAF/DDoS). Access is
+# enforced at the app layer (Google SSO + RLS), not a CIDR allowlist. Layer LAST,
+# after the tls + monitoring overlays:
 #   docker compose --env-file infra/.env \
 #     -f infra/docker-compose.yml \
 #     -f infra/docker-compose.prod.yml \
@@ -8,7 +9,7 @@
 #     -f infra/docker-compose.monitoring.yml \
 #     -f infra/docker-compose.admin.yml up -d
 #
-# Requires in .env: ADMIN_DOMAIN, ADMIN_ALLOWED_CIDR, and (for SSO to function)
+# Requires in .env: ADMIN_DOMAIN, and (for SSO to function)
 # GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI + ADMIN_BOOTSTRAP_EMAILS (those reach
 # the api via the base file's environment map).
 services:
@@ -18,8 +19,8 @@ services:
     init: true
     pull_policy: always
     # Static assets only; no inbound ports published — the edge Caddy reaches it on
-    # the bridge as admin-ui:8080 (operator-CIDR gated at the edge). Block privilege
-    # escalation; the image already runs as non-root 1001.
+    # the bridge as admin-ui:8080 (public via Cloudflare; app-layer auth). Block
+    # privilege escalation; the image already runs as non-root 1001.
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped

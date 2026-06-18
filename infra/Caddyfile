@@ -1,39 +1,14 @@
-# Security response headers for the browser-facing planes. Applied to the
-# Cloudflare-proxied sites (admin/api/grafana). The CSP is scoped to the admin
-# SPA's real origins; if a future asset origin is added, widen it here.
-#
-# Ships as Content-Security-Policy-Report-Only first (the snippet's own
-# recommendation): the served admin build is known to exercise two directives
-# that must NOT break under enforcement, so we observe report-only across the
-# cutover, then promote to the enforcing `Content-Security-Policy` header once
-# the console is clean. The policy is already written to allow both cases:
-#   - script-src carries the sha256 hash of the inline theme-init block in
-#     apps/admin-ui/dist/index.html (the pre-paint anti-FOUC script). Without
-#     it an enforcing `script-src 'self'` would block that inline <script>,
-#     reintroducing the very flash-of-wrong-theme it exists to prevent. If that
-#     inline block changes, recompute the hash (it is the base64 sha256 of the
-#     exact bytes between <script> and </script>).
-#   - media-src allows https://storage.googleapis.com so RecordingPlayer's
-#     <audio src> (a presigned GCS recording URL from the API's
-#     object_storage.generate_signed_url) can load; media has no default-src
-#     'self' fallback that would otherwise block the cross-origin recording.
-#   - connect-src allows wss://{$LIVEKIT_DOMAIN} (a DIFFERENT origin from
-#     admin.<domain>) so the Editor's browser test-call works: TestAudioPanel
-#     calls room.connect(url, token) where url is the API's settings.livekit_url
-#     (wss://lk.<domain>) returned by POST /v1/.../test/audio. The LiveKit
-#     WebSocket signalling channel is governed by connect-src; without this
-#     origin an enforcing `connect-src 'self'` would block the test call (the
-#     WebRTC media legs themselves are not CSP-governed). Promotion gate: the
-#     cutover verification (plan Task 11 Step 5.8) MUST run an Editor browser
-#     test call so any report-only connect-src violation surfaces before the
-#     header is switched from Report-Only to enforcing.
+# Common security response headers for the Cloudflare-proxied sites
+# (admin/api/grafana). The Content-Security-Policy is admin-SPA-specific, so it
+# is NOT set here — it lives on the {$ADMIN_DOMAIN} site below. Grafana serves
+# its own UI (it would need a different policy) and the API serves JSON (no
+# document for a CSP to govern), so neither carries the admin CSP.
 (security_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
-		Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-2LGxY21tnJOtIvjiiSPWY3DCRtf00gIB3ndHy3XHHgQ='; connect-src 'self' wss://{$LIVEKIT_DOMAIN}; media-src 'self' https://storage.googleapis.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		-Server
 	}
 }
@@ -73,19 +48,22 @@
 	respond @metrics 403
 
 	# The admin-console plane (session-cookie auth) and the Google-SSO endpoints are
-	# served ONLY via the CIDR-gated admin.<domain> origin below. Block them on this
-	# ungated public api host so the admin plane has a single gated entry point
-	# (defense in depth: a stolen session cookie can't be replayed off-CIDR here, and
-	# the OAuth routes aren't probeable). The SPA + /v1 are same-origin on admin.<domain>;
-	# the agent (/v1/runtime, /v1/calls/*) and operator (/v1/contacts, /v1/dnc, /v1/calls)
-	# planes do not use these prefixes, so nothing legitimate is blocked.
+	# served ONLY via the admin.<domain> origin below (Cloudflare-proxied; app-layer
+	# auth = Google SSO + RLS). Block them on this api host so the admin plane has a
+	# single entry point (defense in depth: the OAuth routes aren't probeable here, and
+	# a stolen session cookie can't be replayed against this origin). The SPA + /v1 are
+	# same-origin on admin.<domain>; the agent (/v1/runtime, /v1/calls/*) and operator
+	# (/v1/contacts, /v1/dnc, /v1/calls) planes do not use these prefixes, so nothing
+	# legitimate is blocked.
 	@adminplane path /v1/admin/* /v1/auth/*
 	respond @adminplane 403
 
 	reverse_proxy api:8000 {
 		# Behind Cloudflare the socket peer is the CF edge; the true client is in
-		# CF-Connecting-IP. Feed THAT to the API rate limiter (real, non-spoofable
-		# caller IP), not this proxy's or the Cloudflare edge IP.
+		# CF-Connecting-IP. Feed THAT to the API rate limiter (real caller IP), not
+		# this proxy's or the Cloudflare edge IP. Non-spoofable ONLY because the
+		# `tls client_auth require_and_verify` above rejects any non-Cloudflare peer
+		# (AOP mTLS), so a direct-to-origin client can't inject a forged header.
 		header_up X-Forwarded-For {http.request.header.Cf-Connecting-Ip}
 	}
 }
@@ -121,6 +99,18 @@
 {$ADMIN_DOMAIN} {
 	encode zstd gzip
 	import security_headers
+	# Content-Security-Policy for the admin SPA. Report-Only first; promote to the
+	# enforcing `Content-Security-Policy` header once the cutover console is clean.
+	# Set here (not in the shared snippet) because it is specific to the SPA's real
+	# origins:
+	#   - script-src carries the sha256 of the inline anti-FOUC theme-init block in
+	#     apps/admin-ui/dist/index.html; recompute it if that inline <script> changes.
+	#   - media-src https://storage.googleapis.com lets RecordingPlayer's <audio src>
+	#     load presigned GCS recording URLs.
+	#   - connect-src wss://{$LIVEKIT_DOMAIN} lets TestAudioPanel's room.connect() open
+	#     the LiveKit signalling socket (a different origin). Promotion gate: plan
+	#     Task 11 Step 5.8 must run an Editor browser test call before enforcing.
+	header Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-2LGxY21tnJOtIvjiiSPWY3DCRtf00gIB3ndHy3XHHgQ='; connect-src 'self' wss://{$LIVEKIT_DOMAIN}; media-src 'self' https://storage.googleapis.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 	# Cloudflare-proxied origin: serve a self-signed cert (CF SSL mode "Full"
 	# accepts it) and REQUIRE Cloudflare's Authenticated-Origin-Pulls client cert
 	# so only Cloudflare can reach this origin (direct-to-IP hits are rejected).
@@ -141,6 +131,8 @@
 		reverse_proxy api:8000 {
 			# Behind Cloudflare the socket peer is the CF edge; the true client is in
 			# CF-Connecting-IP. Feed THAT to the API (rate limiter + PHI audit log).
+			# Non-spoofable ONLY because the `tls client_auth require_and_verify`
+			# above rejects any non-Cloudflare peer (AOP mTLS).
 			header_up X-Forwarded-For {http.request.header.Cf-Connecting-Ip}
 		}
 	}
