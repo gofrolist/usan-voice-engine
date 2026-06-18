@@ -1,14 +1,18 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api.auth import get_tenant_db, require_admin_session
+from usan_api.auth import get_tenant_db, require_admin_role
+from usan_api.db.base import AdminRole
 from usan_api.repositories import admin_audit as repo
 from usan_api.schemas.admin import AuditEntryOut
 
 router = APIRouter(
     prefix="/v1/admin/audit",
     tags=["admin-audit"],
-    dependencies=[Depends(require_admin_session)],
+    # ADMIN-only (P4): a client VIEWER cannot read the audit log; a client ADMIN
+    # reads only its own org's rows (RLS via get_tenant_db). require_admin_role
+    # depends on require_admin_session, so unauthenticated still 401s.
+    dependencies=[Depends(require_admin_role(AdminRole.ADMIN))],
 )
 
 
