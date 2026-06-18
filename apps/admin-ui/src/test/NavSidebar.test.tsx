@@ -1,6 +1,6 @@
 // apps/admin-ui/src/test/NavSidebar.test.tsx
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 
@@ -102,12 +102,14 @@ describe("NavSidebar Operate group", () => {
     );
   });
 
-  it("hides Audit for a viewer, shows it for a client admin (P4 ADMIN-gated)", async () => {
+  it("hides Audit for a viewer (P4 ADMIN-gated)", async () => {
     role = "viewer";
     renderSidebar();
     await screen.findByText("me@example.com");
     expect(screen.queryByRole("link", { name: "Audit" })).not.toBeInTheDocument();
-    cleanup();
+  });
+
+  it("shows Audit for a client admin (P4 ADMIN-gated)", async () => {
     role = "admin";
     renderSidebar();
     await screen.findByText("me@example.com");

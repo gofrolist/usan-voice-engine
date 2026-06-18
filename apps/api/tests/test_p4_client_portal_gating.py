@@ -66,6 +66,41 @@ async def _seed_member(super_async_url: str, email: str, org_id: uuid.UUID, role
         await engine.dispose()
 
 
+async def _seed_audit_row(
+    super_async_url: str, org_id: uuid.UUID, actor: str, entity_id: str
+) -> None:
+    """Insert one admin_audit_log row into ``org_id`` (RLS-bypassing superuser engine).
+
+    ``entity_id`` is the per-org marker the test reads back to prove org-scoping.
+    """
+    engine = create_async_engine(super_async_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO admin_audit_log "
+                    "(organization_id, actor_email, action, entity_type, entity_id) "
+                    "VALUES (:o, :a, 'profile.create', 'profile', :eid)"
+                ),
+                {"o": org_id, "a": actor.lower(), "eid": entity_id},
+            )
+    finally:
+        await engine.dispose()
+
+
+async def _delete_audit_in_orgs(super_async_url: str, *org_ids: uuid.UUID) -> None:
+    """Remove admin_audit_log rows in the given orgs before teardown (they FK the org)."""
+    engine = create_async_engine(super_async_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM admin_audit_log WHERE organization_id = ANY(:orgs)"),
+                {"orgs": list(org_ids)},
+            )
+    finally:
+        await engine.dispose()
+
+
 async def _seed_super_admin(super_async_url: str, email: str) -> None:
     engine = create_async_engine(super_async_url, poolclass=NullPool)
     try:
@@ -152,3 +187,44 @@ def test_client_admin_allowed_on_own_audit(client, two_orgs, app_async_database_
         cookies=_member_cookie("auditor@example.com", org_a, AdminRole.ADMIN),
     )
     assert r.status_code == 200, r.text
+
+
+def test_audit_is_org_scoped_for_client_admin(client, two_orgs, app_async_database_url):
+    """§5.3 RLS isolation proof: a client ADMIN's audit list returns only its org's rows.
+
+    Seed one audit row into org A and one into org B (RLS-bypassing superuser engine),
+    then read GET /v1/admin/audit as an org-B ADMIN scoped to org B via get_tenant_db.
+    The response must contain org B's row and must NOT contain org A's row.
+    """
+    super_url = _super_url(app_async_database_url)
+    org_a, org_b = two_orgs
+    entity_a = f"audit-a-{uuid.uuid4().hex[:8]}"
+    entity_b = f"audit-b-{uuid.uuid4().hex[:8]}"
+    asyncio.run(_seed_audit_row(super_url, org_a, "staff@usan.com", entity_a))
+    asyncio.run(_seed_audit_row(super_url, org_b, "client@example.com", entity_b))
+    asyncio.run(_seed_member(super_url, "client@example.com", org_b, "admin"))
+    try:
+        act_as_org(client.app, org_b)
+        r = client.get(
+            "/v1/admin/audit",
+            cookies=_member_cookie("client@example.com", org_b, AdminRole.ADMIN),
+        )
+        assert r.status_code == 200, r.text
+        entity_ids = {row["entity_id"] for row in r.json()}
+        assert entity_b in entity_ids  # org B's own row is visible
+        assert entity_a not in entity_ids  # org A's row is RLS-isolated
+    finally:
+        asyncio.run(_delete_audit_in_orgs(super_url, org_a, org_b))
+
+
+def test_client_viewer_forbidden_on_invites(client, two_orgs, app_async_database_url):
+    """GET /v1/admin/invites is ADMIN-gated: a client VIEWER gets 403 at the router gate."""
+    super_url = _super_url(app_async_database_url)
+    org_a, _ = two_orgs
+    asyncio.run(_seed_member(super_url, "viewer@example.com", org_a, "viewer"))
+    act_as_org(client.app, org_a)
+    r = client.get(
+        "/v1/admin/invites",
+        cookies=_member_cookie("viewer@example.com", org_a, AdminRole.VIEWER),
+    )
+    assert r.status_code == 403, r.text

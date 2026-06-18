@@ -29,8 +29,10 @@ async def _seed(async_database_url: str, email: str) -> None:
 
 
 def test_no_cookie_is_401(client, admin_session):
+    # Probe a require_admin_session route (contacts) — profiles is super-admin-only in
+    # P4 and would 403 for the wrong reason; contacts isolates the 401 (no-cookie) path.
     client.cookies.clear()
-    r = client.get("/v1/admin/profiles")
+    r = client.get("/v1/admin/contacts")
     assert r.status_code == 401
 
 
@@ -51,7 +53,10 @@ def test_revoked_user_is_401(client, admin_session, async_database_url):
             await engine.dispose()
 
     asyncio.run(_remove())
-    r = client.get("/v1/admin/profiles")
+    # Probe a require_admin_session route (contacts) — profiles is super-admin-only in
+    # P4 and a revoked session there can 403 for the wrong reason; contacts isolates the
+    # revocation 401 path.
+    r = client.get("/v1/admin/contacts")
     assert r.status_code == 401
 
 
@@ -92,4 +97,6 @@ def test_invalid_signature_cookie_is_401(client, admin_session):
         algorithm="HS256",
     )
     client.cookies.set(SESSION_COOKIE_NAME, bad)
-    assert client.get("/v1/admin/profiles").status_code == 401
+    # Probe a require_admin_session route (contacts) — profiles is super-admin-only in
+    # P4; contacts isolates the invalid-signature 401 path.
+    assert client.get("/v1/admin/contacts").status_code == 401

@@ -21,7 +21,7 @@ router = APIRouter(
 async def get_model_catalog() -> ModelCatalogResponse:
     """Return the curated LLM + STT model catalog (FR-011, FR-012).
 
-    Admin-session scope. The catalog is a global constant (a platform-curated
-    allow-list), not per-version snapshot data.
+    Operator-only (super-admin) scope. The catalog is a global constant (a
+    platform-curated allow-list), not per-version snapshot data.
     """
     return ModelCatalogResponse(models=list(MODEL_CATALOG))

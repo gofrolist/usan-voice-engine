@@ -9,7 +9,7 @@ voice is synthesized at most once.
 
 Security & PHI:
 - The Cartesia secret (``CARTESIA_API_KEY``) stays server-side: the browser never calls
-  Cartesia directly. The proxy is admin-session-guarded and rate-limited.
+  Cartesia directly. The proxy is operator-only (super-admin) and rate-limited.
 - ONLY ``SAMPLE_PHRASE`` reaches the synthesizer — it is a module constant, never a
   request parameter — so no contact name/transcript can leak into the sample path
   (Constitution II PHI Containment).
@@ -48,8 +48,8 @@ _SAMPLE_CACHE: dict[tuple[str, str], bytes] = {}
 async def get_voice_catalog() -> VoiceCatalogResponse:
     """Return the curated voice catalog for the VoiceSection picker (FR-009).
 
-    Admin-session scope, mirroring admin_tool_catalog. The catalog is a global constant
-    (a platform-curated allow-list), not per-version snapshot data.
+    Operator-only (super-admin) scope, mirroring admin_tool_catalog. The catalog is a
+    global constant (a platform-curated allow-list), not per-version snapshot data.
     """
     return VoiceCatalogResponse(voices=list(VOICE_CATALOG))
 

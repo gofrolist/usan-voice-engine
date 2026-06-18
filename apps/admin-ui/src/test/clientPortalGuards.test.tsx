@@ -79,6 +79,39 @@ describe("RequireSuperAdmin", () => {
   });
 });
 
+describe("guards while the session is still loading", () => {
+  // useSession stays in isLoading: the guards render nothing and must NOT redirect
+  // to /calls (a premature redirect would flash off operator routes on every reload).
+  it("RequireSuperAdmin renders nothing and does not redirect while loading", () => {
+    getMock.mockReset();
+    // A promise that never resolves keeps the /v1/auth/me query pending (isLoading).
+    getMock.mockImplementation((url: string) =>
+      url === "/v1/auth/me" ? new Promise(() => {}) : Promise.reject(new Error(url)),
+    );
+    renderAt(
+      <RequireSuperAdmin>
+        <div>operator-only</div>
+      </RequireSuperAdmin>,
+    );
+    expect(screen.queryByText("operator-only")).not.toBeInTheDocument();
+    expect(screen.queryByText("calls-page")).not.toBeInTheDocument();
+  });
+
+  it("RequireAdmin renders nothing and does not redirect while loading", () => {
+    getMock.mockReset();
+    getMock.mockImplementation((url: string) =>
+      url === "/v1/auth/me" ? new Promise(() => {}) : Promise.reject(new Error(url)),
+    );
+    renderAt(
+      <RequireAdmin>
+        <div>admin-area</div>
+      </RequireAdmin>,
+    );
+    expect(screen.queryByText("admin-area")).not.toBeInTheDocument();
+    expect(screen.queryByText("calls-page")).not.toBeInTheDocument();
+  });
+});
+
 describe("RequireAdmin", () => {
   it("redirects a viewer to /calls", async () => {
     me = meFixture("viewer");

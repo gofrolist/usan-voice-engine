@@ -47,7 +47,7 @@ def _to_out(row: CustomVariable) -> CustomVariableOut:
 async def list_custom_variables(
     db: AsyncSession = Depends(get_tenant_db),
 ) -> list[CustomVariableOut]:
-    """All definitions, alphabetical — readable by every session role."""
+    """All definitions, alphabetical — operator-only (super-admin) in P4."""
     return [_to_out(v) for v in await repo.list_custom_variables(db)]
 
 
@@ -58,7 +58,7 @@ async def custom_variable_references(
     """Delete-guard (FR-007): profiles referencing this variable's {{name}} token.
 
     Scans the live draft AND every published version across the prompt fields +
-    SMS bodies. Readable by every session role (a read). Names/locations only —
+    SMS bodies. Operator-only (super-admin) in P4. Names/locations only —
     never prompt text or per-call values (spec §7).
     """
     row = await repo.get_custom_variable(db, variable_id)

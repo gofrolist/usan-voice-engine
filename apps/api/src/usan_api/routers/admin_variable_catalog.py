@@ -24,7 +24,7 @@ async def get_variable_catalog(
 ) -> VariableCatalogResponse:
     """Return the variable catalog for the prompt-editor palette (design §4.6).
 
-    Admin-session scope, mirroring the other /v1/admin routers. DB-backed since
+    Operator-only (super-admin) scope, mirroring the other operator routers. DB-backed since
     Phase A4 (spec §3.2): the 10 builtins in canonical order, then declared
     customs alphabetical, mapped to ``tier="custom"`` with ``default=""`` —
     **definitions carry no values**; values arrive per call via
