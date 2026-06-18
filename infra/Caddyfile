@@ -42,6 +42,18 @@
 {$API_DOMAIN} {
 	encode zstd gzip
 	import security_headers
+	# Cloudflare-proxied origin: serve a self-signed cert (CF SSL mode "Full"
+	# accepts it) and REQUIRE Cloudflare's Authenticated-Origin-Pulls client cert
+	# so only Cloudflare can reach this origin (direct-to-IP hits are rejected).
+	tls {
+		issuer internal
+		client_auth {
+			mode require_and_verify
+			trust_pool file {
+				pem_file /etc/caddy/cloudflare-origin-pull-ca.pem
+			}
+		}
+	}
 	# Cap request bodies at the edge so the unauthenticated, signature-gated webhook
 	# routes (/v1/webhooks/telnyx, /v1/webhooks/livekit) can't be used to exhaust API
 	# memory with a giant POST before the signature check reads the body. 1MB is ample
@@ -89,6 +101,18 @@
 {$GRAFANA_DOMAIN} {
 	encode zstd gzip
 	import security_headers
+	# Cloudflare-proxied origin: serve a self-signed cert (CF SSL mode "Full"
+	# accepts it) and REQUIRE Cloudflare's Authenticated-Origin-Pulls client cert
+	# so only Cloudflare can reach this origin (direct-to-IP hits are rejected).
+	tls {
+		issuer internal
+		client_auth {
+			mode require_and_verify
+			trust_pool file {
+				pem_file /etc/caddy/cloudflare-origin-pull-ca.pem
+			}
+		}
+	}
 	# Public reachability via Cloudflare; operator-only access is enforced at the
 	# Cloudflare Access (Zero Trust) layer in front of this origin, not a CIDR gate.
 	reverse_proxy grafana:3000
@@ -97,6 +121,18 @@
 {$ADMIN_DOMAIN} {
 	encode zstd gzip
 	import security_headers
+	# Cloudflare-proxied origin: serve a self-signed cert (CF SSL mode "Full"
+	# accepts it) and REQUIRE Cloudflare's Authenticated-Origin-Pulls client cert
+	# so only Cloudflare can reach this origin (direct-to-IP hits are rejected).
+	tls {
+		issuer internal
+		client_auth {
+			mode require_and_verify
+			trust_pool file {
+				pem_file /etc/caddy/cloudflare-origin-pull-ca.pem
+			}
+		}
+	}
 	# The admin SPA and the API share THIS origin, so the SameSite=Strict session
 	# cookie set by /v1/auth works (no cross-site cookie, no CORS). Reachability is
 	# public via Cloudflare; auth is enforced at the app layer (Google SSO + RLS).
