@@ -71,9 +71,10 @@
 	respond @adminplane 403
 
 	reverse_proxy api:8000 {
-		# Overwrite X-Forwarded-For with the direct client so the API rate
-		# limiter keys on the real (non-spoofable) caller IP, not this proxy's.
-		header_up X-Forwarded-For {remote_host}
+		# Behind Cloudflare the socket peer is the CF edge; the true client is in
+		# CF-Connecting-IP. Feed THAT to the API rate limiter (real, non-spoofable
+		# caller IP), not this proxy's or the Cloudflare edge IP.
+		header_up X-Forwarded-For {http.request.header.Cf-Connecting-Ip}
 	}
 }
 
@@ -88,38 +89,28 @@
 {$GRAFANA_DOMAIN} {
 	encode zstd gzip
 	import security_headers
-	# Operator-CIDR allowlist enforced at L7 (443 is shared across api/lk/grafana
-	# by SNI, so this cannot be a VM firewall rule). Anyone outside the CIDR gets
-	# 403; allowed clients hit Grafana (which also requires its own login).
-	@operator remote_ip {$GRAFANA_ALLOWED_CIDR}
-	handle @operator {
-		reverse_proxy grafana:3000
-	}
-	respond 403
+	# Public reachability via Cloudflare; operator-only access is enforced at the
+	# Cloudflare Access (Zero Trust) layer in front of this origin, not a CIDR gate.
+	reverse_proxy grafana:3000
 }
 
 {$ADMIN_DOMAIN} {
 	encode zstd gzip
 	import security_headers
-	# Operator-CIDR allowlist enforced at L7 (443 is SNI-shared across all sites,
-	# so this cannot be a VM firewall rule). Outside the CIDR -> 403. The admin SPA
-	# and the API share THIS origin, so the SameSite=Strict session cookie set by
-	# /v1/auth works (no cross-site cookie, no CORS).
-	@operator remote_ip {$ADMIN_ALLOWED_CIDR}
-	handle @operator {
-		# Same-origin API: admin/auth/runtime endpoints go to the api container.
-		@api path /v1/*
-		handle @api {
-			reverse_proxy api:8000 {
-				# Real (non-spoofable) client IP for the API rate limiter.
-				header_up X-Forwarded-For {remote_host}
-			}
-		}
-		# Everything else is the React SPA static container (client-side routing is
-		# handled inside that container via try_files -> /index.html).
-		handle {
-			reverse_proxy admin-ui:8080
+	# The admin SPA and the API share THIS origin, so the SameSite=Strict session
+	# cookie set by /v1/auth works (no cross-site cookie, no CORS). Reachability is
+	# public via Cloudflare; auth is enforced at the app layer (Google SSO + RLS).
+	@api path /v1/*
+	handle @api {
+		reverse_proxy api:8000 {
+			# Behind Cloudflare the socket peer is the CF edge; the true client is in
+			# CF-Connecting-IP. Feed THAT to the API (rate limiter + PHI audit log).
+			header_up X-Forwarded-For {http.request.header.Cf-Connecting-Ip}
 		}
 	}
-	respond 403
+	# Everything else is the React SPA static container (client-side routing handled
+	# inside that container via try_files -> /index.html).
+	handle {
+		reverse_proxy admin-ui:8080
+	}
 }
