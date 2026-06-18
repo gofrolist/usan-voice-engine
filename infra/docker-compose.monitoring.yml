@@ -45,6 +45,19 @@ services:
       GF_POSTGRES_RO_PASSWORD: ${GF_POSTGRES_RO_PASSWORD}
       GRAFANA_DB_HOST: ${GRAFANA_DB_HOST}
       GRAFANA_DB_SSLMODE: ${GRAFANA_DB_SSLMODE:-require}
+      # Single sign-on via Cloudflare Access: Grafana trusts the signed CF Access
+      # JWT (header Cf-Access-Jwt-Assertion), so the edge Google login flows in
+      # with no second Grafana login. AUD + team domain come from the Access app
+      # (terraform, Task 7). All non-secret. GF_SECURITY_ADMIN_PASSWORD stays as
+      # the break-glass local login (reachable only after passing CF Access).
+      GF_AUTH_JWT_ENABLED: "true"
+      GF_AUTH_JWT_HEADER_NAME: "Cf-Access-Jwt-Assertion"
+      GF_AUTH_JWT_EMAIL_CLAIM: "email"
+      GF_AUTH_JWT_USERNAME_CLAIM: "email"
+      GF_AUTH_JWT_JWK_SET_URL: "https://usanretirement.cloudflareaccess.com/cdn-cgi/access/certs"
+      GF_AUTH_JWT_EXPECT_CLAIMS: '{"aud":"REPLACE_WITH_ACCESS_APP_AUD"}'
+      GF_AUTH_JWT_AUTO_SIGN_UP: "true"
+      GF_AUTH_JWT_ROLE_ATTRIBUTE_STRICT: "false"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

@@ -32,4 +32,3 @@ services:
   caddy:
     environment:
       ADMIN_DOMAIN: ${ADMIN_DOMAIN}
-      ADMIN_ALLOWED_CIDR: ${ADMIN_ALLOWED_CIDR:?ADMIN_ALLOWED_CIDR must be set to an operator CIDR allowlist}
