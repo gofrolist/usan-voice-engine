@@ -17,13 +17,23 @@
 #     <audio src> (a presigned GCS recording URL from the API's
 #     object_storage.generate_signed_url) can load; media has no default-src
 #     'self' fallback that would otherwise block the cross-origin recording.
+#   - connect-src allows wss://{$LIVEKIT_DOMAIN} (a DIFFERENT origin from
+#     admin.<domain>) so the Editor's browser test-call works: TestAudioPanel
+#     calls room.connect(url, token) where url is the API's settings.livekit_url
+#     (wss://lk.<domain>) returned by POST /v1/.../test/audio. The LiveKit
+#     WebSocket signalling channel is governed by connect-src; without this
+#     origin an enforcing `connect-src 'self'` would block the test call (the
+#     WebRTC media legs themselves are not CSP-governed). Promotion gate: the
+#     cutover verification (plan Task 11 Step 5.8) MUST run an Editor browser
+#     test call so any report-only connect-src violation surfaces before the
+#     header is switched from Report-Only to enforcing.
 (security_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
-		Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-2LGxY21tnJOtIvjiiSPWY3DCRtf00gIB3ndHy3XHHgQ='; connect-src 'self'; media-src 'self' https://storage.googleapis.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-2LGxY21tnJOtIvjiiSPWY3DCRtf00gIB3ndHy3XHHgQ='; connect-src 'self' wss://{$LIVEKIT_DOMAIN}; media-src 'self' https://storage.googleapis.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		-Server
 	}
 }

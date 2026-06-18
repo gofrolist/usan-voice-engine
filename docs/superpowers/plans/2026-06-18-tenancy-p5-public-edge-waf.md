@@ -690,7 +690,7 @@ This is the one manual task (analogous to P4's Task C2). It needs Cloudflare acc
   5. `curl https://api.usanretirement.com/metrics` → blocked/403 at the edge.
   6. Visit `https://grafana.usanretirement.com` → Cloudflare Access Google login; `gmrnsk@gmail.com` admitted and Grafana opens **without** a second login (JWT SSO); a non-allowlisted email is denied.
   7. `lk` + a live inbound and outbound call work (media unaffected).
-  8. Admin browser console shows **no CSP violations**. If it does, switch the CSP `header` to `Content-Security-Policy-Report-Only` (Task 1), redeploy, fix origins, then re-enforce.
+  8. Admin browser console shows **no CSP violations** — and you MUST exercise the cross-origin paths the report-only policy is widened for, otherwise a clean console is meaningless: open the Editor and **run a browser test call** (TestAudioPanel → "Start test call", which `room.connect`s to `wss://lk.<domain>`, a different origin governed by `connect-src`) and play a recording in RecordingPlayer (cross-origin GCS `media-src`). Only after these surface no violations is it safe to switch the CSP `header` from `Content-Security-Policy-Report-Only` to the enforcing `Content-Security-Policy` (Task 1). If a violation appears, widen the offending directive in the Task 1 snippet, redeploy, re-verify, then enforce.
 
 - [ ] **Step 6: Rollback (only if needed):** `terraform apply` with the `proxied` flags set back to `false` (revert Task 5) + re-deploy the prior tag → back to the CIDR-gated, direct-TLS state. Config-only; no data involved.
 
