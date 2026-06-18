@@ -71,8 +71,11 @@ def test_caddyfile_admin_block_is_sso_gated():
     # admin block must therefore have NO remote_ip/respond-403 CIDR gate, and
     # MUST require Cloudflare's AOP client cert.
     text = (INFRA / "Caddyfile").read_text()
-    assert "{$ADMIN_DOMAIN}" in text
-    admin_block = text.split("{$ADMIN_DOMAIN}", 1)[1]
+    # Split on the site-block opener ("{$ADMIN_DOMAIN} {"), not the bare
+    # placeholder — the latter also appears in the security_headers snippet
+    # comment near the top of the file, which would swallow the whole config.
+    assert "{$ADMIN_DOMAIN} {" in text
+    admin_block = text.split("{$ADMIN_DOMAIN} {", 1)[1]
     # The old CIDR gate is gone.
     assert "ADMIN_ALLOWED_CIDR" not in admin_block
     assert "remote_ip" not in admin_block
@@ -86,8 +89,8 @@ def test_caddyfile_admin_block_is_sso_gated():
 
 def test_api_origin_does_not_expose_admin_plane():
     # Defense in depth: the admin/auth plane must be reachable ONLY via the
-    # CIDR-gated admin.<domain> origin, so the ungated api.<domain> block must 403
-    # the /v1/admin/* and /v1/auth/* prefixes.
+    # admin.<domain> origin (Cloudflare-proxied; app-layer SSO + RLS), so the
+    # api.<domain> block must 403 the /v1/admin/* and /v1/auth/* prefixes.
     text = (INFRA / "Caddyfile").read_text()
     # Anchor on the site headers ("<domain> {"), not the leading comment that also
     # mentions both placeholders.
