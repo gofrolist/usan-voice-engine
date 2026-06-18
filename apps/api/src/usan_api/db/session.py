@@ -38,7 +38,21 @@ def _install_default_org_context(engine: AsyncEngine) -> None:
     def _set_default_org(dbapi_connection: Any, _record: Any) -> None:
         cursor = dbapi_connection.cursor()
         try:
-            cursor.execute("SELECT set_config('app.current_org', default_org_id()::text, false)")
+            # NULL-guard: set the baseline ONLY when default_org_id() resolves. If it is
+            # NULL (partial migration / default org not yet seeded), set nothing — the GUC
+            # stays unset (NULL => RLS fail-closed, zero rows) rather than becoming '',
+            # which would crash every query with: invalid input syntax for type uuid: "".
+            cursor.execute(
+                "SELECT set_config('app.current_org', oid::text, false) "
+                "FROM (SELECT default_org_id() AS oid) s WHERE s.oid IS NOT NULL"
+            )
+            # COMMIT so the session-level baseline is DURABLE. set_config(is_local=false)
+            # is still transactional, so without this commit the connection's first
+            # reset-on-return ROLLBACK (pool check-in) reverts app.current_org — and since
+            # this hook fires only once per physical connection, every later worker query
+            # on that pooled connection then runs context-free and fails ''::uuid under RLS.
+            # (Request paths are immune: get_db / get_tenant_db re-set context per request.)
+            dbapi_connection.commit()
         except Exception:  # noqa: BLE001 - never let a connect hook crash every connection
             # default_org_id() is created by migration 0031. During a partial migration
             # (app deployed before `alembic upgrade head` finishes) it may not exist yet —
