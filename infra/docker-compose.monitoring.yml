@@ -51,6 +51,16 @@ services:
       # with no second Grafana login. AUD + team domain come from the Access app
       # (terraform, Task 7). All non-secret. GF_SECURITY_ADMIN_PASSWORD stays as
       # the break-glass local login (reachable only after passing CF Access).
+      #
+      # SECURITY NOTES (P5 review):
+      #   - EXPECT_CLAIMS must ALWAYS pin `aud` to the Access app's AUD. A wrong/
+      #     placeholder value fails CLOSED (rejects all JWTs -> break-glass only);
+      #     an EMPTY EXPECT_CLAIMS would fail OPEN (accept any JWT from this team
+      #     domain). Replace REPLACE_WITH_ACCESS_APP_AUD at cutover (Task 11 Step 3)
+      #     and verify SSO before relying on it (Task 11 Step 5.6). Never blank it.
+      #   - Revocation lag: a removed CF Access user keeps any live Grafana session
+      #     cookie until it expires. Acceptable for the single-operator setup; for a
+      #     larger team, shorten Grafana's session lifetime / tighten post-GA.
       GF_AUTH_JWT_ENABLED: "true"
       GF_AUTH_JWT_HEADER_NAME: "Cf-Access-Jwt-Assertion"
       GF_AUTH_JWT_EMAIL_CLAIM: "email"

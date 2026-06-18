@@ -71,8 +71,11 @@ resource "cloudflare_ruleset" "rate_limit" {
     {
       action      = "block"
       description = "Throttle the auth/SSO endpoints per IP"
-      expression  = "(starts_with(http.request.uri.path, \"/v1/auth\"))"
-      enabled     = true
+      # Scoped to admin.<domain> (the only host that serves /v1/auth): a burst of
+      # 403'd /v1/auth probes on api.<domain> must not consume the same per-IP
+      # bucket as real admin logins.
+      expression = "(http.host eq \"admin.${data.cloudflare_zone.this[0].name}\" and starts_with(http.request.uri.path, \"/v1/auth\"))"
+      enabled    = true
       ratelimit = {
         characteristics     = ["ip.src", "cf.colo.id"]
         period              = 60
@@ -110,12 +113,14 @@ resource "cloudflare_zero_trust_access_policy" "grafana_operators" {
   account_id = var.cloudflare_account_id
   name       = "USAN operators"
   decision   = "allow"
+  # One OR-combined include entry per operator email (the full list, not just the
+  # first — so adding a 2nd operator works, and an empty list can't index-panic).
   include = [
-    {
+    for addr in var.grafana_access_emails : {
       email = {
-        email = var.grafana_access_emails[0]
+        email = addr
       }
-    },
+    }
   ]
 }
 
