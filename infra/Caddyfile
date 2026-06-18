@@ -1,15 +1,29 @@
 # Security response headers for the browser-facing planes. Applied to the
 # Cloudflare-proxied sites (admin/api/grafana). The CSP is scoped to the admin
-# SPA's real origins; if a future asset origin is added, widen it here. Start the
-# CSP in Report-Only (Content-Security-Policy-Report-Only) if a console violation
-# appears during the cutover verification, then promote to enforcing.
+# SPA's real origins; if a future asset origin is added, widen it here.
+#
+# Ships as Content-Security-Policy-Report-Only first (the snippet's own
+# recommendation): the served admin build is known to exercise two directives
+# that must NOT break under enforcement, so we observe report-only across the
+# cutover, then promote to the enforcing `Content-Security-Policy` header once
+# the console is clean. The policy is already written to allow both cases:
+#   - script-src carries the sha256 hash of the inline theme-init block in
+#     apps/admin-ui/dist/index.html (the pre-paint anti-FOUC script). Without
+#     it an enforcing `script-src 'self'` would block that inline <script>,
+#     reintroducing the very flash-of-wrong-theme it exists to prevent. If that
+#     inline block changes, recompute the hash (it is the base64 sha256 of the
+#     exact bytes between <script> and </script>).
+#   - media-src allows https://storage.googleapis.com so RecordingPlayer's
+#     <audio src> (a presigned GCS recording URL from the API's
+#     object_storage.generate_signed_url) can load; media has no default-src
+#     'self' fallback that would otherwise block the cross-origin recording.
 (security_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
-		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-2LGxY21tnJOtIvjiiSPWY3DCRtf00gIB3ndHy3XHHgQ='; connect-src 'self'; media-src 'self' https://storage.googleapis.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		-Server
 	}
 }
