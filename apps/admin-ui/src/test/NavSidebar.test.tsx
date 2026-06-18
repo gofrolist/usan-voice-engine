@@ -88,6 +88,23 @@ describe("NavSidebar Operate group", () => {
     );
   });
 
+  it("renders a decorative icon inside every nav link without changing link names", async () => {
+    role = "admin"; // widest set of links (adminOnly Contacts/Members visible)
+    const { container } = renderSidebar();
+    await screen.findByText("me@example.com");
+    const links = container.querySelectorAll("nav a");
+    expect(links.length).toBeGreaterThan(0);
+    links.forEach((link) => {
+      const svg = link.querySelector("svg");
+      expect(svg).not.toBeNull();
+      // Icons must be aria-hidden so the link's accessible name stays its text label
+      // (keeps every getByRole("link", { name }) query above matching).
+      expect(svg).toHaveAttribute("aria-hidden", "true");
+    });
+    // Sanity: a representative link still resolves by its text name.
+    expect(screen.getByRole("link", { name: "Calls" })).toBeInTheDocument();
+  });
+
   it("groups render in order Build, Config, Operate, System", async () => {
     renderSidebar();
     await screen.findByText("me@example.com");

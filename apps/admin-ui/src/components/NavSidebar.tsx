@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import { NavLink } from "react-router-dom";
 import { cn } from "../lib/cn";
 import { useSession, useIsAdmin } from "../auth/useSession";
@@ -5,10 +6,22 @@ import { api } from "../lib/api";
 import { Button } from "./ui/button";
 import { ThemeToggle } from "./ui/ThemeToggle";
 import { OrgSwitcher } from "./OrgSwitcher";
+import {
+  AuditIcon,
+  CallsIcon,
+  ContactsIcon,
+  DefaultsIcon,
+  MembersIcon,
+  OrganizationsIcon,
+  ProfilesIcon,
+  QueuesIcon,
+  VariablesIcon,
+} from "./nav-icons";
 
 interface NavItem {
   to: string;
   label: string;
+  icon: ComponentType;
   adminOnly?: boolean;
   superAdminOnly?: boolean;
 }
@@ -18,29 +31,34 @@ interface NavGroup {
 }
 
 const GROUPS: NavGroup[] = [
-  { heading: "Build", items: [{ to: "/", label: "Profiles" }] },
+  { heading: "Build", items: [{ to: "/", label: "Profiles", icon: ProfilesIcon }] },
   {
     heading: "Config",
     items: [
-      { to: "/contacts", label: "Contacts", adminOnly: true },
-      { to: "/defaults", label: "Defaults" },
+      { to: "/contacts", label: "Contacts", icon: ContactsIcon, adminOnly: true },
+      { to: "/defaults", label: "Defaults", icon: DefaultsIcon },
       // List view is all-roles (mutations are ADMIN-gated inside the page).
-      { to: "/custom-variables", label: "Variables" },
+      { to: "/custom-variables", label: "Variables", icon: VariablesIcon },
     ],
   },
   {
     heading: "Operate",
     items: [
-      { to: "/calls", label: "Calls" },
-      { to: "/queues", label: "Queues" },
+      { to: "/calls", label: "Calls", icon: CallsIcon },
+      { to: "/queues", label: "Queues", icon: QueuesIcon },
     ],
   },
   {
     heading: "System",
     items: [
-      { to: "/audit", label: "Audit" },
-      { to: "/members", label: "Members", adminOnly: true },
-      { to: "/organizations", label: "Organizations", superAdminOnly: true },
+      { to: "/audit", label: "Audit", icon: AuditIcon },
+      { to: "/members", label: "Members", icon: MembersIcon, adminOnly: true },
+      {
+        to: "/organizations",
+        label: "Organizations",
+        icon: OrganizationsIcon,
+        superAdminOnly: true,
+      },
     ],
   },
 ];
@@ -96,13 +114,14 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
                     onClick={onNavigate}
                     className={({ isActive }) =>
                       cn(
-                        "rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                        "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
                         isActive
                           ? "bg-accent-soft font-medium text-accent"
                           : "text-muted hover:bg-surface-2 hover:text-ink",
                       )
                     }
                   >
+                    <n.icon />
                     {n.label}
                   </NavLink>
                 ))}
