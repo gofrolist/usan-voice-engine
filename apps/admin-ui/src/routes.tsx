@@ -2,7 +2,6 @@ import { createBrowserRouter } from "react-router-dom";
 import { RequireAuth } from "./auth/RequireAuth";
 import { AppLayout } from "./components/AppLayout";
 import { PageLayout } from "./components/PageLayout";
-import { ProfilesListPage } from "./features/profiles/ProfilesListPage";
 import { ProfileEditorPage } from "./features/editor/ProfileEditorPage";
 import { VersionHistoryPage } from "./features/versions/VersionHistoryPage";
 import { ContactsPage } from "./features/contacts/ContactsPage";
@@ -15,6 +14,8 @@ import { MembersPage } from "./features/members/MembersPage";
 import { OrgConsolePage } from "./features/orgs/OrgConsolePage";
 import { CustomVariablesPage } from "./features/customVariables/CustomVariablesPage";
 import { AcceptInvitePage } from "./features/invites/AcceptInvitePage";
+import { HomeLanding } from "./components/HomeLanding";
+import { RequireAdmin, RequireSuperAdmin } from "./auth/RequireTier";
 
 // All routes are gated by RequireAuth and rendered inside AppLayout. The api
 // wrapper handles 401 with a full-page redirect to /v1/auth/login.
@@ -34,20 +35,76 @@ export const router = createBrowserRouter([
       {
         element: <PageLayout />,
         children: [
-          { index: true, element: <ProfilesListPage /> },
-          { path: "profiles/:id/versions", element: <VersionHistoryPage /> },
+          { index: true, element: <HomeLanding /> },
+          {
+            path: "profiles/:id/versions",
+            element: (
+              <RequireSuperAdmin>
+                <VersionHistoryPage />
+              </RequireSuperAdmin>
+            ),
+          },
           { path: "calls", element: <CallsPage /> },
           { path: "calls/:id", element: <CallDetailPage /> },
           { path: "queues", element: <QueuesPage /> },
-          { path: "contacts", element: <ContactsPage /> },
-          { path: "defaults", element: <DefaultsPage /> },
-          { path: "custom-variables", element: <CustomVariablesPage /> },
-          { path: "audit", element: <AuditPage /> },
-          { path: "members", element: <MembersPage /> },
-          { path: "organizations", element: <OrgConsolePage /> },
+          {
+            path: "contacts",
+            element: (
+              <RequireAdmin>
+                <ContactsPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "defaults",
+            element: (
+              <RequireSuperAdmin>
+                <DefaultsPage />
+              </RequireSuperAdmin>
+            ),
+          },
+          {
+            path: "custom-variables",
+            element: (
+              <RequireSuperAdmin>
+                <CustomVariablesPage />
+              </RequireSuperAdmin>
+            ),
+          },
+          {
+            path: "audit",
+            element: (
+              <RequireAdmin>
+                <AuditPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "members",
+            element: (
+              <RequireAdmin>
+                <MembersPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "organizations",
+            element: (
+              <RequireSuperAdmin>
+                <OrgConsolePage />
+              </RequireSuperAdmin>
+            ),
+          },
         ],
       },
-      { path: "profiles/:id", element: <ProfileEditorPage /> },
+      {
+        path: "profiles/:id",
+        element: (
+          <RequireSuperAdmin>
+            <ProfileEditorPage />
+          </RequireSuperAdmin>
+        ),
+      },
     ],
   },
   { path: "/accept-invite", element: <AcceptInvitePage /> },
