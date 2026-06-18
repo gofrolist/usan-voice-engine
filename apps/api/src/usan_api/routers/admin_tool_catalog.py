@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends
 
-from usan_api.auth import require_admin_session
+from usan_api.auth import require_super_admin
 from usan_api.schemas.tool_catalog import TOOL_CATALOG, ToolCatalogResponse
 
 router = APIRouter(
     prefix="/v1/admin/tool-catalog",
     tags=["admin-tool-catalog"],
-    dependencies=[Depends(require_admin_session)],
+    dependencies=[Depends(require_super_admin)],
 )
 
 

@@ -23,7 +23,7 @@ async def _fetch_audit(async_database_url: str, action: str) -> AdminAuditLog | 
         await engine.dispose()
 
 
-def test_create_profile_returns_201(client, admin_session):
+def test_create_profile_returns_201(client, super_admin_acting_session):
     r = client.post("/v1/admin/profiles", json={"name": _name()})
     assert r.status_code == 201
     body = r.json()
@@ -37,14 +37,14 @@ def test_create_profile_requires_session(client):
     assert r.status_code == 401
 
 
-def test_create_duplicate_name_returns_409(client, admin_session):
+def test_create_duplicate_name_returns_409(client, super_admin_acting_session):
     name = _name()
     assert client.post("/v1/admin/profiles", json={"name": name}).status_code == 201
     r = client.post("/v1/admin/profiles", json={"name": name})
     assert r.status_code == 409
 
 
-def test_create_with_unknown_clone_from_returns_404(client, admin_session):
+def test_create_with_unknown_clone_from_returns_404(client, super_admin_acting_session):
     r = client.post(
         "/v1/admin/profiles",
         json={"name": _name(), "clone_from": str(uuid.uuid4())},
@@ -52,7 +52,7 @@ def test_create_with_unknown_clone_from_returns_404(client, admin_session):
     assert r.status_code == 404
 
 
-def test_publish_then_list_versions(client, admin_session):
+def test_publish_then_list_versions(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     r = client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "first"})
     assert r.status_code == 201
@@ -62,7 +62,7 @@ def test_publish_then_list_versions(client, admin_session):
     assert versions[0]["note"] == "first"
 
 
-def test_edit_draft_then_get_reflects_change(client, admin_session):
+def test_edit_draft_then_get_reflects_change(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     detail = client.get(f"/v1/admin/profiles/{pid}").json()
     cfg = detail["draft_config"]
@@ -72,7 +72,7 @@ def test_edit_draft_then_get_reflects_change(client, admin_session):
     assert r.json()["draft_config"]["prompts"]["greeting"] == "Hi there, this is your check-in."
 
 
-def test_draft_rejects_brace_in_prompt(client, admin_session):
+def test_draft_rejects_brace_in_prompt(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     cfg = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
     cfg["prompts"]["greeting"] = "Hello {name}"
@@ -80,7 +80,7 @@ def test_draft_rejects_brace_in_prompt(client, admin_session):
     assert r.status_code == 422
 
 
-def test_rollback_creates_new_version(client, admin_session):
+def test_rollback_creates_new_version(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"})
     cfg = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
@@ -92,7 +92,7 @@ def test_rollback_creates_new_version(client, admin_session):
     assert r.json()["version"] == 3
 
 
-def test_set_default_exclusive(client, admin_session):
+def test_set_default_exclusive(client, super_admin_acting_session):
     a = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     b = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     payload = {"direction": "outbound"}
@@ -103,43 +103,43 @@ def test_set_default_exclusive(client, admin_session):
     assert profiles[b]["is_default_outbound"] is True
 
 
-def test_archive_blocked_when_default_returns_409(client, admin_session):
+def test_archive_blocked_when_default_returns_409(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     client.post(f"/v1/admin/profiles/{pid}/set-default", json={"direction": "inbound"})
     r = client.post(f"/v1/admin/profiles/{pid}/archive", json={})
     assert r.status_code == 409
 
 
-def test_get_missing_profile_returns_404(client, admin_session):
+def test_get_missing_profile_returns_404(client, super_admin_acting_session):
     r = client.get(f"/v1/admin/profiles/{uuid.uuid4()}")
     assert r.status_code == 404
 
 
-def test_list_versions_unknown_profile_returns_404(client, admin_session):
+def test_list_versions_unknown_profile_returns_404(client, super_admin_acting_session):
     r = client.get(f"/v1/admin/profiles/{uuid.uuid4()}/versions")
     assert r.status_code == 404
 
 
-def test_update_draft_unknown_profile_returns_404(client, admin_session):
+def test_update_draft_unknown_profile_returns_404(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     cfg = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
     r = client.put(f"/v1/admin/profiles/{uuid.uuid4()}/draft", json={"config": cfg})
     assert r.status_code == 404
 
 
-def test_publish_unknown_profile_returns_404(client, admin_session):
+def test_publish_unknown_profile_returns_404(client, super_admin_acting_session):
     r = client.post(f"/v1/admin/profiles/{uuid.uuid4()}/publish", json={"note": "x"})
     assert r.status_code == 404
 
 
-def test_rollback_unknown_version_returns_404(client, admin_session):
+def test_rollback_unknown_version_returns_404(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"})
     r = client.post(f"/v1/admin/profiles/{pid}/rollback/999", json={})
     assert r.status_code == 404
 
 
-def test_get_version_returns_config_and_404(client, admin_session):
+def test_get_version_returns_config_and_404(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     draft = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
     client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"})
@@ -150,18 +150,21 @@ def test_get_version_returns_config_and_404(client, admin_session):
     assert missing.status_code == 404
 
 
-def test_publish_records_audit_entry_with_session_actor(client, admin_session, async_database_url):
+def test_publish_records_audit_entry_with_session_actor(
+    client, super_admin_acting_session, async_database_url
+):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     r = client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"})
     assert r.status_code == 201
     entry = asyncio.run(_fetch_audit(async_database_url, "profile.publish"))
     assert entry is not None
-    # Actor is now the authenticated operator's email, not the pre-SSO sentinel.
-    assert entry.actor_email == "admin@example.com"
+    # Actor is the authenticated operator's email (P4: profile authoring is super-admin
+    # only, so the session actor is the acting-as USAN operator).
+    assert entry.actor_email == "staff@usan.example.com"
     assert entry.detail == {"version": 1}
 
 
-def test_rollback_records_audit_entry(client, admin_session, async_database_url):
+def test_rollback_records_audit_entry(client, super_admin_acting_session, async_database_url):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"})
     cfg = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
@@ -177,7 +180,7 @@ def test_rollback_records_audit_entry(client, admin_session, async_database_url)
     assert entry.detail == {"from_version": 1, "new_version": 3}
 
 
-def test_set_default_unknown_profile_returns_404(client, admin_session):
+def test_set_default_unknown_profile_returns_404(client, super_admin_acting_session):
     r = client.post(
         f"/v1/admin/profiles/{uuid.uuid4()}/set-default",
         json={"direction": "inbound"},
@@ -185,12 +188,12 @@ def test_set_default_unknown_profile_returns_404(client, admin_session):
     assert r.status_code == 404
 
 
-def test_archive_unknown_profile_returns_404(client, admin_session):
+def test_archive_unknown_profile_returns_404(client, super_admin_acting_session):
     r = client.post(f"/v1/admin/profiles/{uuid.uuid4()}/archive", json={})
     assert r.status_code == 404
 
 
-def test_draft_save_returns_unknown_token_warnings(client, admin_session):
+def test_draft_save_returns_unknown_token_warnings(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     cfg = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
     # Known built-in + two unknown tokens across two fields.
@@ -203,7 +206,7 @@ def test_draft_save_returns_unknown_token_warnings(client, admin_session):
     assert set(body["warnings"]) == {"promo", "mood_hint"}
 
 
-def test_draft_save_clean_config_has_empty_warnings(client, admin_session):
+def test_draft_save_clean_config_has_empty_warnings(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     cfg = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
     cfg["prompts"]["greeting"] = "Hello {{first_name}}, this is your check-in."
@@ -212,7 +215,7 @@ def test_draft_save_clean_config_has_empty_warnings(client, admin_session):
     assert r.json()["warnings"] == []
 
 
-def test_get_profile_detail_warnings_defaults_empty(client, admin_session):
+def test_get_profile_detail_warnings_defaults_empty(client, super_admin_acting_session):
     # The additive field defaults to [] on GET (no warning computation there).
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     r = client.get(f"/v1/admin/profiles/{pid}")
@@ -220,7 +223,7 @@ def test_get_profile_detail_warnings_defaults_empty(client, admin_session):
     assert r.json()["warnings"] == []
 
 
-def test_draft_save_returns_both_unknown_token_and_phi_warnings(client, admin_session):
+def test_draft_save_returns_both_unknown_token_and_phi_warnings(client, super_admin_acting_session):
     # PUT /draft with greeting={{last_check_in}} (PHI in sensitive field) AND an
     # unknown {{var}} — both warning types must appear, unknown-token names first.
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]

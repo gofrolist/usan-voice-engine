@@ -597,3 +597,40 @@ def super_admin_session(client: TestClient, async_database_url: str) -> dict[str
     )
     client.cookies.set(SESSION_COOKIE_NAME, token)
     return {SESSION_COOKIE_NAME: token}
+
+
+@pytest.fixture
+def super_admin_acting_session(client: TestClient, async_database_url: str) -> dict[str, str]:
+    """Seed a super-admin and return cookies for a session acting-as the usan org.
+
+    P4 makes the profile-authoring routers (profiles, defaults, custom-variables, the
+    catalogs, profile-tests) super-admin only. Tests that used to exercise those
+    endpoints as a plain ADMIN swap `admin_session` -> this fixture: a USAN operator
+    acting-as the seeded usan (default) org. The cookie carries `is_super_admin=True`
+    (passes the router-level `require_super_admin` gate) and `role=ADMIN`
+    (`acting_as=True`, so the per-route `require_admin_role(ADMIN)` write gates still
+    pass). The active org matches the conftest `get_tenant_db` override's default, so
+    reads/writes land in the same org `admin_session` used.
+    """
+    email = "staff@usan.example.com"
+    org_id = asyncio.run(
+        _seed_admin_user_async(
+            async_database_url,
+            email,
+            is_super_admin=True,
+            with_membership=False,
+        )
+    )
+    from usan_api.admin_session import SESSION_COOKIE_NAME, issue_session
+    from usan_api.db.base import AdminRole
+
+    token = issue_session(
+        email,
+        active_org_id=org_id,
+        role=AdminRole.ADMIN,
+        is_super_admin=True,
+        acting_as=True,
+        settings=get_settings(),
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, token)
+    return {SESSION_COOKIE_NAME: token}

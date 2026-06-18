@@ -45,7 +45,7 @@ def test_list_requires_session(client):
     assert client.get(BASE).status_code == 401
 
 
-def test_create_and_list_alphabetical(client, admin_session):
+def test_create_and_list_alphabetical(client, super_admin_acting_session):
     z = _create(client, "zebra_var", description="dz", example="ez")
     assert z.status_code == 201
     a = _create(client, "apple_var", phi=True)
@@ -73,25 +73,25 @@ def test_create_and_list_alphabetical(client, admin_session):
     assert [v["name"] for v in listed.json()] == ["apple_var", "zebra_var"]
 
 
-def test_create_duplicate_409(client, admin_session):
+def test_create_duplicate_409(client, super_admin_acting_session):
     assert _create(client, "pet_name").status_code == 201
     dup = _create(client, "pet_name")
     assert dup.status_code == 409
     assert "pet_name" in dup.json()["detail"]
 
 
-def test_create_bad_slug_422(client, admin_session):
+def test_create_bad_slug_422(client, super_admin_acting_session):
     for bad in ("Bad", "9starts_with_digit", "has space", "has-dash", "a" * 65, ""):
         assert _create(client, bad).status_code == 422, bad
 
 
-def test_create_builtin_collision_422(client, admin_session):
+def test_create_builtin_collision_422(client, super_admin_acting_session):
     r = _create(client, "contact_name")
     assert r.status_code == 422
     assert "builtin" in json.dumps(r.json())
 
 
-def test_patch_edits_description_example_phi(client, admin_session):
+def test_patch_edits_description_example_phi(client, super_admin_acting_session):
     vid = _create(client, "pet_name", description="d1").json()["id"]
     r = client.patch(f"{BASE}/{vid}", json={"phi": True, "description": "d2"})
     assert r.status_code == 200
@@ -102,31 +102,33 @@ def test_patch_edits_description_example_phi(client, admin_session):
     assert body["example"] == ""  # untouched
 
 
-def test_patch_rejects_name_422(client, admin_session):
+def test_patch_rejects_name_422(client, super_admin_acting_session):
     vid = _create(client, "pet_name").json()["id"]
     r = client.patch(f"{BASE}/{vid}", json={"name": "other"})
     assert r.status_code == 422  # extra="forbid" — name is immutable after create
     assert client.get(BASE).json()[0]["name"] == "pet_name"
 
 
-def test_patch_unknown_404(client, admin_session):
+def test_patch_unknown_404(client, super_admin_acting_session):
     r = client.patch(f"{BASE}/00000000-0000-0000-0000-000000000000", json={"phi": True})
     assert r.status_code == 404
 
 
-def test_delete_unknown_404(client, admin_session):
+def test_delete_unknown_404(client, super_admin_acting_session):
     r = client.delete(f"{BASE}/00000000-0000-0000-0000-000000000000")
     assert r.status_code == 404
 
 
-def test_delete_204(client, admin_session):
+def test_delete_204(client, super_admin_acting_session):
     vid = _create(client, "pet_name").json()["id"]
     assert client.delete(f"{BASE}/{vid}").status_code == 204
     assert client.get(BASE).json() == []
 
 
-def test_viewer_cannot_mutate_403(client, async_database_url):
-    # Mutations are ADMIN-gated; a viewer can read the catalog definitions only.
+def test_non_super_forbidden_on_all_operations_403(client, async_database_url):
+    # P4: the whole custom-variables router is operator-only (require_super_admin), so a
+    # non-super user (here a client VIEWER) is forbidden on EVERY operation — reads
+    # included, not just mutations — by the router-level gate.
     asyncio.run(_seed(async_database_url, "viewer@example.com"))
     token = issue_session(
         "viewer@example.com",
@@ -141,10 +143,10 @@ def test_viewer_cannot_mutate_403(client, async_database_url):
     fake = "00000000-0000-0000-0000-000000000000"
     assert client.patch(f"{BASE}/{fake}", json={"phi": True}).status_code == 403
     assert client.delete(f"{BASE}/{fake}").status_code == 403
-    assert client.get(BASE).status_code == 200
+    assert client.get(BASE).status_code == 403
 
 
-def test_mutations_audited_with_phi_old_new_detail(client, admin_session):
+def test_mutations_audited_with_phi_old_new_detail(client, super_admin_acting_session):
     vid = _create(client, "pet_name").json()["id"]
     assert client.patch(f"{BASE}/{vid}", json={"phi": True, "description": "d2"}).status_code == 200
     assert client.delete(f"{BASE}/{vid}").status_code == 204
@@ -157,7 +159,7 @@ def test_mutations_audited_with_phi_old_new_detail(client, admin_session):
         "custom_variable.update",
         "custom_variable.delete",
     }
-    assert all(e["actor_email"] == "admin@example.com" for e in rows)
+    assert all(e["actor_email"] == "staff@usan.example.com" for e in rows)
     assert all(e["entity_id"] == vid for e in rows)
 
     # The update row pins the phi transition + the changed-field names.

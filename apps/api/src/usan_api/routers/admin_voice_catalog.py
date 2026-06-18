@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
-from usan_api.auth import require_admin_session
+from usan_api.auth import require_super_admin
 from usan_api.schemas.voice_catalog import (
     SAMPLE_PHRASE,
     VOICE_CATALOG,
@@ -35,7 +35,7 @@ from usan_api.settings import Settings, get_settings
 router = APIRouter(
     prefix="/v1/admin/voice-catalog",
     tags=["admin-voice-catalog"],
-    dependencies=[Depends(require_admin_session)],
+    dependencies=[Depends(require_super_admin)],
 )
 
 # Module-level cache of synthesized sample bytes, keyed by (voice_id, model). The

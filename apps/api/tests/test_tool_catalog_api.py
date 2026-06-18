@@ -15,7 +15,7 @@ def test_tool_catalog_requires_admin_session(client):
     assert r.status_code == 401
 
 
-def test_tool_catalog_returns_fifteen_tools_in_order(client, admin_session):
+def test_tool_catalog_returns_fifteen_tools_in_order(client, super_admin_acting_session):
     r = client.get("/v1/admin/tool-catalog")
     assert r.status_code == 200
     body = r.json()
@@ -39,7 +39,7 @@ def test_tool_catalog_returns_fifteen_tools_in_order(client, admin_session):
     ]
 
 
-def test_tool_catalog_each_entry_has_contract_shape(client, admin_session):
+def test_tool_catalog_each_entry_has_contract_shape(client, super_admin_acting_session):
     tools = client.get("/v1/admin/tool-catalog").json()["tools"]
     for t in tools:
         assert set(t.keys()) == {
@@ -57,6 +57,6 @@ def test_tool_catalog_each_entry_has_contract_shape(client, admin_session):
     assert by_name["flag_for_followup"]["category"] == "safety"
 
 
-def test_tool_catalog_response_matches_tool_names(client, admin_session):
+def test_tool_catalog_response_matches_tool_names(client, super_admin_acting_session):
     tools = client.get("/v1/admin/tool-catalog").json()["tools"]
     assert {t["name"] for t in tools} == TOOL_NAMES

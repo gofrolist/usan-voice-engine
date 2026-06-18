@@ -185,7 +185,7 @@ def test_model_catalog_requires_admin_session(client):
     assert client.get("/v1/admin/model-catalog").status_code == 401
 
 
-def test_voice_catalog_returns_catalog(client, admin_session):
+def test_voice_catalog_returns_catalog(client, super_admin_acting_session):
     r = client.get("/v1/admin/voice-catalog")
     assert r.status_code == 200
     body = r.json()
@@ -203,7 +203,7 @@ def test_voice_catalog_returns_catalog(client, admin_session):
         }
 
 
-def test_model_catalog_returns_catalog(client, admin_session):
+def test_model_catalog_returns_catalog(client, super_admin_acting_session):
     r = client.get("/v1/admin/model-catalog")
     assert r.status_code == 200
     body = r.json()
@@ -213,12 +213,12 @@ def test_model_catalog_returns_catalog(client, admin_session):
     assert "ink-whisper" in ids
 
 
-def test_sample_404_for_non_catalog_voice(client, admin_session):
+def test_sample_404_for_non_catalog_voice(client, super_admin_acting_session):
     r = client.get("/v1/admin/voice-catalog/not-a-voice/sample")
     assert r.status_code == 404
 
 
-def test_sample_503_when_cartesia_key_unset(client, admin_session):
+def test_sample_503_when_cartesia_key_unset(client, super_admin_acting_session):
     # The `client` fixture does not set CARTESIA_API_KEY → the proxy must fail clean.
     voice_id = next(iter(VOICE_IDS))
     r = client.get(f"/v1/admin/voice-catalog/{voice_id}/sample")
@@ -226,7 +226,7 @@ def test_sample_503_when_cartesia_key_unset(client, admin_session):
 
 
 def test_sample_streams_audio_and_only_sample_phrase_synthesized(
-    client, admin_session, monkeypatch
+    client, super_admin_acting_session, monkeypatch
 ):
     # With a key configured, the proxy POSTs to Cartesia /tts/bytes and streams the
     # audio back. We capture the request body and assert the ONLY transcript text that
@@ -311,7 +311,9 @@ def _patch_cartesia(monkeypatch, *, response=None, raises=None):
     monkeypatch.setattr(mod.httpx, "AsyncClient", _FakeClient)
 
 
-def test_sample_402_credits_maps_to_503_with_actionable_detail(client, admin_session, monkeypatch):
+def test_sample_402_credits_maps_to_503_with_actionable_detail(
+    client, super_admin_acting_session, monkeypatch
+):
     # Cartesia returns 402 "Model credits limit reached" when the account is out of
     # credits. The proxy must surface an actionable reason — not a generic 502 — so the
     # operator knows to check the Cartesia subscription rather than chase a phantom bug.
@@ -336,7 +338,9 @@ def test_sample_402_credits_maps_to_503_with_actionable_detail(client, admin_ses
     get_settings.cache_clear()
 
 
-def test_sample_upstream_5xx_maps_to_502_with_status_in_detail(client, admin_session, monkeypatch):
+def test_sample_upstream_5xx_maps_to_502_with_status_in_detail(
+    client, super_admin_acting_session, monkeypatch
+):
     # A non-402 upstream failure still maps to 502, but the detail names the upstream
     # status so the failure is diagnosable from the response alone.
     import httpx
@@ -354,7 +358,7 @@ def test_sample_upstream_5xx_maps_to_502_with_status_in_detail(client, admin_ses
     get_settings.cache_clear()
 
 
-def test_sample_transport_error_maps_to_502(client, admin_session, monkeypatch):
+def test_sample_transport_error_maps_to_502(client, super_admin_acting_session, monkeypatch):
     # A connect/timeout error (no HTTP response) still fails clean as 502.
     import httpx
 
@@ -379,7 +383,7 @@ def _draft_config(client, pid: str) -> dict:
     return client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
 
 
-def test_save_422_unsupported_voice(client, admin_session):
+def test_save_422_unsupported_voice(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     before = _draft_config(client, pid)
     cfg = _draft_config(client, pid)
@@ -392,7 +396,7 @@ def test_save_422_unsupported_voice(client, admin_session):
     assert _draft_config(client, pid) == before
 
 
-def test_save_422_unsupported_llm_model(client, admin_session):
+def test_save_422_unsupported_llm_model(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     cfg = _draft_config(client, pid)
     cfg["llm"]["model"] = "made-up-model"
@@ -402,7 +406,7 @@ def test_save_422_unsupported_llm_model(client, admin_session):
     assert any(d["loc"] == ["body", "config", "llm", "model"] for d in detail)
 
 
-def test_save_200_catalog_voice_and_model(client, admin_session):
+def test_save_200_catalog_voice_and_model(client, super_admin_acting_session):
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     cfg = _draft_config(client, pid)
     cfg["voice"]["cartesia_voice_id"] = next(iter(VOICE_IDS))
@@ -412,7 +416,7 @@ def test_save_200_catalog_voice_and_model(client, admin_session):
     assert r.status_code == 200
 
 
-def test_publish_422_unsupported_model(client, admin_session):
+def test_publish_422_unsupported_model(client, super_admin_acting_session):
     # Save a clean draft (using an allowed model), then corrupt the persisted draft via
     # a second save would be blocked too — so instead test publish blocks a draft that
     # was saved while still valid but references a model removed afterwards is out of

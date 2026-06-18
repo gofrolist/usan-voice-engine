@@ -35,7 +35,9 @@ def test_no_cookie_is_401(client, admin_session):
 
 
 def test_valid_session_authenticates(client, admin_session):
-    r = client.get("/v1/admin/profiles")
+    # Uses a non-operator admin route (P4 made /v1/admin/profiles super-admin only);
+    # contacts stays require_admin_session, so it proves a valid session authenticates.
+    r = client.get("/v1/admin/contacts")
     assert r.status_code == 200
 
 
@@ -64,8 +66,20 @@ def test_role_gate_blocks_viewer(client, async_database_url):
         settings=get_settings(),
     )
     client.cookies.set(SESSION_COOKIE_NAME, token)
-    assert client.get("/v1/admin/profiles").status_code == 200  # viewer can read
-    assert client.post("/v1/admin/profiles", json={"name": "x"}).status_code == 403  # not write
+    # Exercise the role gate on a non-operator route (P4 made profiles super-admin only):
+    # contacts is require_admin_session with ADMIN-gated writes, so a viewer reads but
+    # cannot write. The route-level require_admin_role(ADMIN) 403s before the handler, so
+    # the missing contact never reaches a 404.
+    import uuid
+
+    assert client.get("/v1/admin/contacts").status_code == 200  # viewer can read
+    assert (
+        client.put(
+            f"/v1/admin/contacts/{uuid.uuid4()}/profile",
+            json={"agent_profile_id": None},
+        ).status_code
+        == 403
+    )  # not write
 
 
 def test_invalid_signature_cookie_is_401(client, admin_session):

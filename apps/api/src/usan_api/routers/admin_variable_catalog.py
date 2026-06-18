@@ -3,14 +3,14 @@ from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api.auth import get_tenant_db, require_admin_session
+from usan_api.auth import get_tenant_db, require_super_admin
 from usan_api.repositories import custom_variables as custom_variables_repo
 from usan_api.schemas.variable_catalog import BUILTIN_NAMES, BUILTIN_VARIABLES, VariableSpec
 
 router = APIRouter(
     prefix="/v1/admin/variable-catalog",
     tags=["admin-variable-catalog"],
-    dependencies=[Depends(require_admin_session)],
+    dependencies=[Depends(require_super_admin)],
 )
 
 

@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import get_tenant_db, require_admin_role, require_admin_session
+from usan_api.auth import get_tenant_db, require_admin_role, require_super_admin
 from usan_api.db.base import AdminRole
 from usan_api.db.models import CustomVariable
 from usan_api.repositories import admin_audit
@@ -33,7 +33,7 @@ from usan_api.schemas.custom_variables import (
 router = APIRouter(
     prefix="/v1/admin/custom-variables",
     tags=["custom-variables"],
-    dependencies=[Depends(require_admin_session)],
+    dependencies=[Depends(require_super_admin)],
 )
 
 _NOT_FOUND = "custom variable not found"

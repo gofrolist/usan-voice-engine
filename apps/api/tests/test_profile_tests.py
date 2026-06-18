@@ -112,7 +112,7 @@ def test_llm_requires_session(client):
     assert r.status_code == 401
 
 
-def test_llm_viewer_forbidden(client, admin_session, async_database_url, vertex_admin):
+def test_llm_viewer_forbidden(client, super_admin_acting_session, async_database_url, vertex_admin):
     pid = _new_profile(client)
     _as_viewer(client, async_database_url)
     r = client.post(
@@ -123,7 +123,7 @@ def test_llm_viewer_forbidden(client, admin_session, async_database_url, vertex_
 
 
 def test_llm_runs_vertex_with_stub_tools_no_db_rows(
-    client, admin_session, async_database_url, vertex_admin
+    client, super_admin_acting_session, async_database_url, vertex_admin
 ):
     pid = _new_profile(client)
     r = client.post(
@@ -148,7 +148,7 @@ def test_llm_runs_vertex_with_stub_tools_no_db_rows(
     assert counts["medication_logs"] == 0
 
 
-def test_llm_503_when_gcp_project_unset(client, admin_session, monkeypatch):
+def test_llm_503_when_gcp_project_unset(client, super_admin_acting_session, monkeypatch):
     monkeypatch.delenv("GCP_PROJECT", raising=False)
     from usan_api.settings import get_settings
 
@@ -162,7 +162,7 @@ def test_llm_503_when_gcp_project_unset(client, admin_session, monkeypatch):
 
 
 def test_llm_emits_single_phi_free_audit_entry(
-    client, admin_session, async_database_url, vertex_admin
+    client, super_admin_acting_session, async_database_url, vertex_admin
 ):
     pid = _new_profile(client)
     client.post(
@@ -182,7 +182,7 @@ def test_llm_emits_single_phi_free_audit_entry(
 
 
 def test_llm_rejects_unsupported_model_before_vertex_call(
-    client, admin_session, async_database_url, vertex_admin
+    client, super_admin_acting_session, async_database_url, vertex_admin
 ):
     """FR-014 parity: an inline config with an off-catalog llm.model is blocked with a
     field-level 422 BEFORE any Vertex call — the test path must not forward an
@@ -201,7 +201,7 @@ def test_llm_rejects_unsupported_model_before_vertex_call(
     assert vertex_admin["n"] == 0
 
 
-def test_llm_rejects_oversized_sample_var_value(client, admin_session):
+def test_llm_rejects_oversized_sample_var_value(client, super_admin_acting_session):
     """sample_vars values are bounded at the schema layer: an over-long value is a
     422 (not silently truncated post-parse), so the validated payload size is capped
     (security review PR #61, LOW #2). Fails at body validation — no provider needed."""
@@ -235,7 +235,9 @@ def mock_livekit(monkeypatch):
     return captured
 
 
-def test_audio_viewer_forbidden(client, admin_session, async_database_url, mock_livekit):
+def test_audio_viewer_forbidden(
+    client, super_admin_acting_session, async_database_url, mock_livekit
+):
     pid = _new_profile(client)
     _as_viewer(client, async_database_url)
     r = client.post(f"/v1/admin/profiles/{pid}/test/audio", json={"sample_vars": {}})
@@ -243,7 +245,7 @@ def test_audio_viewer_forbidden(client, admin_session, async_database_url, mock_
 
 
 def test_audio_mints_join_token_and_dispatches_test_session(
-    client, admin_session, async_database_url, mock_livekit
+    client, super_admin_acting_session, async_database_url, mock_livekit
 ):
     import jwt as pyjwt
 
@@ -286,7 +288,7 @@ def test_audio_mints_join_token_and_dispatches_test_session(
 
 
 def test_audio_rejects_unsupported_voice_before_dispatch(
-    client, admin_session, async_database_url, mock_livekit
+    client, super_admin_acting_session, async_database_url, mock_livekit
 ):
     """FR-014 parity: an inline config with an off-catalog voice is blocked with a
     field-level 422 BEFORE the agent is dispatched (security review PR #61, LOW #1)."""
@@ -305,7 +307,7 @@ def test_audio_rejects_unsupported_voice_before_dispatch(
 
 
 def test_audio_emits_single_phi_free_audit_entry(
-    client, admin_session, async_database_url, mock_livekit
+    client, super_admin_acting_session, async_database_url, mock_livekit
 ):
     pid = _new_profile(client)
     client.post(

@@ -24,20 +24,20 @@ def _valid_config(client) -> dict:
     return client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
 
 
-def test_detail_exposes_draft_revision(client, admin_session):
+def test_detail_exposes_draft_revision(client, super_admin_acting_session):
     pid = _new_profile(client)
     detail = client.get(f"/v1/admin/profiles/{pid}").json()
     # A fresh profile starts at revision 1 (migration default; no backfill).
     assert detail["draft_revision"] == 1
 
 
-def test_summary_exposes_draft_revision(client, admin_session):
+def test_summary_exposes_draft_revision(client, super_admin_acting_session):
     _new_profile(client)
     rows = client.get("/v1/admin/profiles").json()
     assert all("draft_revision" in r for r in rows)
 
 
-def test_save_with_matching_revision_advances_it(client, admin_session):
+def test_save_with_matching_revision_advances_it(client, super_admin_acting_session):
     pid = _new_profile(client)
     detail = client.get(f"/v1/admin/profiles/{pid}").json()
     rev = detail["draft_revision"]
@@ -51,7 +51,7 @@ def test_save_with_matching_revision_advances_it(client, admin_session):
     assert r.json()["draft_revision"] == rev + 1
 
 
-def test_concurrent_double_save_returns_409(client, admin_session):
+def test_concurrent_double_save_returns_409(client, super_admin_acting_session):
     pid = _new_profile(client)
     detail = client.get(f"/v1/admin/profiles/{pid}").json()
     stale_rev = detail["draft_revision"]
@@ -76,7 +76,7 @@ def test_concurrent_double_save_returns_409(client, admin_session):
     assert "session a" not in detail_msg
 
 
-def test_reload_then_save_succeeds(client, admin_session):
+def test_reload_then_save_succeeds(client, super_admin_acting_session):
     pid = _new_profile(client)
     first_detail = client.get(f"/v1/admin/profiles/{pid}").json()
     rev = first_detail["draft_revision"]
@@ -100,7 +100,7 @@ def test_reload_then_save_succeeds(client, admin_session):
     assert r.status_code == 200
 
 
-def test_omitted_expected_revision_is_unconditional(client, admin_session):
+def test_omitted_expected_revision_is_unconditional(client, super_admin_acting_session):
     # Backward compatibility: a body without expected_revision always saves.
     pid = _new_profile(client)
     cfg = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
@@ -109,7 +109,7 @@ def test_omitted_expected_revision_is_unconditional(client, admin_session):
     assert r.status_code == 200
 
 
-def test_publish_advances_draft_revision(client, admin_session):
+def test_publish_advances_draft_revision(client, super_admin_acting_session):
     pid = _new_profile(client)
     before = client.get(f"/v1/admin/profiles/{pid}").json()["draft_revision"]
     assert client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"}).status_code == 201
@@ -117,7 +117,7 @@ def test_publish_advances_draft_revision(client, admin_session):
     assert after > before
 
 
-def test_rollback_advances_draft_revision(client, admin_session):
+def test_rollback_advances_draft_revision(client, super_admin_acting_session):
     pid = _new_profile(client)
     client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"})
     cfg = client.get(f"/v1/admin/profiles/{pid}").json()["draft_config"]
@@ -130,7 +130,7 @@ def test_rollback_advances_draft_revision(client, admin_session):
     assert after > before
 
 
-def test_stale_save_on_missing_profile_returns_404_not_409(client, admin_session):
+def test_stale_save_on_missing_profile_returns_404_not_409(client, super_admin_acting_session):
     # A guarded UPDATE that matches 0 rows must re-SELECT to disambiguate: the row
     # is absent here, so the answer is 404 (not found), never 409 (stale).
     r = client.put(
