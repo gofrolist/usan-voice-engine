@@ -66,7 +66,7 @@ services:
       GF_AUTH_JWT_EMAIL_CLAIM: "email"
       GF_AUTH_JWT_USERNAME_CLAIM: "email"
       GF_AUTH_JWT_JWK_SET_URL: "https://usanretirement.cloudflareaccess.com/cdn-cgi/access/certs"
-      GF_AUTH_JWT_EXPECT_CLAIMS: '{"aud":"REPLACE_WITH_ACCESS_APP_AUD"}'
+      GF_AUTH_JWT_EXPECT_CLAIMS: '{"aud":"07b0c3287ca52d2cf02ae3bf2eb7197b71a7137c8cfef69c103bc63234484faf"}'
       GF_AUTH_JWT_AUTO_SIGN_UP: "true"
       GF_AUTH_JWT_ROLE_ATTRIBUTE_STRICT: "false"
     volumes:
