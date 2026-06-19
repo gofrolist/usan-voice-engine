@@ -1,8 +1,35 @@
+# The build stage does `COPY . .`, so anything not excluded here lands in an
+# image layer (and bloats the build context). Keep this tight.
+
+# Dependencies / build output (image rebuilds these)
 node_modules
 dist
 coverage
+
+# Tests are not needed to build the SPA bundle
 e2e
+
+# Secrets — never copy into the image (PHI system, fail closed)
+.env
+.env.*
 *.local
+
+# VCS
+.git
+.gitignore
+
+# Logs / debug
+*.log
+npm-debug.log*
+
+# Editor / OS cruft
 .DS_Store
+.vscode
+.idea
+
+# Docs are not needed at build time
+README.md
+
+# Docker files themselves
 Dockerfile
 .dockerignore

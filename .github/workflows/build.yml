@@ -71,8 +71,14 @@ jobs:
         with:
           context: apps/api
           file: apps/api/Dockerfile
+          target: runtime
           platforms: linux/amd64
           push: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ steps.tag.outputs.value }}
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-api:${{ steps.tag.outputs.value }}
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-api:${{ github.sha }}
@@ -88,6 +94,8 @@ jobs:
           file: services/agent/Dockerfile.base
           platforms: linux/amd64
           push: true
+          provenance: mode=max
+          sbom: true
           tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-agent-base:${{ steps.tag.outputs.value }}
           # Authenticated HF downloads avoid the anonymous-IP 429s that fail the
           # model pre-warm on shared runners. Empty when the secret is unset →
@@ -104,8 +112,12 @@ jobs:
           file: services/agent/Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: mode=max
+          sbom: true
           build-args: |
             BASE_IMAGE=${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-agent-base:${{ steps.tag.outputs.value }}
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ steps.tag.outputs.value }}
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-agent:${{ steps.tag.outputs.value }}
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-agent:${{ github.sha }}
@@ -123,6 +135,11 @@ jobs:
           file: apps/admin-ui/Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ steps.tag.outputs.value }}
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-admin-ui:${{ steps.tag.outputs.value }}
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/usan-admin-ui:${{ github.sha }}
