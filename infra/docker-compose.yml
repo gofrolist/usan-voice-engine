@@ -324,6 +324,15 @@ services:
       VERTEX_LOCATION: ${VERTEX_LOCATION:-global}
       SUMMARIZATION_ENABLED: ${SUMMARIZATION_ENABLED:-false}
       SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL:-gemini-2.5-flash}
+      # Invite email via Google Workspace (spec 2026-06-19). SHIP-INERT: default OFF, so
+      # invites stay copy-link-only until a deploy flips the flag AFTER the one-time
+      # domain-wide-delegation setup (Admin console + gmail.send scope on the VM SA).
+      # Keyless — the VM service account impersonates INVITE_EMAIL_SENDER via IAM signJwt,
+      # so there is NO secret here. Sender must be a real Workspace mailbox when enabled.
+      INVITE_EMAIL_ENABLED: ${INVITE_EMAIL_ENABLED:-false}
+      INVITE_EMAIL_SENDER: ${INVITE_EMAIL_SENDER:-noreply@usanretirement.com}
+      INVITE_EMAIL_FROM_NAME: ${INVITE_EMAIL_FROM_NAME:-USAN Admin}
+      INVITE_EMAIL_TIMEOUT_S: ${INVITE_EMAIL_TIMEOUT_S:-10}
     # The API is stateless: no on-disk writes outside /tmp, so run the root
     # filesystem read-only and block privilege escalation. /tmp is a tmpfs for
     # any transient scratch (e.g. signed-URL staging).

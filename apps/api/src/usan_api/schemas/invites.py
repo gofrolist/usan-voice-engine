@@ -21,3 +21,6 @@ class InviteOut(BaseModel):
     expires_at: datetime
     created_at: datetime
     invited_by: str | None = None
+    # Email delivery outcome (spec 2026-06-19): None = not attempted (feature off or a
+    # list read), True = emailed, False = send failed (admin falls back to copy-link).
+    email_sent: bool | None = None

@@ -264,6 +264,19 @@ class Settings(BaseSettings):
     # operator rather than auto-dialed with a Spanish profile.
     spanish_profile_id: str | None = Field(default=None, alias="SPANISH_PROFILE_ID")
 
+    # --- Invite email delivery via Google Workspace (spec 2026-06-19). Ship-inert:
+    # default OFF, so merging changes NO runtime behavior — invites stay copy-link-only
+    # until a deploy flips the flag (after the one-time domain-wide-delegation setup).
+    # Keyless: the sender is impersonated via the VM service account (IAM signJwt), so
+    # there is NO secret here — only the flag + the mailbox identity. When the flag is
+    # ON, INVITE_EMAIL_SENDER must name a real Workspace mailbox (the DWD `sub`).
+    invite_email_enabled: bool = Field(default=False, alias="INVITE_EMAIL_ENABLED")
+    invite_email_sender: str = Field(
+        default="noreply@usanretirement.com", alias="INVITE_EMAIL_SENDER"
+    )
+    invite_email_from_name: str = Field(default="USAN Admin", alias="INVITE_EMAIL_FROM_NAME")
+    invite_email_timeout_s: int = Field(default=10, ge=1, le=60, alias="INVITE_EMAIL_TIMEOUT_S")
+
     @model_validator(mode="after")
     def _reserved_below_max(self) -> Settings:
         # The gate computes max - reserved - in_flight; reserved >= max means the
@@ -282,6 +295,18 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SCHEDULER_POLLER_ENABLED=true requires CONCURRENCY_GATE_ENABLED=true "
                 "(the scheduler must never run without the hard dial cap; spec §10.3)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _invite_email_requires_sender(self) -> Settings:
+        # The sender mailbox is the domain-wide-delegation `sub` (the impersonated
+        # Workspace account). Sending with a blank sender would 400 at the Gmail API on
+        # every invite — fail at startup instead of on the first admin click.
+        if self.invite_email_enabled and not self.invite_email_sender.strip():
+            raise ValueError(
+                "INVITE_EMAIL_ENABLED=true requires INVITE_EMAIL_SENDER to name a real "
+                "Workspace mailbox (the domain-wide-delegation subject; spec 2026-06-19)"
             )
         return self
 

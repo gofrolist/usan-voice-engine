@@ -88,3 +88,85 @@ def test_revoke_and_resend(client, admin_session):
 
 def test_revoke_unknown_invite_404(client, admin_session):
     assert client.delete(f"/v1/admin/invites/{uuid.uuid4()}").status_code == 404
+
+
+# --- Invite email delivery (spec 2026-06-19). The Gmail transport is replaced with a
+# recording fake at the orchestration seam, mirroring the repo.create_invite monkeypatch
+# above — no live Google calls. The flag is flipped per-test via the env + cache clear.
+
+
+def _enable_invite_email(monkeypatch):
+    monkeypatch.setenv("INVITE_EMAIL_ENABLED", "true")
+    get_settings.cache_clear()
+
+
+def _fake_send(result, calls):
+    async def _send(settings, *, invite, accept_url, mailer=None):
+        calls.append(accept_url)
+        return result
+
+    return _send
+
+
+def test_create_invite_emails_when_enabled(client, admin_session, monkeypatch):
+    from usan_api import invite_email
+
+    _enable_invite_email(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(invite_email, "send_invite_email", _fake_send(True, calls))
+
+    r = client.post("/v1/admin/invites", json={"email": "mailme@x.com", "role": "admin"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["email_sent"] is True
+    # The email was sent for THIS invite's accept link.
+    assert calls == [body["accept_url"]]
+
+
+def test_create_invite_email_failure_still_returns_201(client, admin_session, monkeypatch):
+    from usan_api import invite_email
+
+    _enable_invite_email(monkeypatch)
+    monkeypatch.setattr(invite_email, "send_invite_email", _fake_send(False, []))
+
+    r = client.post("/v1/admin/invites", json={"email": "fail@x.com", "role": "viewer"})
+    # The invite is committed BEFORE the send — a delivery failure never loses it.
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["email_sent"] is False
+    assert body["accept_url"].startswith("http://testserver/v1/auth/accept-invite?token=")
+
+
+def test_create_invite_does_not_email_when_disabled(client, admin_session, monkeypatch):
+    from usan_api import invite_email
+
+    # Default (flag off): no attempt, email_sent is null, the seam is never called.
+    called: list[str] = []
+    monkeypatch.setattr(invite_email, "send_invite_email", _fake_send(True, called))
+
+    r = client.post("/v1/admin/invites", json={"email": "quiet@x.com", "role": "admin"})
+    assert r.status_code == 201, r.text
+    assert r.json()["email_sent"] is None
+    assert called == []  # send_invite_email was never invoked
+
+
+def test_resend_invite_emails_when_enabled(client, admin_session, monkeypatch):
+    from usan_api import invite_email
+
+    created = client.post("/v1/admin/invites", json={"email": "rs@x.com", "role": "viewer"}).json()
+    _enable_invite_email(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(invite_email, "send_invite_email", _fake_send(True, calls))
+
+    r = client.post(f"/v1/admin/invites/{created['id']}/resend")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["email_sent"] is True
+    assert calls == [body["accept_url"]]  # the freshly-rotated link was emailed
+
+
+def test_list_invites_has_null_email_sent(client, admin_session):
+    client.post("/v1/admin/invites", json={"email": "listed@x.com", "role": "admin"})
+    listed = client.get("/v1/admin/invites").json()
+    # A list read never attempts a send.
+    assert all(i["email_sent"] is None for i in listed)
