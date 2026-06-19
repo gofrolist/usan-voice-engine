@@ -246,12 +246,13 @@ contactPoints:
   - orgId: 1
     name: usan-operator
     receivers:
-      # TODO(deploy): replace with the operator's real channel, e.g.
-      #   - uid: usan-operator-email
-      #     type: email
-      #     settings:
-      #       addresses: ops@example.com
+      # Operator alert channel. IMPORTANT: an EMPTY `addresses` makes Grafana 12.x
+      # FAIL alerting provisioning at startup (the container crash-loops, and the
+      # edge then returns 502) — so it must be a real address, never "". Email
+      # DELIVERY additionally needs SMTP (GF_SMTP_* in docker-compose.monitoring.yml),
+      # which is not configured yet; until then this contact point provisions cleanly
+      # but won't actually send. Change the address as needed.
       - uid: usan-operator-email
         type: email
         settings:
-          addresses: ""
+          addresses: gmrnsk@gmail.com
