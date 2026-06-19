@@ -8,6 +8,7 @@ invite id + error type only — never the token, which rides inside the accept l
 reported as ``False`` rather than raised.
 """
 
+import asyncio
 import html as html_lib
 from datetime import datetime
 
@@ -80,8 +81,13 @@ async def send_invite_email(
         invited_by=invite.invited_by,
     )
     try:
-        await mailer.send(
-            to=invite.email, subject=subject, text_body=text_body, html_body=html_body
+        # Bound the WHOLE send — including the ADC metadata-server refresh inside
+        # GmailMailer (asyncio.to_thread, which the per-call httpx timeout does NOT cover).
+        # Without this ceiling a hung metadata server would block the admin's request
+        # indefinitely; asyncio.TimeoutError is caught below and surfaced as email_sent=False.
+        await asyncio.wait_for(
+            mailer.send(to=invite.email, subject=subject, text_body=text_body, html_body=html_body),
+            timeout=settings.invite_email_timeout_s,
         )
         return True
     except Exception as exc:  # noqa: BLE001 — best-effort: a send failure must not lose the invite

@@ -76,17 +76,25 @@ Two new, single-purpose modules plus thin wiring:
   `You're invited to USAN Admin`. Body states the role, who invited them, the accept link,
   and the expiry; HTML has a button + a visible fallback link; text mirrors it.
 - `async def send_invite_email(settings, *, invite, accept_url, mailer=None) -> bool`:
-  best-effort. Builds content, sends via the mailer (default `GmailMailer(settings)`), returns
-  `True` on success. On **any** exception, logs a warning (invite id + recipient + reason —
-  never the token) and returns `False`. Never raises.
+  best-effort. Builds content, sends via the mailer (default `GmailMailer(settings)`) under an
+  `asyncio.wait_for(..., timeout=invite_email_timeout_s)` ceiling that bounds the **whole** send
+  — including the ADC metadata-server refresh (`asyncio.to_thread`), which the per-HTTP-call
+  httpx timeout does NOT cover — so a hung metadata server can never block the admin's request.
+  Returns `True` on success. On **any** exception (including the timeout), logs a warning (invite
+  id + recipient + error type — never the token) and returns `False`. Never raises.
 
 ### `routers/admin_invites.py` — wiring
 - After `create_invite`/`resend_invite` commit, if `settings.invite_email_enabled`, call
   `await invite_email.send_invite_email(settings, invite=inv, accept_url=...)` and pass the
   resulting bool into `_out(...)`. When the flag is off, no attempt is made and `email_sent`
-  is `None`. The email outcome is also recorded in the existing `admin_audit` detail.
+  is `None`.
 - The send happens **after** `db.commit()` so a slow/failed send never holds the txn open or
-  rolls back a valid invite.
+  rolls back a valid invite. Consequently the **action** audit (`invite.create`/`invite.resend`,
+  recorded atomically with the invite, before the send) does NOT carry the delivery outcome —
+  `email_sent` is surfaced in the API response and in the application logs (a warning on
+  failure, no token), not in `admin_audit`. Folding the outcome into the audit would require
+  either sending before commit (breaking the commit-before-send invariant) or a second write;
+  the action record is the security-relevant fact, so we keep it atomic.
 
 ### `schemas/invites.py`
 - `InviteOut` gains `email_sent: bool | None = None`
