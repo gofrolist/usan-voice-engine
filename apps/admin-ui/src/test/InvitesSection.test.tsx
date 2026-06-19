@@ -39,6 +39,7 @@ function invite(over: Partial<Invite> = {}): Invite {
     expires_at: "2099-01-01T00:00:00Z",
     created_at: "2026-01-01T00:00:00Z",
     invited_by: "boss@example.com",
+    email_sent: null,
     ...over,
   };
 }
@@ -90,5 +91,64 @@ describe("InvitesSection", () => {
     const dialog = await screen.findByRole("dialog");
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(delMock).not.toHaveBeenCalled();
+  });
+
+  function mockClipboard(): ReturnType<typeof vi.fn> {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    return writeText;
+  }
+
+  it("invite toasts 'emailed' and skips the clipboard when email_sent is true", async () => {
+    const writeText = mockClipboard();
+    postMock.mockResolvedValue(invite({ email: "new@x.com", email_sent: true }));
+    renderSection();
+    await screen.findByText("a@example.com");
+    await userEvent.type(screen.getByLabelText("Email"), "new@x.com");
+    await userEvent.click(screen.getByRole("button", { name: "Invite" }));
+    await waitFor(() =>
+      expect(pushToastMock).toHaveBeenCalledWith("Invitation emailed to new@x.com", "info"),
+    );
+    expect(writeText).not.toHaveBeenCalled(); // emailed: no clipboard fallback
+  });
+
+  it("invite falls back to copy + warns when email_sent is false", async () => {
+    const writeText = mockClipboard();
+    postMock.mockResolvedValue(
+      invite({ accept_url: "http://l/accept?token=z", email_sent: false }),
+    );
+    renderSection();
+    await screen.findByText("a@example.com");
+    await userEvent.type(screen.getByLabelText("Email"), "f@x.com");
+    await userEvent.click(screen.getByRole("button", { name: "Invite" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("http://l/accept?token=z"));
+    expect(pushToastMock).toHaveBeenCalledWith(
+      "Couldn't email the invite — link copied, send it manually",
+      "info",
+    );
+  });
+
+  it("resend toasts 'emailed' when email_sent is true", async () => {
+    invites = [invite({ id: "inv-r", email: "rs@x.com" })];
+    postMock.mockResolvedValue(invite({ id: "inv-r", email: "rs@x.com", email_sent: true }));
+    renderSection();
+    await screen.findByText("rs@x.com");
+    await userEvent.click(screen.getByRole("button", { name: "Resend" }));
+    await waitFor(() =>
+      expect(pushToastMock).toHaveBeenCalledWith("Invitation emailed to rs@x.com", "info"),
+    );
+  });
+
+  it("resend copies the link (legacy) when email_sent is null", async () => {
+    const writeText = mockClipboard();
+    invites = [invite({ id: "inv-n" })];
+    postMock.mockResolvedValue(
+      invite({ id: "inv-n", accept_url: "http://l/accept?token=n", email_sent: null }),
+    );
+    renderSection();
+    await screen.findByText("a@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Resend" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("http://l/accept?token=n"));
+    expect(pushToastMock).toHaveBeenCalledWith("Invite link copied", "info");
   });
 });

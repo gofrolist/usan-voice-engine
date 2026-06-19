@@ -9,12 +9,26 @@ import { pushToast } from "../../components/ui/toast";
 import type { AdminUserRole, Invite } from "../../types/api";
 import { useCreateInvite, useInvites, useResendInvite, useRevokeInvite } from "./hooks";
 
-async function copy(url: string): Promise<void> {
+async function copyLink(url: string, okMessage: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(url);
-    pushToast("Invite link copied", "info");
+    pushToast(okMessage, "info");
   } catch {
     pushToast("Copy failed — select and copy the link manually");
+  }
+}
+
+// Feedback after Invite/Resend, driven by the server's delivery outcome:
+//   true  -> emailed automatically (no clipboard needed)
+//   false -> email attempted but failed: copy the link so the admin can send it
+//   null  -> email feature off: legacy copy-link behavior
+async function notifyInviteResult(inv: Invite): Promise<void> {
+  if (inv.email_sent === true) {
+    pushToast(`Invitation emailed to ${inv.email}`, "info");
+  } else if (inv.email_sent === false) {
+    await copyLink(inv.accept_url, "Couldn't email the invite — link copied, send it manually");
+  } else {
+    await copyLink(inv.accept_url, "Invite link copied");
   }
 }
 
@@ -38,7 +52,7 @@ export function InvitesSection() {
         onSuccess: (inv) => {
           setEmail("");
           setRole("admin");
-          void copy(inv.accept_url);
+          void notifyInviteResult(inv);
         },
       },
     );
@@ -121,14 +135,17 @@ export function InvitesSection() {
                   {new Date(inv.expires_at).toLocaleString()}
                 </Td>
                 <Td className="space-x-2 text-right">
-                  <Button variant="secondary" onClick={() => void copy(inv.accept_url)}>
+                  <Button
+                    variant="secondary"
+                    onClick={() => void copyLink(inv.accept_url, "Invite link copied")}
+                  >
                     Copy link
                   </Button>
                   <Button
                     variant="secondary"
                     disabled={resend.isPending && resend.variables === inv.id}
                     onClick={() =>
-                      resend.mutate(inv.id, { onSuccess: (fresh) => void copy(fresh.accept_url) })
+                      resend.mutate(inv.id, { onSuccess: (fresh) => void notifyInviteResult(fresh) })
                     }
                   >
                     Resend

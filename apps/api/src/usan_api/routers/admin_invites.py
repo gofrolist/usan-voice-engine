@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from usan_api import invite_email
 from usan_api.admin_actor import get_actor_email
 from usan_api.auth import (
     AdminPrincipal,
@@ -31,7 +32,7 @@ router = APIRouter(
 )
 
 
-def _out(inv: Invitation, settings: Settings) -> InviteOut:
+def _out(inv: Invitation, settings: Settings, *, email_sent: bool | None = None) -> InviteOut:
     return InviteOut(
         id=inv.id,
         email=inv.email,
@@ -41,6 +42,20 @@ def _out(inv: Invitation, settings: Settings) -> InviteOut:
         expires_at=inv.expires_at,
         created_at=inv.created_at,
         invited_by=inv.invited_by,
+        email_sent=email_sent,
+    )
+
+
+async def _maybe_send_email(settings: Settings, inv: Invitation) -> bool | None:
+    """Best-effort invite email AFTER commit. None when the feature is off (no attempt).
+
+    Runs only once the invite is durably committed, so a slow/failed Gmail call never
+    holds the transaction open or rolls back a valid invite — the link works regardless.
+    """
+    if not settings.invite_email_enabled:
+        return None
+    return await invite_email.send_invite_email(
+        settings, invite=inv, accept_url=build_accept_url(settings, inv.token)
     )
 
 
@@ -96,7 +111,8 @@ async def create_invite(
         detail={"role": body.role},
     )
     await db.commit()
-    return _out(inv, settings)
+    email_sent = await _maybe_send_email(settings, inv)
+    return _out(inv, settings, email_sent=email_sent)
 
 
 @router.delete("/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -152,4 +168,5 @@ async def resend_invite(
         entity_id=inv.email,
     )
     await db.commit()
-    return _out(inv, settings)
+    email_sent = await _maybe_send_email(settings, inv)
+    return _out(inv, settings, email_sent=email_sent)

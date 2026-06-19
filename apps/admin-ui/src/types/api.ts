@@ -325,6 +325,9 @@ export interface Invite {
   expires_at: string;
   created_at: string;
   invited_by: string | null;
+  // Email delivery outcome (spec 2026-06-19): null = not attempted (feature off / list
+  // read), true = emailed, false = send failed (UI falls back to copy-link).
+  email_sent: boolean | null;
 }
 
 export interface InviteCreate {
