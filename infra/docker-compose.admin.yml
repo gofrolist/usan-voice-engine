@@ -23,6 +23,15 @@ services:
     # privilege escalation; the image already runs as non-root 1001.
     cap_drop:
       - ALL
+    # The Caddy binary ships a file capability (cap_net_bind_service+ep, baked into the
+    # official caddy image). Under no-new-privileges + cap_drop:ALL the kernel refuses to
+    # exec a file-capped binary whose caps aren't in the bounding set ("exec caddy failed:
+    # Operation not permitted"), so admin-ui crash-loops. Re-add NET_BIND_SERVICE so the
+    # bounding set permits the exec — same as the edge caddy / livekit-sip. admin-ui only
+    # binds :8080, so the cap is never exercised; a future `setcap -r` in the image would
+    # let us drop even this.
+    cap_add:
+      - NET_BIND_SERVICE
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped
