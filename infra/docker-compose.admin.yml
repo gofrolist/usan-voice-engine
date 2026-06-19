@@ -21,6 +21,8 @@ services:
     # Static assets only; no inbound ports published — the edge Caddy reaches it on
     # the bridge as admin-ui:8080 (public via Cloudflare; app-layer auth). Block
     # privilege escalation; the image already runs as non-root 1001.
+    cap_drop:
+      - ALL
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped

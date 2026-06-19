@@ -25,6 +25,11 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     # No published port: scraped internally; reach the UI via SSH tunnel if needed.
+    # Already non-root (user 65534); drop all caps + block privilege escalation.
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
     restart: unless-stopped
     logging:
       driver: journald
@@ -74,6 +79,12 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     # No published port: Caddy reverse-proxies grafana:3000 (gated by Cloudflare Access).
+    # Grafana runs non-root (uid 472) and binds the unprivileged :3000; drop all
+    # caps + block privilege escalation.
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
     restart: unless-stopped
     logging:
       driver: journald

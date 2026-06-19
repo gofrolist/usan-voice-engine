@@ -31,3 +31,16 @@ tests/
 .DS_Store
 data/
 recordings/
+
+# Coverage / CI artifacts
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit*.xml
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+.python-version
