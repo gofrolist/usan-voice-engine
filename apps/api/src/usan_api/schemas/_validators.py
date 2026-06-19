@@ -17,6 +17,23 @@ PHONE_MAX_LENGTH = 20
 TIMEZONE_MAX_LENGTH = 64
 
 
+def reject_nested_dynamic_vars(v: dict[str, object]) -> dict[str, object]:
+    """Reject non-scalar dynamic_vars values (shared by call/schedule/batch schemas).
+
+    dynamic_vars values are substituted into LLM prompts and SMS bodies as strings; a
+    nested dict or list would be ``str()``-coerced into a Python repr — an
+    operator-invisible, injection-adjacent surprise. Only JSON scalars
+    (str/number/bool/null) are permitted; the byte cap is enforced separately.
+    """
+    for key, value in v.items():
+        if isinstance(value, (dict, list)):
+            raise ValueError(
+                f"dynamic_vars[{key!r}] must be a scalar (str/number/bool/null), "
+                "not a nested object or array"
+            )
+    return v
+
+
 def validate_iana_timezone(value: str) -> str:
     """Return ``value`` unchanged iff it names a resolvable IANA zone; else ValueError.
 

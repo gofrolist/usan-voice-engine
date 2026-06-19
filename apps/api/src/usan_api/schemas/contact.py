@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from usan_api.db.models import Contact
 from usan_api.schemas._validators import (
@@ -28,6 +28,11 @@ class ContactCreate(BaseModel):
 
 
 class ContactUpdate(BaseModel):
+    # extra="forbid": a PUT body carrying an unknown key (e.g. org_id, agent_profile_id,
+    # role, id) is rejected with 422 rather than silently flowing into the repository's
+    # field loop — defense against mass-assignment as the schema grows (security review).
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, max_length=200)
     phone_e164: str | None = Field(default=None, max_length=PHONE_MAX_LENGTH, pattern=E164_PATTERN)
     timezone: str | None = Field(default=None, max_length=TIMEZONE_MAX_LENGTH)

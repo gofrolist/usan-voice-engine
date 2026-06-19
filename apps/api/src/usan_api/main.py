@@ -182,6 +182,8 @@ def _install_rate_limiting(app: FastAPI, settings: Settings) -> None:
         OperatorRateLimitMiddleware,
         limit=settings.rate_limit_default,
         enabled=settings.rate_limit_enabled,
+        auth_limit=settings.rate_limit_auth,
+        trusted_proxies=settings.trusted_proxy_set,
     )
 
 

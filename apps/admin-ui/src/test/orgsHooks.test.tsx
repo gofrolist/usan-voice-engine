@@ -35,12 +35,13 @@ afterEach(() => vi.clearAllMocks());
 
 describe("useSwitchOrg", () => {
   // Switching the active org changes the result of nearly every org-scoped query, so
-  // the hook MUST invalidate the ENTIRE react-query cache (no queryKey filter), not
-  // just ["me"]. A narrower invalidation would leave the previous org's data on screen
-  // — a cross-org data-bleed in the UI. This locks that contract.
-  it("invalidates the entire query cache on success", async () => {
+  // the hook MUST REMOVE (evict) the ENTIRE react-query cache (no queryKey filter), not
+  // just invalidate it: query keys are not org-namespaced, so merely invalidating keeps
+  // serving the PREVIOUS org's data while the background refetch runs — a cross-org PHI
+  // bleed in the UI. removeQueries evicts immediately; active observers then refetch.
+  it("removes (evicts) the entire query cache on success", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+    const removeSpy = vi.spyOn(client, "removeQueries");
     postMock.mockResolvedValue({
       email: "a@x.com",
       is_super_admin: false,
@@ -55,17 +56,17 @@ describe("useSwitchOrg", () => {
     const { result } = renderHook(() => useSwitchOrg(), { wrapper });
     await result.current.mutateAsync({ organization_id: "o2" });
 
-    await waitFor(() => expect(invalidateSpy).toHaveBeenCalled());
+    await waitFor(() => expect(removeSpy).toHaveBeenCalled());
     expect(postMock).toHaveBeenCalledWith("/v1/auth/switch-org", { organization_id: "o2" });
-    // Whole-cache invalidation = called with NO filter argument.
-    expect(invalidateSpy).toHaveBeenCalledWith();
-    expect(invalidateSpy).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["me"] }));
+    // Whole-cache eviction = called with NO filter argument (not a narrow ["me"]).
+    expect(removeSpy).toHaveBeenCalledWith();
+    expect(removeSpy).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["me"] }));
   });
 
-  it("surfaces a failure as a toast and does not invalidate", async () => {
+  it("surfaces a failure as a toast and does not evict the cache", async () => {
     const { ApiError } = await import("../lib/api");
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+    const removeSpy = vi.spyOn(client, "removeQueries");
     postMock.mockRejectedValue(new ApiError(403, "no access to this organization"));
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -77,6 +78,6 @@ describe("useSwitchOrg", () => {
     await waitFor(() =>
       expect(pushToastMock).toHaveBeenCalledWith("no access to this organization", undefined),
     );
-    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(removeSpy).not.toHaveBeenCalled();
   });
 });

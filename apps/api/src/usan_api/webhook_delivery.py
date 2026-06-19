@@ -139,9 +139,17 @@ async def deliver_one(
                     ts_ms, webhook_signing.sign(secret, ts_ms, raw)
                 ),
             }
-            response = await client.post(url, content=raw, headers=headers)
-            response_code = response.status_code
-            response.raise_for_status()
+            # Stream the response and drain at most max_response_bytes: a customer-
+            # controlled receiver that returns an unbounded body could otherwise OOM the
+            # API process (groups deliver concurrently). We only need the status code.
+            async with client.stream("POST", url, content=raw, headers=headers) as response:
+                response_code = response.status_code
+                drained = 0
+                async for chunk in response.aiter_bytes():
+                    drained += len(chunk)
+                    if drained >= settings.webhook_delivery_max_response_bytes:
+                        break
+                response.raise_for_status()
         except (httpx.HTTPError, OSError, ValueError, SsrfBlocked) as exc:
             # OSError covers socket.gaierror (NXDOMAIN — the most common
             # dead-receiver mode) propagating from resolve_public_or_raise;

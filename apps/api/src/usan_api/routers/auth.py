@@ -32,6 +32,7 @@ from usan_api.db.base import AdminRole, InviteStatus
 from usan_api.db.models import Invitation
 from usan_api.db.session import get_db
 from usan_api.invites import build_accept_error_url
+from usan_api.masking import email_fingerprint
 from usan_api.repositories import admin_audit
 from usan_api.repositories import admin_users as admin_users_repo
 from usan_api.repositories import invitations as invitations_repo
@@ -157,7 +158,9 @@ async def callback(
             db, actor_email=email, action="auth.denied", entity_type="admin_user", entity_id=email
         )
         await db.commit()
-        logger.bind(email=email).warning("SSO login rejected: not allow-listed/active")
+        logger.bind(email_fp=email_fingerprint(email)).warning(
+            "SSO login rejected: not allow-listed/active"
+        )
         return _fail(status.HTTP_403_FORBIDDEN, "not authorized", settings)
 
     # B3: resolve the active org from the caller's memberships. A 0-membership non-
@@ -169,7 +172,9 @@ async def callback(
             db, actor_email=email, action="auth.denied", entity_type="admin_user", entity_id=email
         )
         await db.commit()
-        logger.bind(email=email).warning("SSO login rejected: no org membership")
+        logger.bind(email_fp=email_fingerprint(email)).warning(
+            "SSO login rejected: no org membership"
+        )
         return _fail(status.HTTP_403_FORBIDDEN, "not authorized", settings)
 
     active_org_id = None
@@ -380,7 +385,7 @@ async def logout(
                 entity_id=email,
             )
             await db.commit()
-            logger.bind(email=email).info("admin logout")
+            logger.bind(email_fp=email_fingerprint(email)).info("admin logout")
     return resp
 
 

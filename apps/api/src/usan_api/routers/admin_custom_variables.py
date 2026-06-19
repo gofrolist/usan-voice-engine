@@ -81,7 +81,12 @@ async def create_custom_variable(
         )
     except repo.DuplicateCustomVariableError as exc:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        # Static client detail — don't echo the raw exception string into the response
+        # body. The name is still recoverable from the request and the audit trail.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="a custom variable with this name already exists",
+        ) from exc
     await admin_audit.record(
         db,
         actor_email=actor,

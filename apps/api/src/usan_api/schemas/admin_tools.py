@@ -11,6 +11,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from usan_api.db.models import SmsMessage
+from usan_api.masking import mask_phone
+
 
 class QueueStatusUpdateRequest(BaseModel):
     """PATCH body for the ops-queue transitions (spec §4.3)."""
@@ -79,7 +82,7 @@ class SmsMessageSummary(BaseModel):
     id: uuid.UUID
     call_id: uuid.UUID
     contact_id: uuid.UUID
-    to_number: str
+    to_number: str  # ALWAYS masked — build via from_row(), never model_validate(row)
     template_key: str
     status: str
     telnyx_message_id: str | None = None
@@ -87,3 +90,23 @@ class SmsMessageSummary(BaseModel):
     created_at: datetime
     # NOTE: the rendered `body` is intentionally OMITTED — it may carry the contact's
     # name / contextual content (design §9); summaries stay lean and lower-PHI.
+
+    @classmethod
+    def from_row(cls, row: SmsMessage) -> SmsMessageSummary:
+        """Build the summary with the phone masked at construction (spec §4.6).
+
+        The raw E.164 in ``row.to_number`` is masked here so it NEVER enters the model —
+        a structural guarantee, replacing the prior model_validate(row).model_copy(...)
+        two-step that briefly held the raw value. ``to_number`` keeps its wire name.
+        """
+        return cls(
+            id=row.id,
+            call_id=row.call_id,
+            contact_id=row.contact_id,
+            to_number=mask_phone(row.to_number),
+            template_key=row.template_key,
+            status=row.status,
+            telnyx_message_id=row.telnyx_message_id,
+            sent_at=row.sent_at,
+            created_at=row.created_at,
+        )

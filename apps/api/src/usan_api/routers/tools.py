@@ -18,6 +18,7 @@ from usan_api.observability.custom_metrics import (
     FOLLOWUP_FLAGS_TOTAL,
     track_tool,
 )
+from usan_api.ratelimit import tool_call_within_limit
 from usan_api.repositories import activity_history as activity_history_repo
 from usan_api.repositories import agent_profiles as profiles_repo
 from usan_api.repositories import callback_requests as callback_requests_repo
@@ -77,7 +78,28 @@ from usan_api.settings import Settings, get_settings
 from usan_api.sms_outbox import flush_pending_sms
 from usan_api.summarization import summarize_call
 
-router = APIRouter(prefix="/v1/tools", tags=["tools"])
+
+def _enforce_tool_call_rate(
+    claims: dict[str, Any] = Depends(require_service_token),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    """Per-call_id ceiling on the tool plane (security review): bounds a runaway/looping
+    or hijacked agent token without throttling a legitimate call. require_service_token is
+    FastAPI-cached, so this reuses the same decoded claims the route handler receives.
+    """
+    call_id = str(claims.get("call_id", ""))
+    if not tool_call_within_limit(call_id, settings.tool_call_rate):
+        raise HTTPException(
+            status_code=429,
+            detail="tool call rate limit exceeded for this call",
+        )
+
+
+router = APIRouter(
+    prefix="/v1/tools",
+    tags=["tools"],
+    dependencies=[Depends(_enforce_tool_call_rate)],
+)
 
 
 async def _authorize_call(call_id: uuid.UUID, claims: dict[str, Any], db: AsyncSession) -> Call:

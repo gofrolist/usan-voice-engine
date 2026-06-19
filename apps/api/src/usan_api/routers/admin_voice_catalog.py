@@ -94,15 +94,15 @@ async def _synthesize_sample(settings: Settings, voice_id: str, model: str) -> b
             audio = resp.content
     except httpx.HTTPStatusError as exc:
         upstream = exc.response.status_code
-        # SAMPLE_PHRASE is PHI-free, so Cartesia's error body is safe to log — and it is
-        # the only signal that explains the failure (e.g. an exhausted credit balance).
+        # Log the upstream STATUS only — never the response body. Even though SAMPLE_PHRASE
+        # is PHI-free, the Cartesia error body can carry account/quota detail (secrets-
+        # adjacent) and bloats the retained sink; the status (e.g. 402) is the actionable
+        # signal and is surfaced to the operator in the HTTPException detail below.
         logger.warning(
-            "Cartesia voice-sample synthesis failed: voice={voice} model={model} "
-            "upstream={status} body={body}",
+            "Cartesia voice-sample synthesis failed: voice={voice} model={model} upstream={status}",
             voice=voice_id,
             model=model,
             status=upstream,
-            body=exc.response.text[:500],
         )
         if upstream == status.HTTP_402_PAYMENT_REQUIRED:
             raise HTTPException(

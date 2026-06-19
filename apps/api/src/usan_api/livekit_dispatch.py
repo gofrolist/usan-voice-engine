@@ -47,8 +47,8 @@ class OutboundProvisioningError(Exception):
 def build_livekit_api(settings: Settings) -> api.LiveKitAPI:
     return api.LiveKitAPI(
         url=settings.livekit_http_url,
-        api_key=settings.livekit_api_key,
-        api_secret=settings.livekit_api_secret,
+        api_key=settings.livekit_api_key.get_secret_value(),
+        api_secret=settings.livekit_api_secret.get_secret_value(),
     )
 
 
@@ -76,7 +76,10 @@ def mint_browser_token(
         can_subscribe=True,
     )
     token = (
-        api.AccessToken(settings.livekit_api_key, settings.livekit_api_secret)
+        api.AccessToken(
+            settings.livekit_api_key.get_secret_value(),
+            settings.livekit_api_secret.get_secret_value(),
+        )
         .with_identity(identity)
         .with_grants(grants)
         .with_ttl(timedelta(seconds=_BROWSER_TOKEN_TTL_S))
@@ -197,7 +200,11 @@ async def resolve_outbound_trunk_id(settings: Settings) -> str:
 
     caller_id = settings.telnyx_caller_id
     sip_user = settings.telnyx_sip_username
-    sip_pass = settings.telnyx_sip_password
+    sip_pass = (
+        settings.telnyx_sip_password.get_secret_value()
+        if settings.telnyx_sip_password is not None
+        else None
+    )
     if not (caller_id and sip_user and sip_pass):
         raise OutboundDispatchError(
             "outbound auto-provisioning requires TELNYX_CALLER_ID, "
@@ -327,8 +334,11 @@ async def dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
     still marks the call FAILED instead of leaving it stuck at ``dialing``."""
     try:
         await _dial_and_classify(call_id, settings)
-    except Exception:
-        logger.bind(call_id=str(call_id)).exception("dial_and_classify crashed")
+    except Exception as exc:
+        # Type name only — never .exception()/str(exc): the traceback message can embed
+        # the contact's E.164 phone or SIP participant identity, which must not reach the
+        # retained Cloud Logging sink (Constitution II PHI containment).
+        logger.bind(call_id=str(call_id), err=type(exc).__name__).error("dial_and_classify crashed")
         try:
             factory = get_session_factory()
             async with factory() as db:
@@ -544,8 +554,9 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
             return
 
         await dial_and_classify(call_id, settings)
-    except Exception:
-        logger.bind(call_id=str(call_id)).exception("dispatch_and_dial crashed")
+    except Exception as exc:
+        # Type name only (see dial_and_classify): the traceback message can carry PHI.
+        logger.bind(call_id=str(call_id), err=type(exc).__name__).error("dispatch_and_dial crashed")
         try:
             async with factory() as db:
                 failed = await calls_repo.mark_failed_if_active(

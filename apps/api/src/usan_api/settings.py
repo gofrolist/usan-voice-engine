@@ -19,8 +19,12 @@ class Settings(BaseSettings):
     # tenant-context resolver maps every request to this single seeded org until P2
     # introduces per-user org resolution; behavior is unchanged with one org.
     default_org_slug: str = Field(default="usan", alias="DEFAULT_ORG_SLUG")
-    livekit_api_key: str = Field(..., min_length=1, alias="LIVEKIT_API_KEY")
-    livekit_api_secret: str = Field(..., min_length=32, alias="LIVEKIT_API_SECRET")
+    # Both halves of the LiveKit credential pair are held as SecretStr so neither the
+    # signing secret nor the paired key lands unmasked in repr()/model_dump()/tracebacks
+    # (the key is half a credential and must not be logged either). Call sites use
+    # .get_secret_value() (livekit_webhooks, livekit_dispatch).
+    livekit_api_key: SecretStr = Field(..., min_length=1, alias="LIVEKIT_API_KEY")
+    livekit_api_secret: SecretStr = Field(..., min_length=32, alias="LIVEKIT_API_SECRET")
     livekit_url: str = Field(..., min_length=1, alias="LIVEKIT_URL")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO", alias="LOG_LEVEL"
@@ -38,7 +42,10 @@ class Settings(BaseSettings):
     telnyx_caller_id: str | None = Field(default=None, alias="TELNYX_CALLER_ID")
     telnyx_sip_host: str = Field(default="sip.telnyx.com", alias="TELNYX_SIP_HOST")
     telnyx_sip_username: str | None = Field(default=None, alias="TELNYX_SIP_USERNAME")
-    telnyx_sip_password: str | None = Field(default=None, alias="TELNYX_SIP_PASSWORD")
+    # SecretStr: the SIP trunk password authenticates outbound calling and must never
+    # surface in repr()/logs/tracebacks. Blank => None via _blank_to_none below; the one
+    # consumer (livekit_dispatch trunk provisioning) calls .get_secret_value().
+    telnyx_sip_password: SecretStr | None = Field(default=None, alias="TELNYX_SIP_PASSWORD")
     agent_name: str = Field(default="usan-agent", alias="AGENT_NAME")
     outbound_ringing_timeout_s: int = Field(
         default=45, ge=5, le=120, alias="OUTBOUND_RINGING_TIMEOUT_S"
@@ -84,6 +91,22 @@ class Settings(BaseSettings):
     )
     rate_limit_enabled: bool = Field(default=True, alias="RATE_LIMIT_ENABLED")
     rate_limit_default: str = Field(default="60/minute", alias="RATE_LIMIT_DEFAULT")
+    # Tighter, dedicated bucket for the pre-auth /v1/auth/* endpoints (login/callback):
+    # credential-stuffing and OAuth-state probing must not share the broad operator
+    # budget that bulk reads can exhaust. Keyed per client IP, like the default bucket.
+    rate_limit_auth: str = Field(default="10/minute", alias="RATE_LIMIT_AUTH")
+    # Per-call ceiling on the agent tool plane (/v1/tools/*), keyed on the call_id JWT
+    # claim. The tool routes are excluded from the operator middleware so a busy call is
+    # never throttled; this bound only trips a runaway/looping or hijacked agent token
+    # (a legitimate call makes far fewer tool invocations per minute).
+    tool_call_rate: str = Field(default="120/minute", alias="TOOL_CALL_RATE")
+    # Comma-separated allow-list of immediate-peer IPs permitted to set X-Forwarded-For
+    # (the reverse proxy hop, e.g. the Caddy container). When EMPTY the legacy behavior
+    # holds: the XFF first hop is trusted unconditionally (correct only because Caddy +
+    # Cloudflare AOP mTLS front the API in prod). Set it to the proxy's peer IP(s) to
+    # reject spoofed XFF from any other origin (defense-in-depth for the rate-limit key
+    # and the PHI audit trail). See client_ip.py.
+    trusted_proxy_ips: str = Field(default="", alias="TRUSTED_PROXY_IPS")
     docs_enabled: bool = Field(default=False, alias="DOCS_ENABLED")
     webhook_max_age_s: int = Field(default=300, ge=30, le=3600, alias="WEBHOOK_MAX_AGE_S")
     # When set, a background poller purges PHI (transcripts + terminal-call dynamic
@@ -175,6 +198,13 @@ class Settings(BaseSettings):
     )
     webhook_delivery_timeout_s: int = Field(
         default=10, ge=1, le=60, alias="WEBHOOK_DELIVERY_TIMEOUT_S"
+    )
+    # Hard cap on how many response bytes we buffer from a customer-controlled receiver
+    # endpoint. The status code is all we use; a malicious/buggy endpoint that streams an
+    # unbounded body could otherwise OOM the API process (delivery runs many groups
+    # concurrently). 64 KiB is ample for any real ack body. See webhook_delivery.deliver_one.
+    webhook_delivery_max_response_bytes: int = Field(
+        default=65536, ge=1024, le=1048576, alias="WEBHOOK_DELIVERY_MAX_RESPONSE_BYTES"
     )
     webhook_delivery_circuit_breaker_threshold: int = Field(
         default=10, ge=1, le=100, alias="WEBHOOK_DELIVERY_CIRCUIT_BREAKER_THRESHOLD"
@@ -371,6 +401,16 @@ class Settings(BaseSettings):
         """Allow-list bootstrap emails, trimmed + lowercased, blanks dropped."""
         return [e.strip().lower() for e in self.admin_bootstrap_emails.split(",") if e.strip()]
 
+    @property
+    def trusted_proxy_set(self) -> frozenset[str]:
+        """Parsed TRUSTED_PROXY_IPS — the peer IPs allowed to set X-Forwarded-For.
+
+        Empty (the default) means legacy behavior: trust the XFF first hop
+        unconditionally (correct only because Caddy + Cloudflare AOP mTLS front the API
+        in prod). See client_ip.client_ip.
+        """
+        return frozenset(ip.strip() for ip in self.trusted_proxy_ips.split(",") if ip.strip())
+
     def warn_if_db_tls_disabled(self) -> None:
         """Warn (never fail) when a non-local DATABASE_URL has no TLS configured.
 
@@ -396,6 +436,40 @@ class Settings(BaseSettings):
             "PHI may transit unencrypted — append ?ssl=require (asyncpg rejects sslmode=)",
             db_host=host,
         )
+
+    def _db_host_is_local(self) -> bool:
+        """True when DATABASE_URL points at loopback/local (dev container, test)."""
+        host = (urlsplit(self.database_url.get_secret_value()).hostname or "").lower()
+        return host in _LOCAL_HOSTS
+
+    def warn_if_sso_without_hd(self) -> None:
+        """Warn (never fail) when SSO is configured without a hosted-domain restriction.
+
+        Without GOOGLE_OAUTH_HD the `hd` claim is not checked, so the admin_users
+        allow-list is the only barrier — any personal Google account in the list (or a
+        compromised one) can authenticate. Set GOOGLE_OAUTH_HD to the Workspace domain
+        in prod for defense-in-depth (oauth.py enforces it when set).
+        """
+        if self.sso_enabled and not self.google_oauth_hd:
+            logger.warning(
+                "Google SSO is enabled but GOOGLE_OAUTH_HD is unset; the hosted-domain "
+                "(hd) claim is NOT enforced — only the admin_users allow-list gates login. "
+                "Set GOOGLE_OAUTH_HD to your Workspace domain for defense-in-depth."
+            )
+
+    def warn_if_phi_retention_unbounded(self) -> None:
+        """Warn (never fail) when a non-local deployment has no PHI retention window.
+
+        PHI_RETENTION_DAYS=None disables the purge poller, so transcripts and terminal
+        dynamic_vars are kept indefinitely. That is fine for local/dev but a HIPAA
+        minimization gap for a real deployment — surface it so operators set a window.
+        """
+        if self.phi_retention_days is None and not self._db_host_is_local():
+            logger.warning(
+                "PHI_RETENTION_DAYS is unset and DATABASE_URL is non-local; PHI "
+                "(transcripts, terminal-call dynamic vars) is retained indefinitely. "
+                "Set PHI_RETENTION_DAYS to a HIPAA-compliant window to enable the purge."
+            )
 
 
 def _field_names(errors: list[Any], *, error_type: str | None = None) -> list[str]:
@@ -424,4 +498,6 @@ def get_settings() -> Settings:
         invalid = _field_names(e.errors())
         raise ValueError(f"Invalid configuration for: {', '.join(invalid)}") from e
     settings.warn_if_db_tls_disabled()
+    settings.warn_if_sso_without_hd()
+    settings.warn_if_phi_retention_unbounded()
     return settings

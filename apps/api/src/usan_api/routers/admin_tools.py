@@ -205,12 +205,9 @@ async def list_sms_messages(
     except SQLAlchemyError:
         await db.rollback()
         raise
-    return [
-        SmsMessageSummary.model_validate(r).model_copy(
-            update={"to_number": mask_phone(r.to_number)}  # spec §4.6: field keeps its
-        )  # name; content becomes masked
-        for r in rows
-    ]
+    # from_row masks to_number at construction — the raw E.164 never enters the model
+    # (spec §4.6; replaces the prior model_validate+model_copy two-step).
+    return [SmsMessageSummary.from_row(r) for r in rows]
 
 
 # --- PHI-free queue counts (spec §4.5) -----------------------------------------

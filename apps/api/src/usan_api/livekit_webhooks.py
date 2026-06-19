@@ -18,7 +18,10 @@ def verify_livekit_webhook(body: str, auth_token: str, settings: Settings) -> ap
     one dimension only; the signature is still required).
     """
     receiver = api.WebhookReceiver(
-        api.TokenVerifier(settings.livekit_api_key, settings.livekit_api_secret)
+        api.TokenVerifier(
+            settings.livekit_api_key.get_secret_value(),
+            settings.livekit_api_secret.get_secret_value(),
+        )
     )
     event = receiver.receive(body, auth_token)
     # Skip the age check only when there is genuinely no timestamp. ``> 0`` (not mere

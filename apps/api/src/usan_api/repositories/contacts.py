@@ -6,6 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.models import AgentProfile, Contact
 
+# Columns an operator PUT /v1/contacts/{id} may set, mapped 1:1 from ContactUpdate's
+# fields. The repo enforces this allow-list itself (not just the schema) so a privileged
+# column — org_id, agent_profile_id, id, created_at — can never be written through the
+# generic update path even if a future caller passes it (mass-assignment guard).
+_UPDATABLE_CONTACT_FIELDS = frozenset(
+    {"name", "phone_e164", "timezone", "external_id", "preferred_voice"}
+)
+
 
 async def create_contact(
     db: AsyncSession,
@@ -42,7 +50,15 @@ async def update_contact(
     if contact is None:
         return None
     for key, value in fields.items():
-        setattr(contact, "meta" if key == "metadata" else key, value)
+        if key == "metadata":
+            contact.meta = value
+        elif key in _UPDATABLE_CONTACT_FIELDS:
+            setattr(contact, key, value)
+        else:
+            # ContactUpdate forbids extras (422), so this only fires for a direct repo
+            # caller passing an unexpected key — fail loudly rather than blind-setattr an
+            # arbitrary ORM attribute.
+            raise ValueError(f"unexpected contact field: {key!r}")
     await db.flush()
     await db.refresh(contact)
     return contact
