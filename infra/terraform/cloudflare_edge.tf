@@ -24,15 +24,17 @@ resource "cloudflare_zone_setting" "always_use_https" {
   value      = "on"
 }
 
-# Zone-level Authenticated Origin Pulls: CF presents its client cert to the
-# origin on every proxied request. Caddy requires + verifies it (infra/Caddyfile).
-# v5 takes a `config` list attribute (not a top-level `enabled`).
-resource "cloudflare_authenticated_origin_pulls" "zone" {
-  count   = local.manage_dns ? 1 : 0
-  zone_id = var.cloudflare_zone_id
-  config = [{
-    enabled = true
-  }]
+# Zone-global Authenticated Origin Pulls: CF presents its (shared) client cert to
+# the origin on every proxied request; Caddy requires + verifies it (infra/Caddyfile).
+# This is the zone-wide AOP toggle (the `tls_client_auth` zone setting). NOTE: the
+# `cloudflare_authenticated_origin_pulls` resource in v5 is the PER-HOSTNAME form
+# (requires a hostname + custom cert) — not what we want for the shared-cert global
+# enablement, so we use the zone setting instead.
+resource "cloudflare_zone_setting" "aop" {
+  count      = local.manage_dns ? 1 : 0
+  zone_id    = var.cloudflare_zone_id
+  setting_id = "tls_client_auth"
+  value      = "on"
 }
 
 # Custom WAF rules (Free allows up to 5). Defense-in-depth over the Caddy 403s.
@@ -92,10 +94,11 @@ resource "cloudflare_ruleset" "rate_limit" {
       expression = "(http.host eq \"admin.${data.cloudflare_zone.this[0].name}\" and starts_with(http.request.uri.path, \"/v1/auth\"))"
       enabled    = true
       ratelimit = {
-        characteristics     = ["ip.src", "cf.colo.id"]
-        period              = 60
+        characteristics = ["ip.src", "cf.colo.id"]
+        # Cloudflare Free only permits period = 10 and mitigation_timeout = 10.
+        period              = 10
         requests_per_period = 30
-        mitigation_timeout  = 60
+        mitigation_timeout  = 10
       }
     },
   ]
@@ -147,7 +150,7 @@ resource "cloudflare_zero_trust_access_application" "grafana" {
   domain                    = "grafana.${data.cloudflare_zone.this[0].name}"
   type                      = "self_hosted"
   session_duration          = "24h"
-  policies                  = [cloudflare_zero_trust_access_policy.grafana_operators[0].id]
+  policies                  = [{ id = cloudflare_zero_trust_access_policy.grafana_operators[0].id }]
   allowed_idps              = local.use_google_idp ? [cloudflare_zero_trust_access_identity_provider.google[0].id] : null
   auto_redirect_to_identity = local.use_google_idp
 }
