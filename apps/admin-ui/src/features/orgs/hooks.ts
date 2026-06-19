@@ -5,7 +5,12 @@ import { pushToast } from "../../components/ui/toast";
 import type { Me, OrgCreate, Organization, SwitchOrgRequest } from "../../types/api";
 
 // Switching the active org changes the result of essentially every query, so on
-// success we invalidate the entire cache and let /me refetch the full org list.
+// success we REMOVE (not merely invalidate) the entire cache and let active queries
+// refetch under the new org. removeQueries evicts the cached rows immediately, whereas
+// invalidateQueries keeps serving the stale data during the background refetch — and
+// because query keys are not org-namespaced, that stale data is the PREVIOUS org's PHI
+// (a mounted ContactsPage/CallsPage would briefly render it). Active observers refetch
+// automatically once their cache entry is gone, so the new org's data still loads.
 // We deliberately do NOT setQueryData(["me"], resp): the switch-org response is a
 // partial Me whose `orgs` is [].
 export function useSwitchOrg() {
@@ -13,7 +18,7 @@ export function useSwitchOrg() {
   return useMutation<Me, ApiError, SwitchOrgRequest>({
     mutationFn: (body) => api.post<Me>("/v1/auth/switch-org", body),
     onSuccess: () => {
-      void qc.invalidateQueries();
+      qc.removeQueries();
     },
     onError: (err) => pushToast(err.detail),
   });
