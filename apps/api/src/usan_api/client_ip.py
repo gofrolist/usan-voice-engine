@@ -12,13 +12,29 @@ into the single proxy/edge IP.
 from starlette.requests import Request
 
 
-def client_ip(request: Request) -> str:
-    """The real client IP: the X-Forwarded-For first hop behind Caddy, else the peer."""
+def client_ip(request: Request, trusted_proxies: frozenset[str] = frozenset()) -> str:
+    """The real client IP: the X-Forwarded-For first hop behind Caddy, else the peer.
+
+    ``trusted_proxies`` gates whether the X-Forwarded-For header is honored:
+
+    - **empty** (the default): legacy behavior — trust the XFF first hop
+      unconditionally. Correct in prod because Caddy + Cloudflare AOP mTLS are the only
+      path to the API, so the header is always proxy-written.
+    - **non-empty** (the rate-limit middleware passes ``settings.trusted_proxy_set``):
+      trust XFF ONLY when the immediate peer (``request.client.host``) is a configured
+      proxy; otherwise a direct/co-resident caller is spoofing XFF, so the real socket
+      peer is used instead — closing the rate-limit-bypass / forged-audit vector for any
+      future direct exposure.
+
+    Pure (no global-state read) so it is trivially unit-testable.
+    """
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         # A header like ", 1.2.3.4" yields an empty first hop; don't collapse every
         # such request into one shared bucket/audit entry — fall back to the peer.
         candidate = forwarded.split(",")[0].strip()
         if candidate:
-            return candidate
+            peer = request.client.host if request.client else None
+            if not trusted_proxies or peer in trusted_proxies:
+                return candidate
     return request.client.host if request.client else "unknown"

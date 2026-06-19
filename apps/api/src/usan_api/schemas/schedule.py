@@ -27,6 +27,7 @@ from usan_api.schedule_windows import (
 
 # dynamic_vars is persisted to JSONB and relayed verbatim as LiveKit dispatch
 # metadata, so schedules reuse the one canonical cap from the call schemas.
+from usan_api.schemas._validators import reject_nested_dynamic_vars
 from usan_api.schemas.call import MAX_DYNAMIC_VARS_BYTES
 
 # The GET /v1/schedules ?limit= clamp lives with the read it bounds:
@@ -55,6 +56,7 @@ def _validated_window(start: time, end: time) -> None:
 
 
 def _capped_vars(v: dict[str, Any]) -> dict[str, Any]:
+    reject_nested_dynamic_vars(v)
     if len(json.dumps(v)) > MAX_DYNAMIC_VARS_BYTES:
         raise ValueError(f"dynamic_vars must serialize to <= {MAX_DYNAMIC_VARS_BYTES} bytes")
     return v

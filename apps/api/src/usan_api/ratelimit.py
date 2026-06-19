@@ -18,7 +18,7 @@ the direct peer — see infra/Caddyfile), so we key on its first hop, not the pr
 
 import time
 
-from limits import parse
+from limits import RateLimitItem, parse
 from limits.storage import MemoryStorage
 from limits.strategies import FixedWindowRateLimiter
 from starlette.requests import Request
@@ -53,18 +53,55 @@ def _is_operator_route(method: str, path: str) -> bool:
     return path.startswith("/v1/calls/") and method == "GET"
 
 
+# Per-call_id fixed-window limiter for the agent tool plane (/v1/tools/*). Separate from
+# the operator middleware: those routes are intentionally NOT IP-throttled (a busy call
+# pipeline must flow), but a runaway/looping or hijacked agent token still needs a ceiling
+# so it can't flood DB writes / SMS / family notifications. Keyed on the call_id claim.
+_tool_call_limiter = FixedWindowRateLimiter(MemoryStorage())
+
+
+def tool_call_within_limit(call_id: str, limit: str) -> bool:
+    """Record one tool call for ``call_id``; return False once the window is exhausted.
+
+    In-memory + per-process (like the operator limiter): correct for the single-worker
+    deployment, and a hijacked token's blast radius is bounded per worker regardless.
+    """
+    return _tool_call_limiter.hit(parse(limit), "tool_call", call_id)
+
+
 class OperatorRateLimitMiddleware:
     """Fixed-window per-client throttle on the operator plane; no-op when disabled."""
 
-    def __init__(self, app: ASGIApp, *, limit: str, enabled: bool) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        limit: str,
+        enabled: bool,
+        auth_limit: str,
+        trusted_proxies: frozenset[str] = frozenset(),
+    ) -> None:
         self.app = app
         self.enabled = enabled
         self._limiter = FixedWindowRateLimiter(MemoryStorage())
         self._limit = parse(limit)
+        # Tighter, separate bucket for the pre-auth /v1/auth/* endpoints so credential
+        # stuffing / OAuth-state probing can't piggy-back on a budget that bulk operator
+        # reads have already spent (distinct namespace => independent counter).
+        self._auth_limit = parse(auth_limit)
+        # When configured, only honor X-Forwarded-For from these proxy peers — so a
+        # spoofed XFF can't forge the rate-limit key (the unauthenticated bypass vector).
+        self._trusted_proxies = trusted_proxies
 
-    def _retry_after(self, key: str) -> int:
+    def _limit_for(self, path: str) -> tuple[RateLimitItem, str]:
+        """(limit, bucket-namespace) for a path: the tight auth bucket vs the operator one."""
+        if path.startswith("/v1/auth/"):
+            return self._auth_limit, "auth"
+        return self._limit, "operator"
+
+    def _retry_after(self, limit: RateLimitItem, namespace: str, key: str) -> int:
         """Seconds until the client's window resets, for the Retry-After header (>=1)."""
-        stats = self._limiter.get_window_stats(self._limit, "operator", key)
+        stats = self._limiter.get_window_stats(limit, namespace, key)
         return max(1, int(stats.reset_time - time.time()))
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -72,15 +109,17 @@ class OperatorRateLimitMiddleware:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
-        if _is_operator_route(request.method, request.url.path):
-            key = client_ip(request)
-            if not self._limiter.hit(self._limit, "operator", key):
+        path = request.url.path
+        if _is_operator_route(request.method, path):
+            key = client_ip(request, self._trusted_proxies)
+            limit, namespace = self._limit_for(path)
+            if not self._limiter.hit(limit, namespace, key):
                 # RFC 9110 §15.5.30: a 429 SHOULD tell the client when to retry, so a
                 # well-behaved caller backs off instead of hammering the window.
                 response = JSONResponse(
                     {"detail": "rate limit exceeded"},
                     status_code=429,
-                    headers={"Retry-After": str(self._retry_after(key))},
+                    headers={"Retry-After": str(self._retry_after(limit, namespace, key))},
                 )
                 await response(scope, receive, send)
                 return

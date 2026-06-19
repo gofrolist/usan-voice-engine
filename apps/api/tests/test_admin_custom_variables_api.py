@@ -77,7 +77,9 @@ def test_create_duplicate_409(client, super_admin_acting_session):
     assert _create(client, "pet_name").status_code == 201
     dup = _create(client, "pet_name")
     assert dup.status_code == 409
-    assert "pet_name" in dup.json()["detail"]
+    # Detail is a static message (the raw variable name is no longer echoed into the
+    # response body — security review); the 409 status is the contract.
+    assert "already exists" in dup.json()["detail"]
 
 
 def test_create_bad_slug_422(client, super_admin_acting_session):

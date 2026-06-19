@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
@@ -7,6 +8,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from usan_api.db.models import Call, Transcript
+from usan_api.schemas._validators import reject_nested_dynamic_vars
+
+# Inbound caller-ID guard: reject ONLY genuine log-forging / injection bytes — control
+# characters (newlines, NUL, DEL). Everything printable is allowed on purpose: a SIP
+# From-header caller-ID can legitimately carry display-name / parameter punctuation
+# (``<``, ``>``, ``"``, ``;tag=``, ``=``) that to_e164() then strips to recover the
+# number (calls.py), so rejecting it would silently de-personalize a known caller. The
+# pre-existing max_length=32 bounds length; SQL/template metacharacters are inert here
+# (the lookup is a parameterized query and the value is normalized before any use).
+_INBOUND_CALLER_ID_UNSAFE = re.compile(r"[\x00-\x1f\x7f]")
 
 # Cap the serialized dynamic_vars payload: it is persisted to JSONB and relayed
 # verbatim as LiveKit agent-dispatch metadata, so it must stay small.
@@ -28,6 +39,7 @@ class CreateCallRequest(BaseModel):
     @field_validator("dynamic_vars")
     @classmethod
     def _cap_dynamic_vars(cls, v: dict[str, Any]) -> dict[str, Any]:
+        reject_nested_dynamic_vars(v)
         if len(json.dumps(v)) > MAX_DYNAMIC_VARS_BYTES:
             raise ValueError(f"dynamic_vars must serialize to <= {MAX_DYNAMIC_VARS_BYTES} bytes")
         return v
@@ -145,6 +157,20 @@ class InboundCallRequest(BaseModel):
     phone_e164: str | None = Field(default=None, max_length=32)
     livekit_room: str = Field(min_length=1, max_length=255)
     sip_call_id: str | None = Field(default=None, max_length=255)
+
+    @field_validator("phone_e164")
+    @classmethod
+    def _caller_id_charset(cls, v: str | None) -> str | None:
+        # Lenient guard (NOT strict E.164): blank => None; otherwise the value must be a
+        # plausible phone/SIP caller-ID. to_e164() still normalizes it downstream.
+        if v is None:
+            return None
+        s = v.strip()
+        if not s:
+            return None
+        if _INBOUND_CALLER_ID_UNSAFE.search(s):
+            raise ValueError("phone_e164 contains control characters")
+        return s
 
 
 class InboundCallResponse(BaseModel):

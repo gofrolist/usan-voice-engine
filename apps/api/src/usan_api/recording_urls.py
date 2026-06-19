@@ -45,11 +45,19 @@ async def presigned_recording_url(
             ttl,
             expected_bucket=settings.gcs_bucket,
         )
-    except Exception:
-        # Keep the silent-None fallback for the caller, but capture the traceback so
-        # operators can tell a bucket-mismatch/path rejection from a transient GCS or
-        # credential failure (this path was hardened with expected_bucket=).
-        logger.bind(call_id=str(call.id)).opt(exception=True).warning(
+    except ValueError:
+        # Bucket-mismatch / path rejection: generate_signed_url's message embeds the
+        # gs:// URI (which encodes call identity / is PHI-adjacent), so log only the
+        # call_id + a static reason — never the traceback — into the locked sink.
+        logger.bind(call_id=str(call.id)).warning(
+            "Failed to sign recording URL (rejected by bucket/path validation)"
+        )
+        return None
+    except Exception as exc:
+        # Transient GCS / credential failure: keep the silent-None fallback and record
+        # the exception TYPE NAME only (no traceback, no URI) so operators can still
+        # distinguish failure modes without leaking the gs:// path.
+        logger.bind(call_id=str(call.id), err=type(exc).__name__).warning(
             "Failed to sign recording URL"
         )
         return None

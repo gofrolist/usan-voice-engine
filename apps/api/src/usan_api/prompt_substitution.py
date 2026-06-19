@@ -61,7 +61,7 @@ _LEGACY_SLOTS = ("contact_name", "last_check_in_line")
 # Control chars + format-slot braces + invisible/directional chars stripped from any
 # admin-supplied string before it reaches an LLM prompt. Mirrors
 # services/agent sanitize._PROMPT_UNSAFE byte-for-byte.
-_PROMPT_UNSAFE = re.compile(r"[{}\x00-\x1f\x7f\x85­​-‏  ‪-‮⁠-⁤﻿]")
+_PROMPT_UNSAFE = re.compile(r"[{}\x00-\x1f\x7f\x85­​-‏ - ‪-‮⁠-⁤﻿]")
 
 
 def sanitize_prompt_value(value: Any, *, max_len: int) -> str:

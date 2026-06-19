@@ -25,8 +25,8 @@ def test_settings_loads_from_env(monkeypatch):
     s = get_settings()
 
     assert s.database_url.get_secret_value() == "postgresql://u:p@host/db"
-    assert s.livekit_api_key == "key"
-    assert s.livekit_api_secret == "a" * 32
+    assert s.livekit_api_key.get_secret_value() == "key"
+    assert s.livekit_api_secret.get_secret_value() == "a" * 32
     assert s.livekit_url == "ws://livekit:7880"
     assert s.log_level == "DEBUG"
 
@@ -151,7 +151,7 @@ def test_outbound_autoprovision_fields_from_env(monkeypatch):
     s = Settings()
 
     assert s.telnyx_sip_username == "user1"
-    assert s.telnyx_sip_password == "pass1"
+    assert s.telnyx_sip_password.get_secret_value() == "pass1"
     assert s.telnyx_sip_host == "sip.example.com"
     assert s.livekit_outbound_trunk_name == "custom-trunk"
 
@@ -542,3 +542,29 @@ def test_invite_ttl_hours_out_of_range_rejected(monkeypatch, bad):
     monkeypatch.setenv("INVITE_TTL_HOURS", bad)
     with pytest.raises(ValueError, match="INVITE_TTL_HOURS"):
         Settings()
+
+
+def test_credential_fields_are_masked_but_retrievable(monkeypatch):
+    # Security review: the LiveKit pair + SIP password are SecretStr, so they never
+    # surface in repr()/model_dump_json() (which feed the retained log sink), yet remain
+    # retrievable via .get_secret_value().
+    _base_env(monkeypatch)
+    monkeypatch.setenv("LIVEKIT_API_KEY", "lk-key-value")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "z" * 40)
+    monkeypatch.setenv("TELNYX_SIP_PASSWORD", "supersecretpw")
+    s = get_settings()
+    blob = repr(s) + s.model_dump_json()
+    for secret in ("lk-key-value", "z" * 40, "supersecretpw"):
+        assert secret not in blob
+    assert s.livekit_api_key.get_secret_value() == "lk-key-value"
+    assert s.livekit_api_secret.get_secret_value() == "z" * 40
+    assert s.telnyx_sip_password.get_secret_value() == "supersecretpw"
+
+
+def test_trusted_proxy_set_parsing(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", " 10.0.0.1, 10.0.0.2 ,")
+    assert get_settings().trusted_proxy_set == frozenset({"10.0.0.1", "10.0.0.2"})
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "")
+    get_settings.cache_clear()
+    assert get_settings().trusted_proxy_set == frozenset()

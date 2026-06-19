@@ -128,7 +128,9 @@ async def _create_and_dispatch(
         )
         await calls_repo.schedule_retry(db, call.id)
         await db.commit()
-        logger.bind(call_id=str(call.id)).exception("Agent dispatch failed")
+        # Type name only — never .exception(): the dispatch traceback can embed the
+        # contact's phone/SIP identity (PHI). exc_type is already persisted on the call.
+        logger.bind(call_id=str(call.id), err=type(exc).__name__).error("Agent dispatch failed")
         raise HTTPException(status_code=502, detail="failed to dispatch outbound call") from exc
 
     dialing = await calls_repo.set_status(db, call.id, CallStatus.DIALING)
