@@ -122,40 +122,44 @@ export const fieldMeta: Record<string, FieldMeta> = {
     help: "Extra phrases that signal a voicemail. Empty = built-in patterns.",
   },
 
-  // Speech advanced (all advanced)
+  // Speech advanced (all advanced). The "plugin default (N)" values are what applies when a
+  // field is left blank: for VAD + endpointing + interruption the agent omits the param, so the
+  // LiveKit Agents 1.5.14 / Silero VAD library default applies; turn detection is the exception —
+  // blank/None is mapped agent-side to EnglishModel ("english"), not a library fall-through. See
+  // services/agent/src/usan_agent/pipeline.py. Re-verify these on a livekit-agents bump.
   "speech_advanced.vad_min_silence_s": {
     label: "VAD min silence (s)",
-    help: "0–5. Blank = plugin default.",
+    help: "0–5. Blank = plugin default (0.55).",
     advanced: true,
   },
   "speech_advanced.vad_activation_threshold": {
     label: "VAD activation threshold",
-    help: "0–1. Blank = plugin default.",
+    help: "0–1. Blank = plugin default (0.5).",
     advanced: true,
   },
   "speech_advanced.turn_detection": {
     label: "Turn detection",
-    help: "english | multilingual | vad. Blank = plugin default.",
+    help: "english | multilingual | vad. Blank = plugin default (english).",
     advanced: true,
   },
   "speech_advanced.min_endpointing_delay_s": {
     label: "Min endpointing delay (s)",
-    help: "0–10. Must be <= max. Blank = plugin default.",
+    help: "0–10. Must be <= max. Blank = plugin default (0.5).",
     advanced: true,
   },
   "speech_advanced.max_endpointing_delay_s": {
     label: "Max endpointing delay (s)",
-    help: "0–30. Blank = plugin default.",
+    help: "0–30. Blank = plugin default (3.0).",
     advanced: true,
   },
   "speech_advanced.min_interruption_duration_s": {
     label: "Min interruption duration (s)",
-    help: "0–5. Blank = plugin default.",
+    help: "0–5. Blank = plugin default (0.5).",
     advanced: true,
   },
   "speech_advanced.min_interruption_words": {
     label: "Min interruption words",
-    help: "0–20. Blank = plugin default.",
+    help: "0–20. Blank = plugin default (0 = no word-count gate; the min duration above still applies).",
     advanced: true,
   },
 
