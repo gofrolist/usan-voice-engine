@@ -75,7 +75,11 @@ export const fieldMeta: Record<string, FieldMeta> = {
     label: "TTS model",
     help: "Override the TTS model for this voice. Blank = the voice's suggested model / plugin default.",
   },
-  "voice.speed": { label: "Speech speed", help: "0.25–4.0. Blank = default." },
+  "voice.speed": {
+    label: "Speech speed",
+    // Multiplier (1.0 = normal). Blank sends nothing to Cartesia, so its "normal" speed applies.
+    help: "0.25–4.0 (1.0 = normal). Blank = Cartesia default (normal).",
+  },
   "voice.language": { label: "Voice language", help: "Language code. Blank = default." },
 
   // LLM
@@ -83,7 +87,11 @@ export const fieldMeta: Record<string, FieldMeta> = {
     label: "LLM model",
     help: "Choose a model from the curated catalog (all served via Vertex AI). A deprecated model stays selectable for published configs but is marked; pick a current model going forward.",
   },
-  "llm.temperature": { label: "Temperature", help: "0–2. Blank = plugin default." },
+  "llm.temperature": {
+    label: "Temperature",
+    // Blank passes nothing to Vertex (NOT_GIVEN), so the Gemini model's own default (1.0) applies.
+    help: "0–2. Blank = model default (Gemini = 1.0).",
+  },
 
   // STT
   "stt.model": {
