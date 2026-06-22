@@ -20,7 +20,7 @@ resource "cloudflare_dns_record" "api" {
   type    = "A"
   content = google_compute_address.usan.address
   proxied = true
-  ttl     = 300
+  ttl     = 1 # "Auto" — Cloudflare ignores TTL on proxied records (300 perpetually drifts)
 }
 
 resource "cloudflare_dns_record" "lk" {
@@ -40,7 +40,7 @@ resource "cloudflare_dns_record" "grafana" {
   type    = "A"
   content = google_compute_address.usan.address
   proxied = true
-  ttl     = 300
+  ttl     = 1 # "Auto" — Cloudflare ignores TTL on proxied records (300 perpetually drifts)
 }
 
 resource "cloudflare_dns_record" "admin" {
@@ -50,5 +50,5 @@ resource "cloudflare_dns_record" "admin" {
   type    = "A"
   content = google_compute_address.usan.address
   proxied = true
-  ttl     = 300
+  ttl     = 1 # "Auto" — Cloudflare ignores TTL on proxied records (300 perpetually drifts)
 }
