@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import get_tenant_db, require_admin_role, require_super_admin
+from usan_api.auth import get_tenant_db, require_admin_role
 from usan_api.db.base import AdminRole
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
@@ -37,7 +37,7 @@ from usan_api.schemas.variable_catalog import PHI_BUILTIN_NAMES
 router = APIRouter(
     prefix="/v1/admin/profiles",
     tags=["admin-profiles"],
-    dependencies=[Depends(require_super_admin)],
+    dependencies=[Depends(require_admin_role(AdminRole.VIEWER))],
 )
 
 

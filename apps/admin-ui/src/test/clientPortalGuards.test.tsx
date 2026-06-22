@@ -46,10 +46,15 @@ beforeEach(() => {
 });
 
 describe("HomeLanding", () => {
-  it("redirects a client admin to /calls", async () => {
+  it("renders Profiles for a client admin", async () => {
     me = meFixture("admin");
     renderAt(<HomeLanding />);
-    expect(await screen.findByText("calls-page")).toBeInTheDocument();
+    expect(await screen.findByText("profiles-home")).toBeInTheDocument();
+  });
+  it("renders Profiles for a viewer (read-only access)", async () => {
+    me = meFixture("viewer");
+    renderAt(<HomeLanding />);
+    expect(await screen.findByText("profiles-home")).toBeInTheDocument();
   });
   it("renders Profiles for a super-admin", async () => {
     me = meFixture("admin", { is_super_admin: true });

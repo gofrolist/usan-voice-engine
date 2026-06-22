@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { useSession } from "./useSession";
 
-// Operator-only routes (Profiles, Defaults, Variables, Org console). A non-super
+// Operator-only routes (the Org console). A non-super
 // user who deep-links here is sent to /calls — mirrors the backend 403 so a hand-
 // typed URL never renders an operator page shell. Renders nothing while the session
 // loads (RequireAuth already shows the splash above us) to avoid a premature redirect.

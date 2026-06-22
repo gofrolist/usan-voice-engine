@@ -33,15 +33,15 @@ interface NavGroup {
 const GROUPS: NavGroup[] = [
   {
     heading: "Build",
-    items: [{ to: "/", label: "Profiles", icon: ProfilesIcon, superAdminOnly: true }],
+    items: [{ to: "/", label: "Profiles", icon: ProfilesIcon }],
   },
   {
     heading: "Config",
     items: [
       { to: "/contacts", label: "Contacts", icon: ContactsIcon, adminOnly: true },
-      // Operator-only in P4 (profile authoring is not exposed to client orgs).
-      { to: "/defaults", label: "Defaults", icon: DefaultsIcon, superAdminOnly: true },
-      { to: "/custom-variables", label: "Variables", icon: VariablesIcon, superAdminOnly: true },
+      // Org admins author their own org's defaults/variables; viewers read-only (RLS-scoped).
+      { to: "/defaults", label: "Defaults", icon: DefaultsIcon },
+      { to: "/custom-variables", label: "Variables", icon: VariablesIcon },
     ],
   },
   {

@@ -158,8 +158,8 @@ def test_publish_records_audit_entry_with_session_actor(
     assert r.status_code == 201
     entry = asyncio.run(_fetch_audit(async_database_url, "profile.publish"))
     assert entry is not None
-    # Actor is the authenticated operator's email (P4: profile authoring is super-admin
-    # only, so the session actor is the acting-as USAN operator).
+    # Actor is the authenticated session's email — here the super-admin acting-as the org
+    # (org admins author too, recorded with their own email as the actor).
     assert entry.actor_email == "staff@usan.example.com"
     assert entry.detail == {"version": 1}
 
