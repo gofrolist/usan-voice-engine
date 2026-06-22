@@ -136,6 +136,19 @@ async def _delete_custom_vars_in_orgs(super_async_url: str, *org_ids: uuid.UUID)
         await engine.dispose()
 
 
+async def _delete_profiles_in_orgs(super_async_url: str, *org_ids: uuid.UUID) -> None:
+    """Remove agent_profiles (versions cascade) in the given orgs before teardown."""
+    engine = create_async_engine(super_async_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM agent_profiles WHERE organization_id = ANY(:orgs)"),
+                {"orgs": list(org_ids)},
+            )
+    finally:
+        await engine.dispose()
+
+
 def _member_cookie(email: str, org_id: uuid.UUID, role: AdminRole) -> dict[str, str]:
     token = issue_session(
         email,
@@ -233,6 +246,26 @@ def test_client_admin_can_write_authoring(client, two_orgs, app_async_database_u
         # The create is audited, so clear both the var and its audit row before two_orgs
         # tears the org down (admin_audit_log FKs the org).
         asyncio.run(_delete_custom_vars_in_orgs(super_url, org_a))
+        asyncio.run(_delete_audit_in_orgs(super_url, org_a))
+
+
+def test_client_admin_can_author_a_profile(client, two_orgs, app_async_database_url):
+    """The headline path: a plain org ADMIN creates AND publishes a profile in their own org."""
+    super_url = _super_url(app_async_database_url)
+    org_a, _ = two_orgs
+    asyncio.run(_seed_member(super_url, "admin@example.com", org_a, "admin"))
+    act_as_org(client.app, org_a)
+    cookies = _member_cookie("admin@example.com", org_a, AdminRole.ADMIN)
+    try:
+        created = client.post("/v1/admin/profiles", json={"name": "Org A Greeter"}, cookies=cookies)
+        assert created.status_code == 201, created.text
+        pid = created.json()["id"]
+        published = client.post(
+            f"/v1/admin/profiles/{pid}/publish", json={"note": "v1"}, cookies=cookies
+        )
+        assert published.status_code == 201, published.text
+    finally:
+        asyncio.run(_delete_profiles_in_orgs(super_url, org_a))
         asyncio.run(_delete_audit_in_orgs(super_url, org_a))
 
 
