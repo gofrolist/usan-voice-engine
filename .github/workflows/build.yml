@@ -203,6 +203,25 @@ jobs:
               -f infra/docker-compose.monitoring.yml \
               -f infra/docker-compose.admin.yml"
             $COMPOSE pull
+            # Run DB migrations as the `usan` OWNER before bringing the app up. The runtime
+            # role `usan_app` is RLS-subject / non-owner and CANNOT run owner-level DDL (e.g.
+            # CREATE TABLE with a FK to `organizations` — migration 0036 crash-looped the api
+            # on the v0.10.0 deploy for exactly this). A transient container runs the migration
+            # as owner; the api's own entrypoint `alembic upgrade head` is then a no-op, and
+            # owner creds never enter the long-running api. set -e hard-fails the deploy on a
+            # bad migration, so a half-migrated DB never gets a new app on top of it.
+            echo "Running database migrations as the usan owner..."
+            DATABASE_URL="$(gcloud secrets versions access latest --secret=usan-prod-db-owner-url)" || {
+              echo "ERROR: cannot read secret usan-prod-db-owner-url — run 'terraform apply' to provision it." >&2
+              exit 1
+            }
+            export DATABASE_URL
+            # --env-file is required: alembic's env.py validates the full Settings on import, so
+            # the other prod env vars must be present. `-e DATABASE_URL` (no =value) passes the
+            # owner DSN from the shell env — overriding the usan_app DATABASE_URL from --env-file
+            # — so the secret never lands on the docker command line or in any trace.
+            docker run --rm --network host --env-file infra/.env -e DATABASE_URL --entrypoint alembic \
+              "us-east1-docker.pkg.dev/usan-retirement/usan/usan-api:${IMAGE_TAG}" upgrade head
             $COMPOSE up -d
             $COMPOSE ps
             # Reclaim disk: drop images no longer used by a RUNNING container — i.e. the
