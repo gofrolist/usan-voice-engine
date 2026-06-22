@@ -122,3 +122,29 @@ resource "google_sql_user" "usan_app" {
   instance = google_sql_database_instance.usan.name
   password = random_password.usan_app.result
 }
+
+# --- Owner DSN for running Alembic migrations at deploy time ---
+# The API connects as the least-privilege `usan_app` (RLS-subject, non-owner), which CANNOT
+# run owner-level DDL — e.g. CREATE TABLE with a FK to `organizations` (migration 0036
+# crash-looped the api on the v0.10.0 deploy for exactly this). Migrations therefore run as
+# `usan` (owner / cloudsqlsuperuser) in a TRANSIENT container during deploy (see
+# .github/workflows/build.yml), so owner creds never live in the long-running api container.
+# Fully Terraform-managed: the password is already in state via random_password.db.
+resource "google_secret_manager_secret" "db_owner_url" {
+  secret_id = "usan-prod-db-owner-url"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "db_owner_url" {
+  secret      = google_secret_manager_secret.db_owner_url.id
+  secret_data = "postgresql://usan:${random_password.db.result}@${google_sql_database_instance.usan.private_ip_address}:5432/usan?ssl=require"
+}
+
+# The VM SA (which the deploy's ssh step runs gcloud as) reads this at deploy time only.
+resource "google_secret_manager_secret_iam_member" "vm_db_owner_url_access" {
+  secret_id = google_secret_manager_secret.db_owner_url.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.vm.email}"
+}
