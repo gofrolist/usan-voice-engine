@@ -36,7 +36,7 @@ class CreateAgentRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     response_engine: ResponseEngine
-    voice_id: str
+    voice_id: str = Field(min_length=1)
     agent_name: str | None = None
     language: str | None = None
     webhook_url: str | None = None
@@ -50,7 +50,7 @@ class UpdateAgentRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     response_engine: ResponseEngine | None = None
-    voice_id: str | None = None
+    voice_id: str | None = Field(default=None, min_length=1)
     agent_name: str | None = None
     language: str | None = None
     webhook_url: str | None = None

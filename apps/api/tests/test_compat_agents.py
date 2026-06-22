@@ -235,6 +235,30 @@ def test_list_agents_is_bare_array_with_api_and_native(
         assert a["response_engine"]["llm_id"].startswith("llm_")
 
 
+def test_list_agents_pagination_walks_full_order_without_drops(compat_client, compat_headers):
+    # Paging one-at-a-time, using each page's last agent_id as the next cursor, must reproduce
+    # the full unpaginated order EXACTLY — no drops, no duplicates. Regression: the keyset once
+    # filtered ``p.id > after`` (raw-UUID order), unrelated to the name sort the list is in, so
+    # a second page dropped an arbitrary subset.
+    created = {
+        _new_agent(compat_client, compat_headers, agent_name=f"Agent {c}")["agent_id"]
+        for c in ("F", "C", "A", "E", "B", "D")
+    }
+    full = [a["agent_id"] for a in compat_client.get("/list-agents", headers=compat_headers).json()]
+    assert created <= set(full)
+
+    walked: list[str] = []
+    cursor: str | None = None
+    for _ in range(len(full) + 2):  # bounded so a buggy cursor can't loop forever
+        url = "/list-agents?limit=1" + (f"&pagination_key={cursor}" if cursor else "")
+        page = compat_client.get(url, headers=compat_headers).json()
+        if not page:
+            break
+        walked.append(page[0]["agent_id"])
+        cursor = page[0]["agent_id"]
+    assert walked == full  # same order, every agent exactly once
+
+
 # --- delete (archive: gone from the API view) ------------------------------------------
 def test_delete_agent_removes_from_api_view(compat_client, compat_headers):
     agent = _new_agent(compat_client, compat_headers)

@@ -165,10 +165,14 @@ async def deliver_one(
                 logger.bind(
                     component="compat_webhook_delivery", endpoint_id=str(claimed.endpoint_id)
                 ).warning("Compat webhook endpoint auto-disabled by circuit breaker")
-            if terminal:
-                outcome = _OUTCOME_FAILED
-            elif isinstance(exc, SsrfBlocked):
+            # Label SSRF first so a *final-attempt* block still reports ``ssrf_blocked`` (the
+            # PHI-gate signal) instead of being folded into the generic ``failed`` count. The
+            # row is still settled terminally above via the ``terminal`` flag — only the
+            # outcome/stat label changes here.
+            if isinstance(exc, SsrfBlocked):
                 outcome = _OUTCOME_SSRF
+            elif terminal:
+                outcome = _OUTCOME_FAILED
             else:
                 outcome = _OUTCOME_RETRY
             log.bind(outcome=outcome, response_code=response_code).info(

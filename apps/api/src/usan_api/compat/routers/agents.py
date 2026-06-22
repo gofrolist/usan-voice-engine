@@ -79,11 +79,21 @@ async def list_agents(
     Keyset cursor over agent_id; the params are accepted for contract compatibility and the
     profile list is bounded by ``limit``."""
     profiles = await agent_bridge.list_agent_profiles(db)
+    # Deterministic total order (name, id): list_profiles orders by name; the id tiebreaker
+    # makes the keyset exact even across equal names. The cursor must walk THIS order —
+    # comparing raw UUIDs (p.id > after) slices an order unrelated to the sort, silently
+    # dropping/duplicating rows across pages.
+    profiles = sorted(profiles, key=lambda p: (p.name, p.id.bytes))
     if pagination_key:
         # An unparseable cursor yields the unsliced page rather than 422-ing a list.
         with contextlib.suppress(CompatError):
             after = ids.decode_agent_id(pagination_key)
-            profiles = [p for p in profiles if p.id > after]
+            cut = next((i for i, p in enumerate(profiles) if p.id == after), None)
+            # Page strictly AFTER the cursor in (name, id) order; a stale/unknown cursor id
+            # (e.g. a since-deleted agent) falls through to the full page — lenient, matching
+            # the unparseable-cursor behavior above.
+            if cut is not None:
+                profiles = profiles[cut + 1 :]
     _audit(request, "list-agents")
     return [agent_bridge.serialize_agent(p).model_dump() for p in profiles[:limit]]
 

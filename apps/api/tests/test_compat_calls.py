@@ -126,3 +126,17 @@ def test_update_call_echoes_metadata(
     )
     assert r.status_code == 200
     assert r.json()["metadata"]["stage"] == "qualified"
+
+
+def test_list_calls_rejects_skip_and_pagination_key_together(compat_client, compat_headers):
+    # skip and pagination_key are mutually exclusive — sending both is a clean 422 in the
+    # RetellAI envelope, never a silently double-paginated page (keyset WHERE + OFFSET).
+    r = compat_client.post(
+        "/v3/list-calls",
+        json={"skip": 5, "pagination_key": "abc123"},
+        headers=compat_headers,
+    )
+    assert r.status_code == 422
+    body = r.json()
+    assert body["status"] == 422
+    assert "invalid request" in body["message"]

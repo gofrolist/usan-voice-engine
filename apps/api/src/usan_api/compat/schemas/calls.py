@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # --- Requests ---------------------------------------------------------------------------
@@ -51,6 +51,15 @@ class ListCallsRequest(BaseModel):
     pagination_key: str | None = None
     skip: int | None = Field(default=None, ge=0)
     include_total: bool = False
+
+    @model_validator(mode="after")
+    def _skip_xor_pagination_key(self) -> ListCallsRequest:
+        # The two paginators are mutually exclusive: combining them applies the keyset WHERE
+        # *and* an OFFSET on top, silently double-paginating (a coverage gap). Reject up front
+        # with a clean 422 rather than returning a quietly wrong page.
+        if self.skip is not None and self.pagination_key is not None:
+            raise ValueError("skip and pagination_key are mutually exclusive")
+        return self
 
 
 # --- Response sub-objects ---------------------------------------------------------------
