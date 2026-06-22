@@ -3,6 +3,7 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import Any, Literal
 from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
@@ -277,6 +278,31 @@ class Settings(BaseSettings):
     invite_email_from_name: str = Field(default="USAN Admin", alias="INVITE_EMAIL_FROM_NAME")
     invite_email_timeout_s: int = Field(default=10, ge=1, le=60, alias="INVITE_EMAIL_TIMEOUT_S")
 
+    # --- RetellAI-compatible public API (feature 003-retellai-api-parity). Additive +
+    # ship-inert: the compat sub-app is always mounted, but every endpoint requires a
+    # compat_api_keys bearer token (none issued => 401), so merging changes NO reachable
+    # behavior until an operator issues a key. COMPAT_DOCS_ENABLED toggles the RetellAI
+    # OpenAPI/docs independently of the native DOCS_ENABLED. COMPAT_WEBHOOK_ALLOWED_HOSTS
+    # is the attested in-infrastructure allow-list permitted to receive full-fidelity
+    # (PHI-bearing) webhooks (Constitution II); empty => no compat webhook ever carries
+    # PHI off-box. COMPAT_DEFAULT_TIMEZONE drives quiet-hours for the Contacts the compat
+    # layer lazily upserts on number-first call/batch create (RetellAI has no Contact/
+    # timezone concept). COMPAT_KEY_RATE_LIMIT is the CRM key's dedicated elevated bucket
+    # (FR-054), disjoint from the operator/auth buckets.
+    compat_docs_enabled: bool = Field(default=False, alias="COMPAT_DOCS_ENABLED")
+    compat_webhook_allowed_hosts: str = Field(default="", alias="COMPAT_WEBHOOK_ALLOWED_HOSTS")
+    compat_default_timezone: str = Field(
+        default="America/New_York", alias="COMPAT_DEFAULT_TIMEZONE"
+    )
+    compat_key_rate_limit: str = Field(default="600/minute", alias="COMPAT_KEY_RATE_LIMIT")
+    # Ship-inert flag for the compat (RetellAI) webhook delivery poller (US2). Like
+    # WEBHOOK_DELIVERY_ENABLED, it gates only the claim+POST half: the poller task always
+    # starts so housekeeping (sweep/expire/prune) + the backlog gauge run flag-independently.
+    # The poller reuses the native WEBHOOK_DELIVERY_* timeout/interval/breaker/max-bytes knobs.
+    compat_webhook_delivery_enabled: bool = Field(
+        default=False, alias="COMPAT_WEBHOOK_DELIVERY_ENABLED"
+    )
+
     @model_validator(mode="after")
     def _reserved_below_max(self) -> Settings:
         # The gate computes max - reserved - in_flight; reserved >= max means the
@@ -353,6 +379,20 @@ class Settings(BaseSettings):
         except ValueError as exc:
             raise ValueError("SPANISH_PROFILE_ID must be a valid UUID") from exc
         return v
+
+    @field_validator("compat_default_timezone", mode="after")
+    @classmethod
+    def _compat_tz_valid(cls, v: str) -> str:
+        # Compose may pass COMPAT_DEFAULT_TIMEZONE as "" when unset (${VAR:-}); treat a
+        # blank value as the default. A bad IANA name would otherwise raise ValueError
+        # inside quiet_hours.next_allowed on every compat call (number-first Contact
+        # upsert sets this timezone) — fail fast at startup instead (Constitution III).
+        name = v.strip() or "America/New_York"
+        try:
+            ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("COMPAT_DEFAULT_TIMEZONE must be a valid IANA timezone") from exc
+        return name
 
     @field_validator("livekit_url")
     @classmethod
@@ -435,6 +475,19 @@ class Settings(BaseSettings):
         in prod). See client_ip.client_ip.
         """
         return frozenset(ip.strip() for ip in self.trusted_proxy_ips.split(",") if ip.strip())
+
+    @property
+    def compat_webhook_allowed_hosts_set(self) -> frozenset[str]:
+        """Hosts attested as in-infrastructure, allowed full-fidelity (PHI) compat webhooks.
+
+        Empty (the default) means NO compat webhook destination may receive a PHI-bearing
+        payload (transcript / recording URL / analysis) — the allow-list is layered atop
+        the existing SSRF guard (Constitution II, FR-022). Hosts are lowercased for a
+        case-insensitive match against the delivery URL's host.
+        """
+        return frozenset(
+            h.strip().lower() for h in self.compat_webhook_allowed_hosts.split(",") if h.strip()
+        )
 
     def warn_if_db_tls_disabled(self) -> None:
         """Warn (never fail) when a non-local DATABASE_URL has no TLS configured.

@@ -610,6 +610,37 @@ class Invitation(Base):
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class CompatApiKey(Base):
+    """RetellAI-compatible bearer key (feature 003). GLOBAL, non-RLS control-plane row
+    (like AdminUser / Invitation): resolved by prefix + constant-time hash compare BEFORE
+    any org context exists, then used to OPEN the org-scoped RLS session. Migration 0036.
+
+    The plaintext token is shown ONCE at create; only its sha256 hash + an 8-char plaintext
+    prefix (for an O(1) candidate lookup) are stored. Not TenantScoped: app code scopes by
+    ``organization_id`` (the guard that replaces RLS here)."""
+
+    __tablename__ = "compat_api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key_prefix: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    key_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    label: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class AdminAuditLog(Base, TenantScoped):
     """Append-only audit trail for admin/operator mutations.
 
@@ -934,6 +965,83 @@ class WebhookDelivery(Base, TenantScoped):
     )
     response_code: Mapped[int | None] = mapped_column(Integer)
     # Exception TYPE NAME only, never str(exc) (PHI-adjacent rule, spec §5.3/§8.2).
+    last_error: Mapped[str | None] = mapped_column(Text)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class CompatWebhookEndpoint(Base, TenantScoped):
+    """A RetellAI agent's webhook subscription (feature 003 / US2, migration 0037).
+
+    SEPARATE from the native WebhookEndpoint so the native poller never claims/signs a
+    compat row and a compat breaker trip never disables a native endpoint. One row per
+    (org, agent_profile). ``secret`` is a dedicated 64-hex signing secret (the CRM passes
+    IT — not its API key — to retell-sdk ``verify()``); returned once at registration,
+    NEVER logged."""
+
+    __tablename__ = "compat_webhook_endpoints"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    agent_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    webhook_url: Mapped[str] = mapped_column(Text, nullable=False)
+    # Subset of {call_started, call_ended, call_analyzed}; CHECK-constrained in 0037.
+    webhook_events: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
+    secret: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    disabled_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class CompatWebhookDelivery(Base, TenantScoped):
+    """Compat (RetellAI) webhook outbox row (feature 003 / US2, migration 0037).
+
+    ``payload`` is the MINIMAL ``{event, call_id}`` reference; the compat poller builds the
+    full ``{event, call}`` body from the live Call at delivery time. ``last_error`` is the
+    exception TYPE NAME only, never ``str(exc)`` (PHI-adjacent rule)."""
+
+    __tablename__ = "compat_webhook_deliveries"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    endpoint_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("compat_webhook_endpoints.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    response_code: Mapped[int | None] = mapped_column(Integer)
     last_error: Mapped[str | None] = mapped_column(Text)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(

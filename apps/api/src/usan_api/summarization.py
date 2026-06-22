@@ -196,6 +196,13 @@ async def summarize_call_with(
             structured=fact.structured or None,
             source="extracted",
         )
+    # Feature 003 / US2: the summary IS the 'analyzed' signal — emit a compat call_analyzed
+    # webhook for an agent with a subscription (no-op otherwise), in the SAME transaction as
+    # the recap so a rolled-back summarize emits nothing. Local import avoids a compat
+    # import-time dependency in this native module.
+    from usan_api.compat.lifecycle import enqueue_compat_call_event
+
+    await enqueue_compat_call_event(db, call, event="call_analyzed")
     await db.commit()
     logger.bind(call_id=str(call_id), facts=len(parsed.facts)).info("Summarized call")
     return summary_row

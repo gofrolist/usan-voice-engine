@@ -18,6 +18,8 @@ from usan_api import (
     schedule_orchestrator,
     webhook_delivery,
 )
+from usan_api.compat import webhook_delivery as compat_webhook_delivery
+from usan_api.compat.app import build_compat_app
 from usan_api.db.session import dispose_engine, get_session_factory
 from usan_api.logging_config import configure_logging
 from usan_api.observability.instrumentation import setup_metrics
@@ -27,6 +29,7 @@ from usan_api.repositories import custom_variables as custom_variables_repo
 from usan_api.routers import (
     admin_audit,
     admin_calls,
+    admin_compat_keys,
     admin_contacts,
     admin_custom_variables,
     admin_defaults,
@@ -155,6 +158,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # first cycle runs real housekeeping SQL against the shared test DB; harmless,
     # since sweep/expire/prune only touch rows older than their thresholds.
     poller_tasks.append(asyncio.create_task(webhook_delivery.run_poller(settings, stop)))
+    # Compat (RetellAI) webhook delivery poller (feature 003 / US2). Like the native poller
+    # above it ALWAYS starts: COMPAT_WEBHOOK_DELIVERY_ENABLED gates only the claim+POST half,
+    # so housekeeping (sweep/expire/prune) + the backlog gauge run flag-independently.
+    poller_tasks.append(asyncio.create_task(compat_webhook_delivery.run_poller(settings, stop)))
     try:
         yield
     finally:
@@ -183,8 +190,22 @@ def _install_rate_limiting(app: FastAPI, settings: Settings) -> None:
         limit=settings.rate_limit_default,
         enabled=settings.rate_limit_enabled,
         auth_limit=settings.rate_limit_auth,
+        compat_limit=settings.compat_key_rate_limit,
         trusted_proxies=settings.trusted_proxy_set,
     )
+
+
+def _assert_no_route_collisions(app: FastAPI, compat_app: FastAPI) -> None:
+    """Fail fast if a compat route's path exactly shadows a native one (it would be
+    unreachable behind the root mount). The native /v1 plane vs the RetellAI unversioned +
+    /v2 + /v3 paths are disjoint today; this guards against a future accidental overlap."""
+
+    def _paths(a: FastAPI) -> set[str]:
+        return {p for r in a.routes if isinstance(p := getattr(r, "path", None), str)}
+
+    clash = {p for p in _paths(app) & _paths(compat_app) if p != "/"}
+    if clash:
+        raise RuntimeError(f"compat routes shadow native paths: {sorted(clash)}")
 
 
 def create_app() -> FastAPI:
@@ -236,6 +257,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_model_catalog.router)
     app.include_router(admin_tools.router)
     app.include_router(admin_calls.router)
+    app.include_router(admin_compat_keys.router)
     app.include_router(auth.router)
     app.include_router(contacts.router)
     app.include_router(dnc.router)
@@ -249,5 +271,13 @@ def create_app() -> FastAPI:
     app.include_router(runtime.router)
 
     setup_metrics(app)
+
+    # Mount the RetellAI-compatible sub-app LAST so every native /v1 route + /health +
+    # /metrics is matched first; the root mount catches only the (otherwise unmatched)
+    # RetellAI paths. Assert no compat route exactly shadows a native path so a future
+    # overlap fails fast at startup instead of silently becoming unreachable.
+    compat_app = build_compat_app(settings)
+    _assert_no_route_collisions(app, compat_app)
+    app.mount("/", compat_app)
 
     return app
