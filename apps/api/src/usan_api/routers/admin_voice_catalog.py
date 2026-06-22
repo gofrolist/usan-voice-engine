@@ -9,7 +9,7 @@ voice is synthesized at most once.
 
 Security & PHI:
 - The Cartesia secret (``CARTESIA_API_KEY``) stays server-side: the browser never calls
-  Cartesia directly. The proxy is operator-only (super-admin) and rate-limited.
+  Cartesia directly. The proxy is readable by any authenticated org member and rate-limited.
 - ONLY ``SAMPLE_PHRASE`` reaches the synthesizer — it is a module constant, never a
   request parameter — so no contact name/transcript can leak into the sample path
   (Constitution II PHI Containment).
@@ -23,7 +23,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
-from usan_api.auth import require_super_admin
+from usan_api.auth import require_admin_role
+from usan_api.db.base import AdminRole
 from usan_api.schemas.voice_catalog import (
     SAMPLE_PHRASE,
     VOICE_CATALOG,
@@ -35,7 +36,7 @@ from usan_api.settings import Settings, get_settings
 router = APIRouter(
     prefix="/v1/admin/voice-catalog",
     tags=["admin-voice-catalog"],
-    dependencies=[Depends(require_super_admin)],
+    dependencies=[Depends(require_admin_role(AdminRole.VIEWER))],
 )
 
 # Module-level cache of synthesized sample bytes, keyed by (voice_id, model). The
@@ -48,7 +49,7 @@ _SAMPLE_CACHE: dict[tuple[str, str], bytes] = {}
 async def get_voice_catalog() -> VoiceCatalogResponse:
     """Return the curated voice catalog for the VoiceSection picker (FR-009).
 
-    Operator-only (super-admin) scope, mirroring admin_tool_catalog. The catalog is a
+    Readable by any authenticated org member, mirroring admin_tool_catalog. The catalog is a
     global constant (a platform-curated allow-list), not per-version snapshot data.
     """
     return VoiceCatalogResponse(voices=list(VOICE_CATALOG))

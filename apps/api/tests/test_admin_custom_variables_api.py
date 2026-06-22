@@ -127,10 +127,11 @@ def test_delete_204(client, super_admin_acting_session):
     assert client.get(BASE).json() == []
 
 
-def test_non_super_forbidden_on_all_operations_403(client, async_database_url):
-    # P4: the whole custom-variables router is operator-only (require_super_admin), so a
-    # non-super user (here a client VIEWER) is forbidden on EVERY operation — reads
-    # included, not just mutations — by the router-level gate.
+def test_viewer_forbidden_on_writes_403(client, async_database_url):
+    # A client VIEWER cannot mutate custom variables: the per-endpoint
+    # require_admin_role(ADMIN) gate returns 403 on create/update/delete regardless of the
+    # active org. (Reads are allowed for any org member — that path is proven in
+    # test_p4_client_portal_gating with a scoped active org.)
     asyncio.run(_seed(async_database_url, "viewer@example.com"))
     token = issue_session(
         "viewer@example.com",
@@ -145,7 +146,6 @@ def test_non_super_forbidden_on_all_operations_403(client, async_database_url):
     fake = "00000000-0000-0000-0000-000000000000"
     assert client.patch(f"{BASE}/{fake}", json={"phi": True}).status_code == 403
     assert client.delete(f"{BASE}/{fake}").status_code == 403
-    assert client.get(BASE).status_code == 403
 
 
 def test_mutations_audited_with_phi_old_new_detail(client, super_admin_acting_session):

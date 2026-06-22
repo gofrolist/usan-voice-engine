@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import get_tenant_db, require_admin_role, require_super_admin
+from usan_api.auth import get_tenant_db, require_admin_role
 from usan_api.db.base import AdminRole
 from usan_api.db.models import CustomVariable
 from usan_api.repositories import admin_audit
@@ -33,7 +33,7 @@ from usan_api.schemas.custom_variables import (
 router = APIRouter(
     prefix="/v1/admin/custom-variables",
     tags=["custom-variables"],
-    dependencies=[Depends(require_super_admin)],
+    dependencies=[Depends(require_admin_role(AdminRole.VIEWER))],
 )
 
 _NOT_FOUND = "custom variable not found"
@@ -47,7 +47,7 @@ def _to_out(row: CustomVariable) -> CustomVariableOut:
 async def list_custom_variables(
     db: AsyncSession = Depends(get_tenant_db),
 ) -> list[CustomVariableOut]:
-    """All definitions, alphabetical — operator-only (super-admin) in P4."""
+    """All definitions, alphabetical — readable by any org member (writes are ADMIN-gated)."""
     return [_to_out(v) for v in await repo.list_custom_variables(db)]
 
 
@@ -58,7 +58,7 @@ async def custom_variable_references(
     """Delete-guard (FR-007): profiles referencing this variable's {{name}} token.
 
     Scans the live draft AND every published version across the prompt fields +
-    SMS bodies. Operator-only (super-admin) in P4. Names/locations only —
+    SMS bodies. Org-admin-writable; reads open to any member. Names/locations only —
     never prompt text or per-call values (spec §7).
     """
     row = await repo.get_custom_variable(db, variable_id)

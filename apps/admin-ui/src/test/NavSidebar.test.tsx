@@ -80,13 +80,25 @@ describe("NavSidebar Operate group", () => {
     expect(screen.getByRole("link", { name: "Queues" })).toBeInTheDocument();
   });
 
-  it("hides Variables/Defaults/Profiles for a non-super user (operator-only in P4)", async () => {
-    role = "admin"; // a client ADMIN is still not an operator
+  it("shows Variables/Defaults/Profiles for a client admin (org self-service authoring)", async () => {
+    role = "admin"; // a client ADMIN authors their own org's config — no super-admin needed
     renderSidebar();
     await screen.findByText("me@example.com");
-    expect(screen.queryByRole("link", { name: "Variables" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Defaults" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Profiles" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Profiles" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Defaults" })).toHaveAttribute("href", "/defaults");
+    expect(screen.getByRole("link", { name: "Variables" })).toHaveAttribute(
+      "href",
+      "/custom-variables",
+    );
+  });
+
+  it("shows Profiles/Defaults/Variables in the nav for a viewer (read-only access)", async () => {
+    role = "viewer";
+    renderSidebar();
+    await screen.findByText("me@example.com");
+    expect(screen.getByRole("link", { name: "Profiles" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Defaults" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Variables" })).toBeInTheDocument();
   });
 
   it("shows Profiles/Defaults/Variables for a super-admin operator", async () => {

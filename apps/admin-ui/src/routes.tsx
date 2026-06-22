@@ -38,11 +38,7 @@ export const router = createBrowserRouter([
           { index: true, element: <HomeLanding /> },
           {
             path: "profiles/:id/versions",
-            element: (
-              <RequireSuperAdmin>
-                <VersionHistoryPage />
-              </RequireSuperAdmin>
-            ),
+            element: <VersionHistoryPage />,
           },
           { path: "calls", element: <CallsPage /> },
           { path: "calls/:id", element: <CallDetailPage /> },
@@ -57,19 +53,11 @@ export const router = createBrowserRouter([
           },
           {
             path: "defaults",
-            element: (
-              <RequireSuperAdmin>
-                <DefaultsPage />
-              </RequireSuperAdmin>
-            ),
+            element: <DefaultsPage />,
           },
           {
             path: "custom-variables",
-            element: (
-              <RequireSuperAdmin>
-                <CustomVariablesPage />
-              </RequireSuperAdmin>
-            ),
+            element: <CustomVariablesPage />,
           },
           {
             path: "audit",
@@ -99,11 +87,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "profiles/:id",
-        element: (
-          <RequireSuperAdmin>
-            <ProfileEditorPage />
-          </RequireSuperAdmin>
-        ),
+        element: <ProfileEditorPage />,
       },
     ],
   },
