@@ -1,0 +1,171 @@
+"""Compat call-create service (feature 003, T022).
+
+Number-first Contact upsert, create-time DNC + quiet-hours gating (explicit 400 — the
+stakeholder decision), deterministic idempotency synthesis, then reuse of the native
+dispatch core (``routers.calls._create_and_dispatch``) so dial + built-in-resolution logic
+never drifts from the native ``/v1/calls`` path.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from fastapi import Response
+from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from usan_api import quiet_hours
+from usan_api.compat.errors import CompatError
+from usan_api.compat.ids import decode_agent_id
+from usan_api.compat.schemas.calls import CreatePhoneCallRequest
+from usan_api.compat.serialization import RESERVED_VAR_PREFIX, pack_dynamic_vars
+from usan_api.db.models import Call, Contact
+from usan_api.phone import to_e164
+from usan_api.repositories import agent_profiles as agent_profiles_repo
+from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import contacts as contacts_repo
+from usan_api.repositories import dnc as dnc_repo
+from usan_api.routers import calls as native_calls
+from usan_api.schemas.call import CreateCallRequest
+from usan_api.settings import Settings
+
+
+def _synth_idempotency_key(
+    organization_id: uuid.UUID,
+    *,
+    to_number: str,
+    from_number: str,
+    agent: str | None,
+    packed: dict[str, Any],
+) -> str:
+    """Deterministic key so a CRM retry never double-dials (Constitution V). RetellAI does
+    not expose idempotency, so it is synthesized from the call's identity. A bare sha256 hex
+    never collides with the reserved sched:/batch: namespaces.
+
+    PENDING-FREEZE (oracle): two intentional identical-payload calls in quick succession
+    dedupe to one — validate against real CRM traffic before freezing the contract.
+    """
+    payload = json.dumps(
+        {
+            "org": str(organization_id),
+            "to": to_number,
+            "from": from_number,
+            "agent": agent or "",
+            "vars": packed,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+async def upsert_contact_for_number(
+    db: AsyncSession,
+    settings: Settings,
+    phone: str,
+    metadata: dict[str, Any] | None,
+) -> Contact:
+    """Number-first Contact lazy upsert (T022) — the shim US1 and US4 share.
+
+    Reuse an existing Contact by E.164, else create one from the CRM's metadata
+    (defaults: name = the E.164 number, timezone = COMPAT_DEFAULT_TIMEZONE).
+
+    PENDING-FREEZE (oracle): the exact metadata key names for name / external_id.
+    """
+    contact = await contacts_repo.get_contact_by_phone(db, phone)
+    if contact is not None:
+        return contact
+    meta = metadata or {}
+    name = str(meta.get("name") or phone)
+    ext = meta.get("external_id")
+    return await contacts_repo.create_contact(
+        db,
+        name=name,
+        phone_e164=phone,
+        timezone=settings.compat_default_timezone,
+        external_id=str(ext) if ext is not None else None,
+    )
+
+
+async def create_compat_call(
+    db: AsyncSession,
+    settings: Settings,
+    body: CreatePhoneCallRequest,
+    response: Response,
+    *,
+    organization_id: uuid.UUID,
+) -> Call:
+    """Gate + dispatch a RetellAI-shaped phone call; returns the created (or replayed) Call."""
+    phone = to_e164(body.to_number)
+    if phone is None:
+        raise CompatError(422, "invalid to_number")
+    profile_override = decode_agent_id(body.override_agent_id) if body.override_agent_id else None
+    # Reject CRM dynamic-var keys that collide with the reserved metadata namespace
+    # (otherwise they would be silently swallowed / corrupt the metadata round-trip).
+    if any(
+        str(k).startswith(RESERVED_VAR_PREFIX) for k in (body.retell_llm_dynamic_variables or {})
+    ):
+        raise CompatError(422, "retell_llm_dynamic_variables keys must not start with '__meta'")
+    packed = pack_dynamic_vars(body.retell_llm_dynamic_variables, body.metadata)
+    # Key off the NORMALISED E.164 number (not the raw CRM string), so a retry that reformats
+    # the number ('+1 415…' vs '+1415…') hits the same key and never double-dials (FR-012).
+    key = _synth_idempotency_key(
+        organization_id,
+        to_number=phone,
+        from_number=to_e164(body.from_number) or body.from_number,
+        agent=body.override_agent_id,
+        packed=packed,
+    )
+
+    # Serialize the DNC-check / create window for this number (mirrors native enqueue_call).
+    await dnc_repo.lock_phone(db, phone)
+
+    # Idempotent replay BEFORE any side effect: an identical synthesized key returns the
+    # original call (no re-dial, no contact churn), matching the native ordering contract.
+    existing = await calls_repo.get_by_idempotency_key(db, key)
+    if existing is not None:
+        return existing
+
+    # Create-time DNC gate -> EXPLICIT 400 (stakeholder decision), before the Contact is
+    # materialized; the native path instead records a DNC_BLOCKED row + 200.
+    if await dnc_repo.is_blocked(db, phone):
+        raise CompatError(400, "blocked_dnc")
+
+    contact = await upsert_contact_for_number(db, settings, phone, body.metadata)
+
+    if profile_override is not None and not await agent_profiles_repo.is_live_profile(
+        db, profile_override
+    ):
+        raise CompatError(422, "override_agent_id must reference a published agent")
+
+    # Create-time quiet-hours gate -> EXPLICIT 400 (the native path only checks at dial time).
+    now = datetime.now(UTC)
+    try:
+        allowed = quiet_hours.next_allowed(now, contact.timezone)
+    except ValueError:
+        allowed = now  # bad tz: don't block here; the native dial-time check is the backstop
+    if allowed > now:
+        raise CompatError(400, "blocked_quiet_hours")
+
+    try:
+        native_body = CreateCallRequest(
+            contact_id=contact.id,
+            idempotency_key=key,
+            dynamic_vars=packed,
+            profile_override=profile_override,
+        )
+    except ValidationError as exc:
+        # e.g. dynamic_vars over the byte cap or with nested values.
+        raise CompatError(422, "invalid retell_llm_dynamic_variables or metadata") from exc
+
+    native_resp = await native_calls._create_and_dispatch(
+        db, native_body, contact, settings, response
+    )
+    call = await calls_repo.get_call(db, native_resp.id)
+    if call is None:  # pragma: no cover - the row was just committed
+        raise CompatError(500, "internal error")
+    return call

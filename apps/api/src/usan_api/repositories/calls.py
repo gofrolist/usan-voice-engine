@@ -45,6 +45,13 @@ async def _enqueue_call_completed(db: AsyncSession, call: Call) -> None:
     await webhook_outbox.enqueue_event(
         db, event="call.completed", payload=await webhook_events.call_completed_payload(db, call)
     )
+    # Feature 003 / US2: also fan a compat (RetellAI) ``call_ended`` delivery if this call's
+    # agent has a compat webhook subscription. No-op (one indexed lookup) for native-only
+    # calls — behavior-preserving for the native plane (SC-007). Local import keeps this
+    # module free of an import-time dependency on the compat package.
+    from usan_api.compat.lifecycle import enqueue_compat_call_event
+
+    await enqueue_compat_call_event(db, call, event="call_ended")
 
 
 async def _enqueue_call_started(db: AsyncSession, call: Call) -> None:
@@ -52,6 +59,10 @@ async def _enqueue_call_started(db: AsyncSession, call: Call) -> None:
     await webhook_outbox.enqueue_event(
         db, event="call.started", payload=await webhook_events.call_started_payload(db, call)
     )
+    # Feature 003 / US2: compat ``call_started`` twin of the call_ended hook above.
+    from usan_api.compat.lifecycle import enqueue_compat_call_event
+
+    await enqueue_compat_call_event(db, call, event="call_started")
 
 
 async def create_call(

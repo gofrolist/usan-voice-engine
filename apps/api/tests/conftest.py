@@ -9,7 +9,7 @@ from pathlib import Path
 import jwt
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
@@ -234,8 +234,9 @@ _TRUNCATE_ALL = (
     "activity_history, turn_metrics, call_metrics, "
     "family_contacts, family_tasks, family_reports, "
     "custom_variables, webhook_deliveries, webhook_endpoints, "
+    "compat_webhook_deliveries, compat_webhook_endpoints, "
     "call_batch_targets, call_batches, call_schedules, "
-    "agent_profile_versions, agent_profiles, admin_audit_log, "
+    "agent_profile_versions, agent_profiles, admin_audit_log, compat_api_keys, "
     "invitations, memberships, admin_users, follow_up_flags, callback_requests, sms_messages, "
     "calls, dnc_list, contacts "
     "RESTART IDENTITY CASCADE"
@@ -634,3 +635,124 @@ def super_admin_acting_session(client: TestClient, async_database_url: str) -> d
     )
     client.cookies.set(SESSION_COOKIE_NAME, token)
     return {SESSION_COOKIE_NAME: token}
+
+
+# --- Compat (RetellAI-parity, feature 003) test support -------------------------------
+
+
+async def _seed_compat_key_async(
+    super_async_url: str, org_id: uuid.UUID, *, status: str = "active"
+) -> str:
+    """Insert a compat_api_keys row for ``org_id`` (superuser engine) and return the
+    one-time plaintext token. ``status`` lets a test seed a 'revoked' key for the 401 path."""
+    import secrets
+
+    from usan_api.repositories.compat_api_keys import hash_token
+
+    token = "key_" + secrets.token_urlsafe(32)
+    engine = create_async_engine(super_async_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO compat_api_keys "
+                    "(organization_id, key_prefix, key_hash, status) "
+                    "VALUES (:org, :pfx, :hash, :st)"
+                ),
+                {"org": org_id, "pfx": token[:8], "hash": hash_token(token), "st": status},
+            )
+        return token
+    finally:
+        await engine.dispose()
+
+
+def _install_compat_db_override(app: FastAPI, db_async_url: str) -> FastAPI:
+    """Override ``get_compat_db`` with a per-test session that runs the REAL auth path
+    (prefix lookup + HMAC verify + set_tenant_context), so the 401 + org-scoping logic stays
+    real, then yields the scoped session.
+
+    Uses the SUPERUSER DSN (like the ``get_db`` operator-plane override) rather than the
+    usan_app one: under the TestClient's fresh-loop-per-request, the RLS-role engine + the
+    compat write path leaves a connection bound to a dead loop (a test-harness artifact — prod
+    runs one persistent loop on a pooled engine). Cross-org RLS isolation is exercised
+    separately by test_compat_rls_isolation (a real usan_app session). The compat layer still
+    set_tenant_context's the org, so inserts get the right organization_id via the column
+    default."""
+    from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+    from usan_api.compat import auth as compat_auth
+
+    bearer = HTTPBearer(auto_error=False)
+
+    async def _override(
+        request: Request,
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    ):
+        # A FRESH engine per request, created + disposed within THIS request's event loop, so
+        # no connection is ever touched from another loop. The TestClient uses a new event
+        # loop per request, and the heavy compat write path otherwise strands a connection on
+        # the prior loop -> "Event loop is closed" on the next request. The
+        # set_tenant_context / after_begin plumbing is covered by test_compat_auth +
+        # test_compat_rls_isolation; here the superuser engine + the organization_id column
+        # default land inserts in the right org.
+        token = compat_auth._require_bearer(credentials)
+        engine = create_async_engine(db_async_url, poolclass=NullPool)
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as session:
+                matched = await compat_auth._match_key(session, token)
+                request.state.compat_org_id = str(matched.organization_id)
+                yield session
+        finally:
+            await engine.dispose()
+
+    # The compat routes live on the MOUNTED sub-app, which has its OWN dependency_overrides;
+    # overriding on the outer app would NOT reach them — they'd use the production
+    # get_compat_db + the global pooled engine, whose connection is bound to the first
+    # request's event loop and dies on the next ("Event loop is closed").
+    from starlette.routing import Mount
+
+    compat_app = next(r.app for r in app.routes if isinstance(r, Mount))
+    compat_app.dependency_overrides[compat_auth.get_compat_db] = _override
+    return compat_app
+
+
+@pytest.fixture
+def compat_client(client: TestClient, async_database_url: str) -> TestClient:
+    """``client`` + the ``get_compat_db`` override installed, so requests to the mounted
+    RetellAI-compatible sub-app run under a per-test org-scoped session."""
+    from usan_api.compat.auth import get_compat_db
+
+    compat_app = _install_compat_db_override(client.app, async_database_url)
+    try:
+        yield client
+    finally:
+        compat_app.dependency_overrides.pop(get_compat_db, None)
+
+
+@pytest.fixture
+def compat_headers(compat_client: TestClient, async_database_url: str) -> dict[str, str]:
+    """Seed an active compat key for the seeded usan org; return its Bearer auth header."""
+    org_id = asyncio.run(_resolve_usan_org_id(async_database_url))
+    token = asyncio.run(_seed_compat_key_async(async_database_url, org_id))
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def compat_env(database_url: str, async_database_url: str, monkeypatch):
+    """Minimal env + clean tables for compat WEBHOOK poller tests (US2) that drive sessions
+    directly via the superuser engine and call ``get_settings()`` / ``poll_once`` WITHOUT
+    building the app. Truncates BEFORE yielding so each test starts from an empty
+    compat_webhook_deliveries (the lifecycle assertions count rows unfiltered)."""
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+    monkeypatch.setenv("TELNYX_CALLER_ID", "+15551230000")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+    monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    get_settings.cache_clear()
+    asyncio.run(_truncate_and_dispose(create_async_engine(async_database_url, poolclass=NullPool)))
+    yield
+    get_settings.cache_clear()

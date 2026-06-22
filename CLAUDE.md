@@ -57,5 +57,5 @@ image; raw `docker compose up` will fail with "pull access denied" on
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/002-clara-care-parity/plan.md`
+`specs/003-retellai-api-parity/plan.md`
 <!-- SPECKIT END -->

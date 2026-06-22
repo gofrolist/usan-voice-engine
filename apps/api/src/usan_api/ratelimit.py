@@ -53,6 +53,39 @@ def _is_operator_route(method: str, path: str) -> bool:
     return path.startswith("/v1/calls/") and method == "GET"
 
 
+# Paths owned by the native /v1 plane + the internal/observability surface. Everything else
+# is served by the mounted RetellAI-compatible sub-app (it sits at the root, catching all
+# unversioned + /v2 + /v3 RetellAI paths), so a non-native, non-internal path IS a compat
+# request — detected WITHOUT enumerating the open RetellAI endpoint set.
+_NATIVE_OR_INTERNAL_PREFIXES = (
+    "/v1/",
+    "/webhooks/",
+    "/health",
+    "/metrics",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/compat/",  # compat sub-app docs/openapi (COMPAT_DOCS_ENABLED) — not an API call
+)
+
+
+def _is_compat_route(path: str) -> bool:
+    """True for a request served by the mounted RetellAI-compatible sub-app."""
+    if path == "/":
+        return False
+    return not path.startswith(_NATIVE_OR_INTERNAL_PREFIXES)
+
+
+def _compat_bucket_key(request: Request) -> str:
+    """Per-key bucket key from the Bearer prefix (falls back to client IP when absent)."""
+    auth = request.headers.get("Authorization", "")
+    if auth[:7].lower() == "bearer ":
+        token = auth[7:].strip()
+        if token:
+            return "key:" + token[:8]
+    return "ip:" + (request.client.host if request.client else "unknown")
+
+
 # Per-call_id fixed-window limiter for the agent tool plane (/v1/tools/*). Separate from
 # the operator middleware: those routes are intentionally NOT IP-throttled (a busy call
 # pipeline must flow), but a runaway/looping or hijacked agent token still needs a ceiling
@@ -79,12 +112,17 @@ class OperatorRateLimitMiddleware:
         limit: str,
         enabled: bool,
         auth_limit: str,
+        compat_limit: str = "600/minute",
         trusted_proxies: frozenset[str] = frozenset(),
     ) -> None:
         self.app = app
         self.enabled = enabled
         self._limiter = FixedWindowRateLimiter(MemoryStorage())
         self._limit = parse(limit)
+        # Dedicated elevated bucket for the RetellAI-compat surface — the migrated CRM runs
+        # high call volume on its key and must never share (or exhaust) the operator budget
+        # (FR-054).
+        self._compat_limit = parse(compat_limit)
         # Tighter, separate bucket for the pre-auth /v1/auth/* endpoints so credential
         # stuffing / OAuth-state probing can't piggy-back on a budget that bulk operator
         # reads have already spent (distinct namespace => independent counter).
@@ -111,16 +149,25 @@ class OperatorRateLimitMiddleware:
         request = Request(scope)
         path = request.url.path
         if _is_operator_route(request.method, path):
-            key = client_ip(request, self._trusted_proxies)
             limit, namespace = self._limit_for(path)
-            if not self._limiter.hit(limit, namespace, key):
-                # RFC 9110 §15.5.30: a 429 SHOULD tell the client when to retry, so a
-                # well-behaved caller backs off instead of hammering the window.
-                response = JSONResponse(
-                    {"detail": "rate limit exceeded"},
-                    status_code=429,
-                    headers={"Retry-After": str(self._retry_after(limit, namespace, key))},
-                )
-                await response(scope, receive, send)
-                return
+            key = client_ip(request, self._trusted_proxies)
+        elif _is_compat_route(path):
+            # The compat surface gets its own elevated bucket, keyed by the bearer-key
+            # prefix (per-key, not per-IP) so one CRM key's burst can't starve another and
+            # it never shares the operator budget (FR-054).
+            limit, namespace = self._compat_limit, "compat"
+            key = _compat_bucket_key(request)
+        else:
+            await self.app(scope, receive, send)
+            return
+        if not self._limiter.hit(limit, namespace, key):
+            # RFC 9110 §15.5.30: a 429 SHOULD tell the client when to retry, so a
+            # well-behaved caller backs off instead of hammering the window.
+            response = JSONResponse(
+                {"detail": "rate limit exceeded"},
+                status_code=429,
+                headers={"Retry-After": str(self._retry_after(limit, namespace, key))},
+            )
+            await response(scope, receive, send)
+            return
         await self.app(scope, receive, send)

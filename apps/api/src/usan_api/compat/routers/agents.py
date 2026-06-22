@@ -1,0 +1,144 @@
+"""RetellAI-compatible agent endpoints (feature 003, US3):
+
+  POST   /create-agent                    (201)
+  GET    /get-agent/{agent_id}
+  GET    /list-agents                     (bare array — single inventory)
+  PATCH  /update-agent/{agent_id}
+  DELETE /delete-agent/{agent_id}         (204)
+  POST   /publish-agent-version/{agent_id}
+  GET    /get-agent-versions/{agent_id}
+
+Auth + org-scoped RLS session via ``get_compat_db``. Every op emits a PHI-free audit line
+(org id + op + agent id). ``response_model`` is intentionally omitted so FastAPI serializes
+the ``extra="allow"`` AgentResponse via ``model_dump`` — preserving the CRM's echoed config.
+"""
+
+from __future__ import annotations
+
+import contextlib
+from typing import Any
+
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from usan_api.compat import agent_bridge, ids
+from usan_api.compat.auth import get_compat_db
+from usan_api.compat.errors import CompatError
+from usan_api.compat.schemas.agents import (
+    CreateAgentRequest,
+    PublishAgentVersionRequest,
+    UpdateAgentRequest,
+)
+from usan_api.compat.serialization import to_ms
+from usan_api.settings import Settings, get_settings
+
+router = APIRouter(tags=["compat-agents"])
+
+
+def _audit(request: Request, op: str, agent_id: str | None = None) -> None:
+    org = getattr(request.state, "compat_org_id", None)
+    logger.bind(compat_org_id=org, op=op, agent_id=agent_id).info("compat agent op={op}")
+
+
+@router.post("/create-agent", status_code=status.HTTP_201_CREATED)
+async def create_agent(
+    body: CreateAgentRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    profile, secret = await agent_bridge.bind_agent(db, settings, body)
+    response.status_code = status.HTTP_201_CREATED
+    _audit(request, "create-agent", ids.encode_agent_id(profile.id))
+    return agent_bridge.serialize_agent(profile, webhook_secret=secret).model_dump()
+
+
+@router.get("/get-agent/{agent_id}")
+async def get_agent(
+    agent_id: str,
+    request: Request,
+    version: int | None = Query(default=None),  # accepted; current is served (PENDING-FREEZE)
+    db: AsyncSession = Depends(get_compat_db),
+) -> dict[str, Any]:
+    profile = await agent_bridge.get_agent_profile(db, agent_id)
+    _audit(request, "get-agent", agent_id)
+    return agent_bridge.serialize_agent(profile).model_dump()
+
+
+@router.get("/list-agents")
+async def list_agents(
+    request: Request,
+    pagination_key: str | None = Query(default=None),
+    pagination_key_version: int | None = Query(default=None),
+    limit: int = Query(default=1000, ge=1, le=1000),
+    db: AsyncSession = Depends(get_compat_db),
+) -> list[dict[str, Any]]:
+    """A BARE array (not wrapped) — the single agent inventory (admin-UI + API agents).
+    Keyset cursor over agent_id; the params are accepted for contract compatibility and the
+    profile list is bounded by ``limit``."""
+    profiles = await agent_bridge.list_agent_profiles(db)
+    if pagination_key:
+        # An unparseable cursor yields the unsliced page rather than 422-ing a list.
+        with contextlib.suppress(CompatError):
+            after = ids.decode_agent_id(pagination_key)
+            profiles = [p for p in profiles if p.id > after]
+    _audit(request, "list-agents")
+    return [agent_bridge.serialize_agent(p).model_dump() for p in profiles[:limit]]
+
+
+@router.patch("/update-agent/{agent_id}")
+async def update_agent(
+    agent_id: str,
+    body: UpdateAgentRequest,
+    request: Request,
+    version: int | None = Query(default=None),
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    profile, secret = await agent_bridge.update_agent(db, settings, agent_id, body)
+    _audit(request, "update-agent", agent_id)
+    return agent_bridge.serialize_agent(profile, webhook_secret=secret).model_dump()
+
+
+@router.delete("/delete-agent/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent(
+    agent_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+) -> Response:
+    await agent_bridge.delete_agent(db, agent_id)
+    _audit(request, "delete-agent", agent_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/publish-agent-version/{agent_id}")
+async def publish_agent_version(
+    agent_id: str,
+    body: PublishAgentVersionRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+) -> dict[str, Any]:
+    profile = await agent_bridge.publish_agent_version(db, agent_id, body)
+    _audit(request, "publish-agent-version", agent_id)
+    return agent_bridge.serialize_agent(profile).model_dump()
+
+
+@router.get("/get-agent-versions/{agent_id}")
+async def get_agent_versions(
+    agent_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+) -> list[dict[str, Any]]:
+    versions = await agent_bridge.list_agent_versions(db, agent_id)
+    _audit(request, "get-agent-versions", agent_id)
+    return [
+        {
+            "agent_id": agent_id,
+            "version": v.version,
+            "version_title": v.note,
+            "last_modification_timestamp": to_ms(v.published_at),
+        }
+        for v in versions
+    ]
