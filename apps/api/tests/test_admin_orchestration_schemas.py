@@ -36,6 +36,17 @@ def test_admin_create_call_defaults():
     assert body.profile_override is None
 
 
+def test_admin_create_call_rejects_nested_dynamic_vars():
+    with pytest.raises(ValidationError):
+        AdminCreateCallRequest(contact_id=uuid.uuid4(), dynamic_vars={"k": {"nested": 1}})
+
+
+def test_admin_create_call_rejects_oversized_dynamic_vars():
+    big = {str(i): "x" * 100 for i in range(100)}  # serializes to > 8192 bytes
+    with pytest.raises(ValidationError):
+        AdminCreateCallRequest(contact_id=uuid.uuid4(), dynamic_vars=big)
+
+
 def test_admin_dnc_response_masks():
     class _E:
         phone_e164 = "+15551239999"
@@ -45,3 +56,4 @@ def test_admin_dnc_response_masks():
     out = AdminDNCResponse.from_model(_E())
     assert out.masked_phone.endswith("9999")
     assert "+1555" not in out.masked_phone
+    assert out.masked_phone != "+15551239999"
