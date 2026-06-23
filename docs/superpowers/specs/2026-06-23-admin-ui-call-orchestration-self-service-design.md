@@ -50,9 +50,12 @@ These were verified against the codebase (`apps/api/src/usan_api`) during brains
   phone, replays on idempotency-key, 422s on a non-live `profile_override`, and returns a
   `DNC_BLOCKED` call (HTTP 200) when the number is on the DNC list. It does not consult
   the contact's dial window — ad-hoc calls intentionally bypass quiet-hours.
-- **`origin` is derived from the idempotency-key prefix.** `parse_origin(idempotency_key)`
-  yields `"schedule" | "batch" | "adhoc"`; the admin "Call now" wrapper must mint an
-  `adhoc`-tagged key.
+- **`origin` is derived from the idempotency-key prefix, and there is NO `adhoc:` prefix.**
+  Only `sched:` and `batch:` are reserved; `parse_origin` returns `null` for everything
+  else (including a `NULL` key). The admin calls-list `origin=adhoc` filter matches
+  "`NULL` key OR non-reserved key". So the "Call now" wrapper mints a **plain unique
+  non-reserved** idempotency key (e.g. `f"admin-{uuid4()}"`) — never a prefixed one; the
+  resulting call reads `origin=null` and lands in the adhoc bucket.
 - **The admin contacts router is partial.** `routers/admin_contacts.py` exposes only
   `GET` list, `PUT /{id}/profile`, and `PUT /{id}/timezone` — no create, detail, field
   edit, or delete.
@@ -146,8 +149,9 @@ window validation (§3.2). A non-live `profile_override` 422s (same contract as 
 | `/v1/admin/calls` | POST | ADMIN | enqueue ad-hoc outbound; body `contact_id`, `dynamic_vars?`, `profile_override?` |
 
 - Delegates to `services/outbound_calls.enqueue_outbound_call`.
-- Mints an **`adhoc`-tagged idempotency key** server-side so the call shows `origin="adhoc"`
-  in the existing call list (the admin client does not supply the key).
+- Mints a **plain unique non-reserved idempotency key** server-side (e.g. `f"admin-{uuid4()}"`;
+  the admin client does not supply one). The call reads `origin=null` and falls into the
+  existing calls-list `origin=adhoc` bucket (NULL-or-non-reserved key).
 - **DNC hard-blocks** → returns the `DNC_BLOCKED` call (HTTP 200) for the UI to surface;
   it is not a 4xx error.
 - **Quiet-hours are not enforced server-side** (matches `POST /v1/calls`); the deliberate
