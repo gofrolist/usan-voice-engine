@@ -12,7 +12,14 @@ from usan_api.masking import mask_phone
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as profiles_repo
 from usan_api.repositories import contacts as contacts_repo
-from usan_api.schemas.admin import AssignProfileRequest, ContactSummary, SetTimezoneRequest
+from usan_api.schemas.admin import (
+    AssignProfileRequest,
+    ContactCreate,
+    ContactDetail,
+    ContactSummary,
+    ContactUpdate,
+    SetTimezoneRequest,
+)
 
 router = APIRouter(
     prefix="/v1/admin/contacts",
@@ -74,6 +81,127 @@ async def assign_profile(
         prof = await profiles_repo.get_profile(db, contact.agent_profile_id)
         profile_name = prof.name if prof else None
     return _summary(contact, profile_name)
+
+
+def _detail(contact: Contact, profile_name: str | None) -> ContactDetail:
+    return ContactDetail(
+        id=contact.id,
+        name=contact.name,
+        masked_phone=mask_phone(contact.phone_e164),
+        timezone=contact.timezone,
+        agent_profile_id=contact.agent_profile_id,
+        agent_profile_name=profile_name,
+        external_id=contact.external_id,
+        preferred_voice=contact.preferred_voice,
+        metadata=contact.meta,
+        created_at=contact.created_at,
+        updated_at=contact.updated_at,
+    )
+
+
+async def _profile_name(db: AsyncSession, contact: Contact) -> str | None:
+    if contact.agent_profile_id is None:
+        return None
+    prof = await profiles_repo.get_profile(db, contact.agent_profile_id)
+    return prof.name if prof else None
+
+
+@router.post("", status_code=status.HTTP_201_CREATED, response_model=ContactDetail)
+async def create_contact(
+    body: ContactCreate,
+    db: AsyncSession = Depends(get_tenant_db),
+    actor: str = Depends(get_actor_email),
+    _: object = Depends(require_admin_role(AdminRole.ADMIN)),
+) -> ContactDetail:
+    try:
+        contact = await contacts_repo.create_contact(
+            db,
+            name=body.name,
+            phone_e164=body.phone_e164,
+            timezone=body.timezone,
+            external_id=body.external_id,
+            preferred_voice=body.preferred_voice,
+            metadata=body.metadata,
+        )
+        await admin_audit.record(
+            db,
+            actor_email=actor,
+            action="contact.create",
+            entity_type="contact",
+            entity_id=str(contact.id),
+            detail={"has_external_id": body.external_id is not None},
+        )
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail="phone_e164 or external_id already in use"
+        ) from exc
+    await db.refresh(contact)
+    return _detail(contact, await _profile_name(db, contact))
+
+
+@router.get("/{contact_id}", response_model=ContactDetail)
+async def get_contact_detail(
+    contact_id: uuid.UUID, db: AsyncSession = Depends(get_tenant_db)
+) -> ContactDetail:
+    contact = await contacts_repo.get_contact(db, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="contact not found")
+    return _detail(contact, await _profile_name(db, contact))
+
+
+@router.patch("/{contact_id}", response_model=ContactDetail)
+async def update_contact(
+    contact_id: uuid.UUID,
+    body: ContactUpdate,
+    db: AsyncSession = Depends(get_tenant_db),
+    actor: str = Depends(get_actor_email),
+    _: object = Depends(require_admin_role(AdminRole.ADMIN)),
+) -> ContactDetail:
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=422, detail="no fields to update")
+    try:
+        contact = await contacts_repo.update_contact(db, contact_id, fields)
+        if contact is None:
+            raise HTTPException(status_code=404, detail="contact not found")
+        await admin_audit.record(
+            db,
+            actor_email=actor,
+            action="contact.update",
+            entity_type="contact",
+            entity_id=str(contact_id),
+            detail={"fields": sorted(fields.keys())},  # field NAMES only, never values
+        )
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail="phone_e164 or external_id already in use"
+        ) from exc
+    await db.refresh(contact)
+    return _detail(contact, await _profile_name(db, contact))
+
+
+@router.delete("/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_contact(
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_tenant_db),
+    actor: str = Depends(get_actor_email),
+    _: object = Depends(require_admin_role(AdminRole.ADMIN)),
+) -> None:
+    deleted = await contacts_repo.delete_contact(db, contact_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="contact not found")
+    await admin_audit.record(
+        db,
+        actor_email=actor,
+        action="contact.delete",
+        entity_type="contact",
+        entity_id=str(contact_id),
+    )
+    await db.commit()
 
 
 @router.put("/{contact_id}/timezone", response_model=ContactSummary)
