@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi import Response
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import quiet_hours
@@ -29,8 +30,8 @@ from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import dnc as dnc_repo
-from usan_api.routers import calls as native_calls
 from usan_api.schemas.call import CreateCallRequest
+from usan_api.services import outbound_calls
 from usan_api.settings import Settings
 
 
@@ -162,9 +163,16 @@ async def create_compat_call(
         # e.g. dynamic_vars over the byte cap or with nested values.
         raise CompatError(422, "invalid retell_llm_dynamic_variables or metadata") from exc
 
-    native_resp = await native_calls._create_and_dispatch(
-        db, native_body, contact, settings, response
-    )
+    try:
+        native_resp = await outbound_calls.create_and_dispatch(
+            db, body=native_body, contact=contact, settings=settings
+        )
+    except IntegrityError as exc:
+        await db.rollback()
+        existing = await calls_repo.get_by_idempotency_key(db, key)
+        if existing is None:
+            raise CompatError(409, "idempotency_key conflict") from exc
+        return existing
     call = await calls_repo.get_call(db, native_resp.id)
     if call is None:  # pragma: no cover - the row was just committed
         raise CompatError(500, "internal error")
