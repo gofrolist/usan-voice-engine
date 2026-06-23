@@ -13,7 +13,6 @@ contact API only length-validates it).
 """
 
 import uuid
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from loguru import logger
@@ -24,16 +23,15 @@ from usan_api.auth import require_operator_token
 from usan_api.client_ip import client_ip
 from usan_api.db.models import CallSchedule
 from usan_api.db.session import get_db
-from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import call_schedules as schedules_repo
 from usan_api.repositories import contacts as contacts_repo
-from usan_api.schedule_windows import days_to_mask, next_run_at
 from usan_api.schemas.schedule import (
     CreateScheduleRequest,
     ScheduleResponse,
     Slot,
     UpdateScheduleRequest,
 )
+from usan_api.services import schedules as schedules_service
 
 router = APIRouter(
     prefix="/v1/schedules",
@@ -47,40 +45,6 @@ def _audit(request: Request, schedule_id: uuid.UUID, action: str, **extra: str) 
     logger.bind(
         client=client_ip(request), schedule_id=str(schedule_id), action=action, **extra
     ).info("Schedule {action}", action=action)
-
-
-def _compute_next_run_at(schedule_like: CallSchedule | CreateScheduleRequest, tz: str) -> datetime:
-    """next_run_at from now for the (merged) window/days; ValueError -> 422 fail-closed."""
-    if isinstance(schedule_like, CreateScheduleRequest):
-        days_mask = schedule_like.days_mask
-    else:
-        days_mask = schedule_like.days_of_week
-    try:
-        computed = next_run_at(
-            datetime.now(UTC),
-            tz,
-            window_start=schedule_like.window_start_local,
-            window_end=schedule_like.window_end_local,
-            days_mask=days_mask,
-        )
-        if computed is None:
-            # Defensive: None is policy-induced only (§3.3.3 rule 2) and this
-            # router never passes policy bounds — if ever reached, fail closed
-            # through the SAME handled 422 path as the other ValueErrors above,
-            # never an unhandled 500.
-            raise ValueError("schedule window produced no dialable time")
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return computed
-
-
-async def _require_live_override(db: AsyncSession, profile_id: uuid.UUID) -> None:
-    """422 unless the override would actually take effect (ACTIVE + published, spec §4)."""
-    if not await agent_profiles_repo.is_live_profile(db, profile_id):
-        raise HTTPException(
-            status_code=422,
-            detail="profile_override must reference an active profile with a published version",
-        )
 
 
 async def _get_or_404(db: AsyncSession, schedule_id: uuid.UUID) -> CallSchedule:
@@ -99,30 +63,10 @@ async def create_schedule(
     contact = await contacts_repo.get_contact(db, body.contact_id)
     if contact is None:
         raise HTTPException(status_code=404, detail="contact not found")
-    if (
-        await schedules_repo.get_by_contact_slot(db, contact_id=body.contact_id, slot=body.slot)
-        is not None
-    ):
-        raise HTTPException(status_code=409, detail=f"contact already has a {body.slot} schedule")
-    if body.profile_override is not None:
-        await _require_live_override(db, body.profile_override)
-    computed = _compute_next_run_at(body, contact.timezone)
     try:
-        schedule = await schedules_repo.create_schedule(
-            db,
-            contact_id=body.contact_id,
-            slot=body.slot,
-            window_start_local=body.window_start_local,
-            window_end_local=body.window_end_local,
-            days_of_week=body.days_mask,
-            enabled=body.enabled,
-            dynamic_vars=body.dynamic_vars,
-            profile_override=body.profile_override,
-            next_run_at=computed,
-        )
+        schedule = await schedules_service.build_create(db, body=body, contact=contact)
         await db.commit()
     except IntegrityError as exc:
-        # Race fallback for the UNIQUE(contact_id, slot) pre-check above.
         await db.rollback()
         raise HTTPException(
             status_code=409, detail=f"contact already has a {body.slot} schedule"
@@ -168,23 +112,7 @@ async def update_schedule(
     if contact is None:  # CASCADE makes this unreachable in practice; fail closed anyway.
         raise HTTPException(status_code=404, detail="contact not found")
 
-    # Merge (window fields travel together — schema-enforced) then revalidate the
-    # merged state: override liveness, and window/days/tz via the recompute below.
-    if body.enabled is not None:
-        schedule.enabled = body.enabled
-    if body.window_start_local is not None and body.window_end_local is not None:
-        schedule.window_start_local = body.window_start_local
-        schedule.window_end_local = body.window_end_local
-    if body.days_of_week is not None:
-        schedule.days_of_week = days_to_mask(body.days_of_week)
-    if body.dynamic_vars is not None:
-        schedule.dynamic_vars = body.dynamic_vars
-    if "profile_override" in body.model_fields_set:  # explicit null clears the override
-        if body.profile_override is not None:
-            await _require_live_override(db, body.profile_override)
-        schedule.profile_override = body.profile_override
-
-    schedule.next_run_at = _compute_next_run_at(schedule, contact.timezone)
+    await schedules_service.apply_update(db, schedule=schedule, body=body, contact=contact)
     await db.commit()
     # updated_at is server-generated (onupdate=func.now()), so the flushed UPDATE
     # expired it; refresh before serializing or the sync read raises MissingGreenlet.
