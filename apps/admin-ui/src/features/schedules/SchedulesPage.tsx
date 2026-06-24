@@ -100,7 +100,7 @@ export function SchedulesPage() {
                 <Tr key={s.id}>
                   <Td className="font-medium">
                     <Link className="text-accent hover:underline" to={`/contacts/${s.contact_id}`}>
-                      {s.contact_id}
+                      {s.contact_name || s.contact_id}
                     </Link>
                   </Td>
                   <Td className="capitalize">{s.slot}</Td>

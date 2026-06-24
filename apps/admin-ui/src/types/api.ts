@@ -516,6 +516,7 @@ export type ScheduleSlot = "morning" | "evening";
 export interface ScheduleResponse {
   id: string;
   contact_id: string;
+  contact_name: string | null; // contact's name for the global list; null on the operator plane
   slot: ScheduleSlot;
   enabled: boolean;
   window_start_local: string; // "HH:MM:SS"

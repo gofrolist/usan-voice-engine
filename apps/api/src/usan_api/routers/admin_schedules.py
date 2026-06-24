@@ -42,17 +42,19 @@ async def list_schedules(
     offset: int = 0,
     db: AsyncSession = Depends(get_tenant_db),
 ) -> list[ScheduleResponse]:
-    rows = await schedules_repo.list_schedules(
+    rows = await schedules_repo.list_schedules_with_contact_name(
         db, contact_id=contact_id, slot=slot, last_result=last_result, limit=limit, offset=offset
     )
-    return [ScheduleResponse.from_model(s) for s in rows]
+    return [ScheduleResponse.from_model(s, contact_name=name) for s, name in rows]
 
 
 @router.get("/{schedule_id}", response_model=ScheduleResponse)
 async def get_schedule(
     schedule_id: uuid.UUID, db: AsyncSession = Depends(get_tenant_db)
 ) -> ScheduleResponse:
-    return ScheduleResponse.from_model(await _get_or_404(db, schedule_id))
+    schedule = await _get_or_404(db, schedule_id)
+    contact = await contacts_repo.get_contact(db, schedule.contact_id)
+    return ScheduleResponse.from_model(schedule, contact_name=contact.name if contact else None)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ScheduleResponse)
@@ -82,7 +84,7 @@ async def create_schedule(
             status_code=409, detail=f"contact already has a {body.slot} schedule"
         ) from exc
     await db.refresh(schedule)
-    return ScheduleResponse.from_model(schedule)
+    return ScheduleResponse.from_model(schedule, contact_name=contact.name)
 
 
 @router.patch("/{schedule_id}", response_model=ScheduleResponse)
@@ -108,7 +110,7 @@ async def update_schedule(
     )
     await db.commit()
     await db.refresh(schedule)
-    return ScheduleResponse.from_model(schedule)
+    return ScheduleResponse.from_model(schedule, contact_name=contact.name)
 
 
 @router.delete("/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)

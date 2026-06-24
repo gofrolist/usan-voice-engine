@@ -31,6 +31,7 @@ function sched(over: Partial<ScheduleResponse> = {}): ScheduleResponse {
   return {
     id: "s1",
     contact_id: "c1",
+    contact_name: "Edna Moore",
     slot: "morning",
     enabled: true,
     window_start_local: "09:00:00",

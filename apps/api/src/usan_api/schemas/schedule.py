@@ -133,6 +133,10 @@ class UpdateScheduleRequest(BaseModel):
 class ScheduleResponse(BaseModel):
     id: uuid.UUID
     contact_id: uuid.UUID
+    # The contact's name, so the admin "who missed today's call?" list can show a name
+    # instead of a bare UUID (spec §4.1). Populated by the admin endpoints; the
+    # operator plane (/v1/schedules) leaves it null (it has no consumer for it).
+    contact_name: str | None = None
     slot: Slot  # closed enum; the DB CHECK (migration 0022) guarantees the value
     enabled: bool
     window_start_local: time
@@ -148,10 +152,11 @@ class ScheduleResponse(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_model(cls, s: CallSchedule) -> ScheduleResponse:
+    def from_model(cls, s: CallSchedule, contact_name: str | None = None) -> ScheduleResponse:
         return cls(
             id=s.id,
             contact_id=s.contact_id,
+            contact_name=contact_name,
             slot=s.slot,
             enabled=s.enabled,
             window_start_local=s.window_start_local,

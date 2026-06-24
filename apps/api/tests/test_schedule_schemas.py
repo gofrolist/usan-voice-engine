@@ -187,3 +187,6 @@ def test_schedule_response_from_model_renders_day_list():
     assert resp.last_materialized_date == date(2026, 6, 7)
     assert resp.last_result == "completed"
     assert resp.last_result_at == row.last_result_at
+    # contact_name defaults to None (operator plane) and is set when provided (admin plane).
+    assert resp.contact_name is None
+    assert ScheduleResponse.from_model(row, contact_name="Rose").contact_name == "Rose"

@@ -26,6 +26,7 @@ let lastUrl = "";
 const row: ScheduleResponse = {
   id: "s1",
   contact_id: "c1",
+  contact_name: "Edna Moore",
   slot: "morning",
   enabled: true,
   window_start_local: "09:00:00",
@@ -68,11 +69,30 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("SchedulesPage", () => {
-  it("links each row to the contact and shows last_result", async () => {
+  it("links each row to the contact by name and shows last_result", async () => {
     renderPage();
-    const link = await screen.findByRole("link", { name: /c1/ });
+    const link = await screen.findByRole("link", { name: /Edna Moore/ });
     expect(link).toHaveAttribute("href", "/contacts/c1");
     expect(screen.getByText("skipped_window")).toBeInTheDocument();
+  });
+
+  it("falls back to the contact UUID when the name is null", async () => {
+    getMock.mockImplementation((u: string) => {
+      if (u === "/v1/auth/me") return Promise.resolve(meFixture("admin"));
+      if (u.startsWith("/v1/admin/schedules")) return Promise.resolve([{ ...row, contact_name: null }]);
+      if (u.startsWith("/v1/admin/profiles")) return Promise.resolve([]);
+      return Promise.reject(new Error(u));
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <SchedulesPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const link = await screen.findByRole("link", { name: /c1/ });
+    expect(link).toHaveAttribute("href", "/contacts/c1");
   });
 
   it("applies the 'who missed' filter as last_result=skipped_window", async () => {

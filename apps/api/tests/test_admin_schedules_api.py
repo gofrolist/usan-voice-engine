@@ -37,6 +37,28 @@ def test_create_list_get_schedule(client, admin_session):
     assert client.get(f"/v1/admin/schedules/{sid}").status_code == 200
 
 
+def test_responses_include_contact_name(client, admin_session):
+    """Every admin schedule response carries the contact's name so the global
+    "who missed" list can show a name instead of a bare UUID (create/list/get/patch)."""
+    cid = _make_contact(client, "+15551231005")
+    created = client.post("/v1/admin/schedules", json=_create_body(cid))
+    assert created.status_code == 201, created.text
+    assert created.json()["contact_name"] == "Sched Target"
+    sid = created.json()["id"]
+
+    listed = client.get("/v1/admin/schedules", params={"contact_id": cid}).json()
+    row = next(s for s in listed if s["id"] == sid)
+    assert row["contact_name"] == "Sched Target"
+
+    got = client.get(f"/v1/admin/schedules/{sid}")
+    assert got.status_code == 200
+    assert got.json()["contact_name"] == "Sched Target"
+
+    patched = client.patch(f"/v1/admin/schedules/{sid}", json={"enabled": False})
+    assert patched.status_code == 200
+    assert patched.json()["contact_name"] == "Sched Target"
+
+
 def test_duplicate_slot_409(client, admin_session):
     cid = _make_contact(client, "+15551231002")
     assert client.post("/v1/admin/schedules", json=_create_body(cid)).status_code == 201
