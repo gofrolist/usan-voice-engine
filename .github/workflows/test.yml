@@ -9,14 +9,47 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Path-gate the monorepo suites: a PR touching only one area shouldn't run the
+  # other areas' tests. Each filter also matches this workflow file, so editing
+  # test.yml re-runs everything. A skipped job reports "skipped" = pass, so a
+  # required-check merge gate is unaffected.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      agent: ${{ steps.filter.outputs.agent }}
+      admin_ui: ${{ steps.filter.outputs.admin_ui }}
+      scripts: ${{ steps.filter.outputs.scripts }}
+    steps:
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'apps/api/**'
+              - '.github/workflows/test.yml'
+            agent:
+              - 'services/agent/**'
+              - '.github/workflows/test.yml'
+            admin_ui:
+              - 'apps/admin-ui/**'
+              - '.github/workflows/test.yml'
+            scripts:
+              - 'scripts/**'
+              - '.github/workflows/test.yml'
+
   pytest-api:
     name: pytest (apps/api)
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -42,6 +75,8 @@ jobs:
 
   pytest-agent:
     name: pytest (services/agent)
+    needs: changes
+    if: needs.changes.outputs.agent == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -62,6 +97,8 @@ jobs:
 
   pytest-scripts:
     name: pytest (scripts)
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -78,6 +115,8 @@ jobs:
 
   vitest-admin-ui:
     name: vitest (apps/admin-ui)
+    needs: changes
+    if: needs.changes.outputs.admin_ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
