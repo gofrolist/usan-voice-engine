@@ -9,10 +9,10 @@ import uuid
 from datetime import date, datetime, time
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api.db.models import CallSchedule
+from usan_api.db.models import CallSchedule, Contact
 
 # Bound the list read (house pattern: sibling repos cap at 500); newest-first
 # with an id tiebreaker so the cap keeps the most recent (spec §4.1).
@@ -80,6 +80,36 @@ async def get_by_contact_slot(
     return result.scalar_one_or_none()
 
 
+def _apply_schedule_filters[T: tuple[Any, ...]](
+    stmt: Select[T],
+    *,
+    contact_id: uuid.UUID | None,
+    slot: str | None,
+    last_result: str | None,
+    limit: int,
+    offset: int,
+) -> Select[T]:
+    """Apply the shared schedule list filters/ordering/paging to a base SELECT.
+
+    Filters are all on CallSchedule columns, so this works for both the plain
+    `select(CallSchedule)` (operator plane) and the contact-name join (admin).
+    Newest first with an `id` tiebreaker; `limit` clamped to 1..MAX_SCHEDULES_LIMIT.
+    """
+    limit = max(1, min(limit, MAX_SCHEDULES_LIMIT))
+    offset = max(0, offset)
+    if contact_id is not None:
+        stmt = stmt.where(CallSchedule.contact_id == contact_id)
+    if slot is not None:
+        stmt = stmt.where(CallSchedule.slot == slot)
+    if last_result is not None:
+        stmt = stmt.where(CallSchedule.last_result == last_result)
+    return (
+        stmt.order_by(CallSchedule.created_at.desc(), CallSchedule.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+
+
 async def list_schedules(
     db: AsyncSession,
     *,
@@ -95,22 +125,46 @@ async def list_schedules(
     view (spec §4.1); `?slot=evening` narrows to one slot (US5). Newest first with
     an `id` tiebreaker; `limit` clamped to 1..MAX_SCHEDULES_LIMIT.
     """
-    limit = max(1, min(limit, MAX_SCHEDULES_LIMIT))
-    offset = max(0, offset)
-    stmt = select(CallSchedule)
-    if contact_id is not None:
-        stmt = stmt.where(CallSchedule.contact_id == contact_id)
-    if slot is not None:
-        stmt = stmt.where(CallSchedule.slot == slot)
-    if last_result is not None:
-        stmt = stmt.where(CallSchedule.last_result == last_result)
-    stmt = (
-        stmt.order_by(CallSchedule.created_at.desc(), CallSchedule.id.desc())
-        .limit(limit)
-        .offset(offset)
+    stmt = _apply_schedule_filters(
+        select(CallSchedule),
+        contact_id=contact_id,
+        slot=slot,
+        last_result=last_result,
+        limit=limit,
+        offset=offset,
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+async def list_schedules_with_contact_name(
+    db: AsyncSession,
+    *,
+    contact_id: uuid.UUID | None = None,
+    slot: str | None = None,
+    last_result: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[tuple[CallSchedule, str]]:
+    """`list_schedules` plus each schedule's contact name, in one INNER JOIN query.
+
+    Powers the admin "who missed today's call?" list so it can show a name instead
+    of a bare contact UUID. INNER JOIN is correct — `call_schedules.contact_id` is a
+    non-null FK with ON DELETE CASCADE, so a schedule never outlives its contact and
+    the name (contacts.name, NOT NULL) is always present. Mirrors
+    `contacts.list_with_profile`'s (model, joined-column) tuple shape. RLS-scoped by
+    the tenant session, so cross-org rows are never returned.
+    """
+    stmt = _apply_schedule_filters(
+        select(CallSchedule, Contact.name).join(Contact, CallSchedule.contact_id == Contact.id),
+        contact_id=contact_id,
+        slot=slot,
+        last_result=last_result,
+        limit=limit,
+        offset=offset,
+    )
+    result = await db.execute(stmt)
+    return [(row[0], row[1]) for row in result.all()]
 
 
 async def delete_schedule(db: AsyncSession, schedule: CallSchedule) -> None:
