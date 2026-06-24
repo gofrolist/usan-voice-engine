@@ -222,6 +222,14 @@ async def call_now(
     if contact is None:
         raise HTTPException(status_code=404, detail="contact not found")
 
+    # Apply the emergency-stop / concurrency umbrella up front, BEFORE the DNC advisory
+    # lock and the audit write. create_and_dispatch re-checks this for the operator/compat
+    # planes, but here an early check matters: a 503 raised from inside create_and_dispatch
+    # fires before its first commit, so get_tenant_db would roll back the pending
+    # `call.enqueue` audit row — a blocked attempt would leave no trace. Rejecting here
+    # keeps the audit/lock work off the blocked path entirely.
+    await outbound_calls.enforce_dialing_gates(db, settings)
+
     # Build the internal create request with a server-minted adhoc key.
     create = CreateCallRequest(
         contact_id=body.contact_id,

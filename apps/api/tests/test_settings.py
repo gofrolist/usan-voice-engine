@@ -283,7 +283,7 @@ def test_recording_settings_defaults(monkeypatch):
 
     s = Settings()
     assert s.gcs_bucket is None
-    assert s.recording_signed_url_ttl_s == 3600
+    assert s.recording_signed_url_ttl_s == 600
 
 
 def test_recording_settings_from_env(monkeypatch):

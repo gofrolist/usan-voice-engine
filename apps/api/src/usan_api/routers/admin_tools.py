@@ -18,7 +18,7 @@ from usan_api.admin_actor import get_actor_email
 from usan_api.auth import get_tenant_db, require_admin_role, require_admin_session
 from usan_api.db.base import AdminRole
 from usan_api.db.models import CallbackRequest, FollowUpFlag
-from usan_api.masking import mask_phone
+from usan_api.masking import email_fingerprint, mask_phone
 from usan_api.observability.custom_metrics import ADMIN_QUEUE_TRANSITIONS_TOTAL
 from usan_api.repositories import admin_audit
 from usan_api.repositories import callback_requests as callback_requests_repo
@@ -281,7 +281,10 @@ async def update_follow_up_flag(
                 raise
             return await _flag_response(db, fresh)
         logger.bind(
-            flag_id=flag_id, actor=actor, from_status=fresh.status, to_status=body.status
+            flag_id=flag_id,
+            actor=email_fingerprint(actor),
+            from_status=fresh.status,
+            to_status=body.status,
         ).warning("Illegal queue transition")  # two humans racing
         raise HTTPException(
             status_code=409, detail=f"illegal transition: {fresh.status} -> {body.status}"
@@ -300,7 +303,9 @@ async def update_follow_up_flag(
         await db.rollback()
         raise
     ADMIN_QUEUE_TRANSITIONS_TOTAL.labels(queue="follow_up_flag", to_status=body.status).inc()
-    logger.bind(flag_id=flag_id, actor=actor, to_status=body.status).info("Queue item transitioned")
+    logger.bind(flag_id=flag_id, actor=email_fingerprint(actor), to_status=body.status).info(
+        "Queue item transitioned"
+    )
     return await _flag_response(db, row)
 
 
@@ -343,7 +348,10 @@ async def update_callback_request(
                 raise
             return await _callback_response(db, fresh)
         logger.bind(
-            request_id=request_id, actor=actor, from_status=fresh.status, to_status=body.status
+            request_id=request_id,
+            actor=email_fingerprint(actor),
+            from_status=fresh.status,
+            to_status=body.status,
         ).warning("Illegal queue transition")  # two humans racing
         raise HTTPException(
             status_code=409, detail=f"illegal transition: {fresh.status} -> {body.status}"
@@ -362,7 +370,7 @@ async def update_callback_request(
         await db.rollback()
         raise
     ADMIN_QUEUE_TRANSITIONS_TOTAL.labels(queue="callback_request", to_status=body.status).inc()
-    logger.bind(request_id=request_id, actor=actor, to_status=body.status).info(
+    logger.bind(request_id=request_id, actor=email_fingerprint(actor), to_status=body.status).info(
         "Queue item transitioned"
     )
     return await _callback_response(db, row)

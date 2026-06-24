@@ -147,8 +147,12 @@ async def create_compat_call(
     now = datetime.now(UTC)
     try:
         allowed = quiet_hours.next_allowed(now, contact.timezone)
-    except ValueError:
-        allowed = now  # bad tz: don't block here; the native dial-time check is the backstop
+    except ValueError as exc:
+        # Fail CLOSED on an unresolvable timezone. create_and_dispatch dispatches the
+        # SIP call immediately (no future scheduled_at), so there is NO dial-time
+        # backstop here — proceeding would place a call we cannot prove is inside the
+        # contact's allowed (TCPA) hours. The native scheduled paths fail closed too.
+        raise CompatError(400, "blocked_quiet_hours") from exc
     if allowed > now:
         raise CompatError(400, "blocked_quiet_hours")
 

@@ -102,6 +102,70 @@ def test_enqueue_call_dnc_blocked(client, mock_dispatch):
     assert mock_dispatch.scheduled == []
 
 
+def test_enqueue_call_blocked_when_dialing_paused(client, mock_dispatch, monkeypatch):
+    """Emergency stop: a real-time dispatch must NOT dial while AUTONOMOUS_DIALING_PAUSED."""
+    from usan_api.settings import get_settings
+
+    contact_id = _create_contact(client)
+    monkeypatch.setenv("AUTONOMOUS_DIALING_PAUSED", "true")
+    get_settings.cache_clear()
+    r = client.post(
+        "/v1/calls",
+        json={"contact_id": contact_id, "idempotency_key": "paused", "dynamic_vars": {}},
+        headers=_OP,
+    )
+    assert r.status_code == 503
+    assert "paused" in r.json()["detail"]
+    mock_dispatch.assert_not_awaited()  # no agent dispatched
+    assert mock_dispatch.scheduled == []  # no background dial scheduled
+
+
+def test_enqueue_call_blocked_when_at_capacity(client, mock_dispatch, monkeypatch):
+    """Concurrency cap: a real-time dispatch is rejected when the dial-slot budget is spent."""
+    from usan_api.repositories import calls as calls_repo
+    from usan_api.settings import get_settings
+
+    contact_id = _create_contact(client)
+    monkeypatch.setenv("CONCURRENCY_GATE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    async def _full(*_a, **_k) -> int:
+        return 999  # far above max_concurrent_calls - reserved_concurrency
+
+    monkeypatch.setattr(calls_repo, "count_in_flight", _full)
+    r = client.post(
+        "/v1/calls",
+        json={"contact_id": contact_id, "idempotency_key": "cap", "dynamic_vars": {}},
+        headers=_OP,
+    )
+    assert r.status_code == 503
+    assert "capacity" in r.json()["detail"]
+    mock_dispatch.assert_not_awaited()
+    assert mock_dispatch.scheduled == []
+
+
+def test_enqueue_call_allowed_when_gate_enabled_with_free_slots(client, mock_dispatch, monkeypatch):
+    """The gate lets the dial through when the concurrency budget still has room."""
+    from usan_api.repositories import calls as calls_repo
+    from usan_api.settings import get_settings
+
+    contact_id = _create_contact(client)
+    monkeypatch.setenv("CONCURRENCY_GATE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    async def _idle(*_a, **_k) -> int:
+        return 0
+
+    monkeypatch.setattr(calls_repo, "count_in_flight", _idle)
+    r = client.post(
+        "/v1/calls",
+        json={"contact_id": contact_id, "idempotency_key": "free", "dynamic_vars": {}},
+        headers=_OP,
+    )
+    assert r.status_code == 202
+    mock_dispatch.assert_awaited_once()
+
+
 def test_enqueue_call_unknown_contact_returns_404(client, mock_dispatch):
     r = client.post(
         "/v1/calls",

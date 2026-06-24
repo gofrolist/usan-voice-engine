@@ -36,6 +36,33 @@ async def require_live_override(db: AsyncSession, profile_id: uuid.UUID) -> None
         raise HTTPException(status_code=422, detail=OVERRIDE_ERROR)
 
 
+async def enforce_dialing_gates(db: AsyncSession, settings: Settings) -> None:
+    """Apply the emergency-stop and concurrency umbrella to every real-time dial.
+
+    These guards previously lived ONLY in the retry poller (``retry_orchestrator``),
+    so the operator ``POST /v1/calls``, admin call-now, and compat create-phone-call
+    paths — all of which call ``create_and_dispatch`` directly — bypassed both the
+    ``AUTONOMOUS_DIALING_PAUSED`` emergency stop and the ``max_concurrent_calls`` cap.
+    Enforcing them here closes that gap for all three planes at once.
+
+    The pause flag is always honored (it is the state-preserving emergency stop). The
+    concurrency cap is honored only when ``concurrency_gate_enabled`` and uses the same
+    in-flight count / free-slot arithmetic as the poller, so real-time and poller-driven
+    dials draw from one shared budget instead of two independent ones.
+    """
+    if settings.autonomous_dialing_paused:
+        raise HTTPException(status_code=503, detail="outbound dialing is paused")
+    if settings.concurrency_gate_enabled:
+        in_flight = await calls_repo.count_in_flight(
+            db,
+            now=datetime.now(UTC),
+            max_age_s=settings.outbound_max_call_duration_s + 120,
+        )
+        free = settings.max_concurrent_calls - settings.reserved_concurrency - in_flight
+        if free <= 0:
+            raise HTTPException(status_code=503, detail="outbound calling is at capacity")
+
+
 async def create_and_dispatch(
     db: AsyncSession,
     *,
@@ -43,7 +70,13 @@ async def create_and_dispatch(
     contact: Contact,
     settings: Settings,
 ) -> CallResponse:
-    """Persist a queued call, dispatch the agent, schedule the background dial."""
+    """Persist a queued call, dispatch the agent, schedule the background dial.
+
+    Reject up front when the emergency stop is engaged or the concurrency budget is
+    exhausted, so no call row is created and no telephony spend is incurred while paused
+    or at capacity (spec §5.4). All three real-time origination planes share this core.
+    """
+    await enforce_dialing_gates(db, settings)
     room = f"usan-outbound-{uuid.uuid4()}"
     call = await calls_repo.create_call(
         db,

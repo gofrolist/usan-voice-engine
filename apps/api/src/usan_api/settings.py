@@ -87,8 +87,12 @@ class Settings(BaseSettings):
     # SSO) — so prod needs no new env var. If set, must be absolute (http(s)://host).
     admin_base_url: str | None = Field(default=None, alias="ADMIN_BASE_URL")
     gcs_bucket: str | None = Field(default=None, alias="GCS_BUCKET")
+    # PHI minimization: a GCS signed recording URL is an IP-unbound bearer token for
+    # call audio, so the operator-plane TTL defaults to 10 min (the same ceiling the
+    # admin plane already caps at). Raise RECORDING_SIGNED_URL_TTL_S only if a machine
+    # integration genuinely needs a longer fetch window; the 60–3600s range is retained.
     recording_signed_url_ttl_s: int = Field(
-        default=3600, ge=60, le=3600, alias="RECORDING_SIGNED_URL_TTL_S"
+        default=600, ge=60, le=3600, alias="RECORDING_SIGNED_URL_TTL_S"
     )
     rate_limit_enabled: bool = Field(default=True, alias="RATE_LIMIT_ENABLED")
     rate_limit_default: str = Field(default="60/minute", alias="RATE_LIMIT_DEFAULT")
