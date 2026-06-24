@@ -74,6 +74,10 @@ export function ContactFormDialog({ mode, contact, onClose }: ContactFormDialogP
       setLocalError("Phone must be E.164 format, e.g. +19495551234.");
       return;
     }
+    if (timezone.trim().length === 0) {
+      setLocalError("Timezone is required.");
+      return;
+    }
     let metadata: Record<string, unknown> | undefined;
     try {
       metadata = parseMetadata();
@@ -85,7 +89,7 @@ export function ContactFormDialog({ mode, contact, onClose }: ContactFormDialogP
     if (isEdit && contact) {
       const body: ContactUpdate = { name: trimmedName };
       if (wantsPhone) body.phone_e164 = phone.trim();
-      if (timezone.trim()) body.timezone = timezone.trim();
+      body.timezone = timezone.trim();
       body.external_id = externalId.trim() || null;
       body.preferred_voice = preferredVoice.trim() || null;
       if (metadata !== undefined) body.metadata = metadata;
