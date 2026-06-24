@@ -264,6 +264,30 @@ async def _truncate_and_dispose(engine: AsyncEngine) -> None:
         await dispose_engine()
 
 
+async def _truncate_and_resolve_org(engine: AsyncEngine) -> uuid.UUID:
+    """TRUNCATE the client-test tables AND read the seeded usan org id on ONE connection.
+
+    The `client`/`sso_client` setup needs both the clean-before truncate and the default
+    org id. Doing them on a single NullPool connection (instead of `_truncate` + a separate
+    `_resolve_usan_org_id` engine) saves one asyncpg connect + event-loop spin-up per client
+    test. The org id is still re-read every test — never cached — because the migration
+    round-trip suite downgrades below 0030 and re-upgrades, reseeding `organizations` with a
+    fresh gen_random_uuid(); `organizations` is intentionally NOT in `_TRUNCATE_ALL`, so the
+    seeded usan row survives the TRUNCATE and the SELECT in the same transaction sees it.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(text(_TRUNCATE_ALL))
+        org_id = (
+            await conn.execute(text("SELECT id FROM organizations WHERE slug = 'usan'"))
+        ).scalar_one_or_none()
+    if org_id is None:
+        raise RuntimeError(
+            "default organization (slug='usan') is not seeded; "
+            "the connect-baseline org seed must run before the test override"
+        )
+    return org_id
+
+
 # create_app() rebuilds the entire FastAPI router tree (~40-120ms; cProfile put it
 # at the top of client-test cost). The routed app is identical across every
 # `client`/`sso_client` test: rate limiting and docs are off at build time for all
@@ -400,7 +424,9 @@ def client(
     # enabled webhook_endpoint that silently inflates this request's outbox fan-out
     # (the room_finished double-fire regression test, CI run 27508993998). Starting
     # from a known-clean DB makes each client test order-independent.
-    asyncio.run(_truncate(test_engine))
+    # One connection does both: clean-before truncate + read the default org id (saves a
+    # separate _resolve_usan_org_id engine/connection per client test).
+    usan_org_id = asyncio.run(_truncate_and_resolve_org(test_engine))
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
 
     async def _override_get_db():
@@ -411,7 +437,6 @@ def client(
                 await session.rollback()
                 raise
 
-    usan_org_id = asyncio.run(_resolve_usan_org_id(async_database_url))
     app = _routed_app()
     app.dependency_overrides[get_db] = _override_get_db
     tenant_engine = _install_tenant_db_override(app, app_async_database_url, usan_org_id)
@@ -461,7 +486,8 @@ def sso_client(
     get_settings.cache_clear()
 
     test_engine = create_async_engine(async_database_url, poolclass=NullPool)
-    asyncio.run(_truncate(test_engine))  # clean-before, order-independent (see `client`)
+    # clean-before truncate + default org id on one connection (see `client`).
+    usan_org_id = asyncio.run(_truncate_and_resolve_org(test_engine))
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
 
     async def _override_get_db():
@@ -472,7 +498,6 @@ def sso_client(
                 await session.rollback()
                 raise
 
-    usan_org_id = asyncio.run(_resolve_usan_org_id(async_database_url))
     app = _routed_app()
     app.dependency_overrides[get_db] = _override_get_db
     tenant_engine = _install_tenant_db_override(app, app_async_database_url, usan_org_id)

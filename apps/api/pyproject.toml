@@ -58,6 +58,12 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "f
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Run in parallel by default (pytest-xdist). The suite is dominated by per-test DB
+# I/O wait, not CPU, so parallelism gives a near-linear speedup (~585s -> ~31s on a
+# 14-core box). Tests are already order-independent (the `client` fixture truncates
+# before every test). To debug a single test serially (pdb, -s output), override
+# with `-n0`, e.g. `uv run pytest -n0 tests/test_x.py::test_y -s`.
+addopts = "-n auto"
 
 [tool.mypy]
 python_version = "3.14"
