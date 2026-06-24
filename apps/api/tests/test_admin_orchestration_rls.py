@@ -169,20 +169,35 @@ def test_admin_contacts_isolated_between_orgs(isolation_client, two_orgs):  # no
 
 
 def test_admin_contact_detail_cross_org_returns_404(isolation_client, two_orgs):  # noqa: F811
-    """GET /v1/admin/contacts/{id} acting as org A returns 404 for org B's contact id."""
+    """GET /v1/admin/contacts/{id} acting as org A returns 404 for org B's contact id.
+
+    A positive anchor is asserted first: org A can read its OWN contact (200).
+    This rules out a vacuous pass where the handler 404s for everything.
+    """
     client, super_url = isolation_client
     org_a, org_b = two_orgs
 
-    asyncio.run(_seed_contact_in_org(super_url, org_a, "+15551260003"))
+    ca = asyncio.run(_seed_contact_in_org(super_url, org_a, "+15551260003"))
     cb = asyncio.run(_seed_contact_in_org(super_url, org_b, "+15551260004"))
     asyncio.run(_seed_super_admin_local(super_url, "staff-rls@usan.com"))
     try:
-        r = client.get(
+        # Positive anchor: org A can fetch its OWN contact.
+        r_own = client.get(
+            f"/v1/admin/contacts/{ca}",
+            cookies=_act_as_cookie("staff-rls@usan.com", org_a),
+        )
+        assert r_own.status_code == 200, (
+            f"org A must be able to read its own contact (expected 200, got "
+            f"{r_own.status_code}): {r_own.text}"
+        )
+
+        # Cross-org check: org A must NOT see org B's contact.
+        r_cross = client.get(
             f"/v1/admin/contacts/{cb}",
             cookies=_act_as_cookie("staff-rls@usan.com", org_a),
         )
-        assert r.status_code == 404, (
-            f"expected 404 (RLS hides cross-org row), got {r.status_code}: {r.text}"
+        assert r_cross.status_code == 404, (
+            f"expected 404 (RLS hides cross-org row), got {r_cross.status_code}: {r_cross.text}"
         )
     finally:
         asyncio.run(_delete_contacts_in_orgs(super_url, org_a, org_b))
@@ -202,24 +217,26 @@ def test_admin_dnc_isolated_between_orgs(isolation_client, two_orgs):  # noqa: F
     asyncio.run(_seed_dnc_in_org(super_url, org_a, phone_a))
     asyncio.run(_seed_super_admin_local(super_url, "staff-rls@usan.com"))
     try:
-        # Org B must not see org A's DNC entry.
-        listed_b = client.get(
-            "/v1/admin/dnc",
-            cookies=_act_as_cookie("staff-rls@usan.com", org_b),
-        ).json()
-        masked_phones_b = {row["masked_phone"] for row in listed_b}
-        # The masked form ends with the last 4 digits.
-        assert not any(m.endswith("0005") for m in masked_phones_b), (
-            "org A's DNC entry must be invisible to org B"
-        )
-
-        # Org A does see its own entry.
+        # Positive anchor: org A sees its own DNC entry (proves the row exists,
+        # so an empty org-B list is caused by RLS isolation, not a missing seed).
         listed_a = client.get(
             "/v1/admin/dnc",
             cookies=_act_as_cookie("staff-rls@usan.com", org_a),
         ).json()
-        assert any(row["masked_phone"].endswith("0005") for row in listed_a), (
-            "org A's DNC entry must be visible to org A"
+        assert len(listed_a) >= 1, (
+            "org A must see its own DNC entry (row exists, RLS allows owner access)"
+        )
+
+        # Isolation check: org B's list must be completely empty.
+        # two_orgs creates fresh empty orgs; only org A seeded a DNC entry here,
+        # so an empty result for org B proves RLS isolation — masking-format-independent.
+        listed_b = client.get(
+            "/v1/admin/dnc",
+            cookies=_act_as_cookie("staff-rls@usan.com", org_b),
+        ).json()
+        assert len(listed_b) == 0, (
+            f"org B's DNC list must be empty (RLS isolates org A's entry), "
+            f"but got {len(listed_b)} row(s): {listed_b}"
         )
     finally:
         asyncio.run(_delete_dnc_in_orgs(super_url, org_a, org_b))
