@@ -260,9 +260,11 @@ async def call_now(
         response.status_code = status.HTTP_200_OK
         return CallResponse.from_model(call)
 
-    # create_and_dispatch owns its own commits; commit the audit row first so it is
-    # not lost if dispatch raises.
-    await db.commit()
+    # Do NOT commit here: keep the lock_phone advisory lock held across the is_blocked
+    # check and the call creation inside create_and_dispatch, closing the TOCTOU window
+    # against a concurrent add_dnc. create_and_dispatch's first commit (after create_call,
+    # before dispatch) flushes the pending audit row atomically with the QUEUED call; on
+    # dispatch failure it commits the FAILED status too, so the audit is never lost.
     return await outbound_calls.create_and_dispatch(
         db, body=create, contact=contact, settings=settings
     )
