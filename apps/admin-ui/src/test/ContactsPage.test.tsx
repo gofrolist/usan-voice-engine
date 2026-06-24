@@ -8,10 +8,12 @@ import { meFixture } from "./meFixture";
 
 const getMock = vi.fn();
 const putMock = vi.fn();
+const postMock = vi.fn();
 vi.mock("../lib/api", () => ({
   api: {
     get: (u: string) => getMock(u),
     put: (u: string, b?: unknown) => putMock(u, b),
+    post: (u: string, b?: unknown) => postMock(u, b),
   },
   ApiError: class ApiError extends Error {
     constructor(
@@ -66,6 +68,7 @@ describe("ContactsPage timezone editor", () => {
   beforeEach(() => {
     getMock.mockReset();
     putMock.mockReset();
+    postMock.mockReset();
     pushToastMock.mockReset();
     getMock.mockImplementation(routeGet);
     contacts = [contact()];
@@ -108,5 +111,19 @@ describe("ContactsPage timezone editor", () => {
     await waitFor(() =>
       expect(pushToastMock).toHaveBeenCalledWith("unknown IANA timezone", undefined),
     );
+  });
+
+  it("shows the New contact button for admins and opens the create dialog", async () => {
+    renderPage();
+    const btn = await screen.findByRole("button", { name: "+ New contact" });
+    await userEvent.click(btn);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create" })).toBeInTheDocument();
+  });
+
+  it("links each contact name to its detail page", async () => {
+    renderPage();
+    const link = await screen.findByRole("link", { name: "Edna Moore" });
+    expect(link).toHaveAttribute("href", "/contacts/11111111-1111-1111-1111-111111111111");
   });
 });

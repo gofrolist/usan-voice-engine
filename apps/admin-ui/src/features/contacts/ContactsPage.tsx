@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Table, Tbody, Td, Th, Thead, Tr } from "../../components/ui/table";
 import { Select } from "../../components/ui/select";
 import { Spinner } from "../../components/ui/spinner";
@@ -7,6 +8,7 @@ import { useIsAdmin } from "../../auth/useSession";
 import { useProfiles } from "../profiles/hooks";
 import { US_TIMEZONES } from "./timezones";
 import { useAssignProfile, useContacts, useSetTimezone } from "./hooks";
+import { ContactFormDialog } from "./ContactFormDialog";
 
 const PAGE_SIZE = 200;
 
@@ -15,6 +17,7 @@ const PAGE_SIZE = 200;
 export function ContactsPage() {
   const isAdmin = useIsAdmin();
   const [offset, setOffset] = useState(0);
+  const [createOpen, setCreateOpen] = useState(false);
   const contacts = useContacts(PAGE_SIZE, offset);
   const profiles = useProfiles();
   const assign = useAssignProfile();
@@ -51,6 +54,7 @@ export function ContactsPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl text-ink-strong">Contacts</h1>
+        <Button onClick={() => setCreateOpen(true)}>+ New contact</Button>
       </div>
       <Table>
         <Thead>
@@ -71,7 +75,11 @@ export function ContactsPage() {
           ) : null}
           {contactList.map((e) => (
             <Tr key={e.id}>
-              <Td className="font-medium text-slate-900">{e.name}</Td>
+              <Td className="font-medium text-slate-900">
+                <Link className="text-accent hover:underline" to={`/contacts/${e.id}`}>
+                  {e.name}
+                </Link>
+              </Td>
               <Td className="font-mono text-xs">{e.masked_phone}</Td>
               <Td>
                 <Select
@@ -125,6 +133,10 @@ export function ContactsPage() {
           ))}
         </Tbody>
       </Table>
+
+      {createOpen ? (
+        <ContactFormDialog mode="create" onClose={() => setCreateOpen(false)} />
+      ) : null}
 
       <div className="flex items-center gap-3 text-sm text-muted">
         <Button

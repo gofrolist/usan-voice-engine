@@ -274,6 +274,35 @@ export interface SetTimezoneRequest {
   timezone: string;
 }
 
+// Admin self-service contact lifecycle (admin.py: ContactCreate/Update/Detail).
+export interface ContactCreate {
+  name: string;
+  phone_e164: string;
+  timezone: string;
+  external_id?: string | null;
+  preferred_voice?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+// PATCH: every field optional; omitted keys are left unchanged. `phone_e164` is a
+// full E.164 *replacement* — the stored number is never echoed back to the browser.
+export interface ContactUpdate {
+  name?: string;
+  phone_e164?: string;
+  timezone?: string;
+  external_id?: string | null;
+  preferred_voice?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ContactDetail extends ContactSummary {
+  external_id: string | null;
+  preferred_voice: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 // ---------------------------------------------------------------------------
 // Auth (auth.py)
 // ---------------------------------------------------------------------------
