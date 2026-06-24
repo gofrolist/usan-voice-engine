@@ -505,3 +505,48 @@ export interface CallResponse {
   status: string;
   created_at: string;
 }
+
+// ---------------------------------------------------------------------------
+// Schedules — full request/response types (admin_schedules.py). Weekday is
+// declared above near the DaysOfWeekPicker block.
+// ---------------------------------------------------------------------------
+
+export type ScheduleSlot = "morning" | "evening";
+
+export interface ScheduleResponse {
+  id: string;
+  contact_id: string;
+  slot: ScheduleSlot;
+  enabled: boolean;
+  window_start_local: string; // "HH:MM:SS"
+  window_end_local: string; // "HH:MM:SS"
+  days_of_week: Weekday[];
+  dynamic_vars: Record<string, unknown>;
+  profile_override: string | null;
+  next_run_at: string;
+  last_materialized_date: string | null;
+  last_result: string | null;
+  last_result_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateScheduleRequest {
+  contact_id: string;
+  slot?: ScheduleSlot;
+  window_start_local: string; // "HH:MM" accepted by the server
+  window_end_local: string;
+  days_of_week?: Weekday[];
+  enabled?: boolean;
+  dynamic_vars?: Record<string, string>;
+  profile_override?: string | null;
+}
+
+export interface UpdateScheduleRequest {
+  enabled?: boolean;
+  window_start_local?: string;
+  window_end_local?: string;
+  days_of_week?: Weekday[];
+  dynamic_vars?: Record<string, string>;
+  profile_override?: string | null;
+}
