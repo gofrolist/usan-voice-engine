@@ -505,6 +505,10 @@ def test_admin_call_detail_presigned_url_clamped(
         async_database_url, contact_id=contact_id, recording_uri="gs://test-bucket/detail.ogg"
     )
     monkeypatch.setenv("GCS_BUCKET", "test-bucket")
+    # Force the operator-plane default above the admin ceiling so the clamp actually
+    # bites: min(3600, 600) == 600. (The shipped default is now 600, so without this the
+    # assertion would be the vacuous min(600, 600).)
+    monkeypatch.setenv("RECORDING_SIGNED_URL_TTL_S", "3600")
     get_settings.cache_clear()
 
     captured: dict[str, Any] = {}
@@ -519,8 +523,9 @@ def test_admin_call_detail_presigned_url_clamped(
     assert r.status_code == 200
     body = r.json()
 
-    # Admin-plane TTL ceiling: settings default 3600 is the MAX of its range, so the
+    # Admin-plane TTL ceiling: with the operator default pinned to 3600 above, the
     # clamp must bite — min(3600, 600) == 600 reaches the signer.
+    assert get_settings().recording_signed_url_ttl_s == 3600  # clamp input exceeds the ceiling
     assert captured["ttl"] == min(get_settings().recording_signed_url_ttl_s, 600) == 600
     assert captured["expected_bucket"] == "test-bucket"
     assert captured["gs_uri"] == "gs://test-bucket/detail.ogg"

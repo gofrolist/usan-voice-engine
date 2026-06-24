@@ -41,6 +41,18 @@ def test_call_now_unknown_contact_404(client, admin_session):
     assert client.post("/v1/admin/calls", json={"contact_id": str(uuid.uuid4())}).status_code == 404
 
 
+def test_call_now_blocked_when_dialing_paused(client, admin_session, monkeypatch):
+    """Emergency stop applies to admin call-now, and rejects BEFORE the DNC advisory lock
+    and audit write — so a blocked attempt leaves no rolled-back partial audit row
+    (security review follow-up to the dialing-gate fix)."""
+    cid = _contact(client, "+15551239009")
+    monkeypatch.setenv("AUTONOMOUS_DIALING_PAUSED", "true")
+    get_settings.cache_clear()
+    r = client.post("/v1/admin/calls", json={"contact_id": cid})
+    assert r.status_code == 503
+    assert "paused" in r.json()["detail"]
+
+
 def test_call_now_viewer_403(client, admin_session, async_database_url):
     cid = _contact(client, "+15551239002")
     from tests.conftest import _seed_admin_user_async
