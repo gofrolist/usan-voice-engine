@@ -106,7 +106,7 @@ describe("ContactFormDialog — edit", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1));
-    const [url, body] = patchMock.mock.calls[0];
+    const [url, body] = patchMock.mock.calls[0]!;
     expect(url).toBe(`/v1/admin/contacts/${existing.id}`);
     expect(body).toMatchObject({ name: "Edna M." });
     expect("phone_e164" in body).toBe(false);

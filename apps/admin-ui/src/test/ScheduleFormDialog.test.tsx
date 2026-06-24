@@ -110,7 +110,7 @@ describe("ScheduleFormDialog — create", () => {
     await user.type(screen.getByLabelText("Window end"), "11:00");
     await user.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
-    const [, body] = postMock.mock.calls[0];
+    const [, body] = postMock.mock.calls[0]!;
     expect(body).toMatchObject({
       contact_id: "c1",
       slot: "morning",
@@ -155,7 +155,7 @@ describe("ScheduleFormDialog — edit", () => {
     await user.type(screen.getByLabelText("Window end"), "12:00");
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1));
-    const [, body] = patchMock.mock.calls[0];
+    const [, body] = patchMock.mock.calls[0]!;
     expect(body.window_start_local).toBe("09:00");
     expect(body.window_end_local).toBe("12:00");
     expect(body.slot).toBeUndefined();
