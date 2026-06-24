@@ -438,3 +438,18 @@ export interface QueuesSummary {
   callbacks_open: number;
   callbacks_acknowledged: number;
 }
+
+// ---------------------------------------------------------------------------
+// Schedules — admin self-service (admin_schedules.py). Full request/response
+// types land in Task 5; the Weekday union is declared here because the shared
+// DaysOfWeekPicker primitive (Task 1) needs it.
+// ---------------------------------------------------------------------------
+
+export type Weekday =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
