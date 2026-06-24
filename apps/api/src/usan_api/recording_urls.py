@@ -17,8 +17,8 @@ from usan_api.db.models import Call
 from usan_api.settings import Settings
 
 # Admin-plane TTL ceiling (spec §4.2/§8): a signed URL is IP-unbound — it defeats the
-# CIDR gate once issued — so the admin plane caps exposure at 10 minutes. The settings
-# default (3600) is the MAX of its 60–3600 range, not "short". Constant, not an env key.
+# CIDR gate once issued — so the admin plane caps exposure at 10 minutes regardless of
+# the operator-plane RECORDING_SIGNED_URL_TTL_S setting. Constant, not an env key.
 ADMIN_RECORDING_URL_MAX_TTL_S = 600
 
 

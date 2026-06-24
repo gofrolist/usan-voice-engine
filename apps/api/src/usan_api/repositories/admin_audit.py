@@ -47,7 +47,11 @@ async def list_recent(
     limit = max(1, min(limit, _MAX_LIST_LIMIT))
     stmt = select(AdminAuditLog)
     if actor:
-        stmt = stmt.where(AdminAuditLog.actor_email.ilike(f"%{actor.strip()}%"))
+        # Escape LIKE metacharacters so a literal % or _ in the filter is matched as
+        # itself, not as a wildcard — otherwise `actor=%` matches every row (filter
+        # bypass) and forces a full-table scan on a high-cardinality column.
+        safe = actor.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        stmt = stmt.where(AdminAuditLog.actor_email.ilike(f"%{safe}%", escape="\\"))
     if action:
         stmt = stmt.where(AdminAuditLog.action == action)
     stmt = stmt.order_by(AdminAuditLog.created_at.desc()).limit(limit)

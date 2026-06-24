@@ -72,6 +72,22 @@ def test_create_phone_call_returns_201_call_object(
     mock_dispatch.assert_awaited_once()
 
 
+def test_create_phone_call_unresolvable_timezone_fails_closed(
+    compat_client, compat_headers, mock_dispatch, monkeypatch
+):
+    """H-3: an unresolvable contact timezone must FAIL CLOSED (400 blocked_quiet_hours),
+    not fall through to an immediate dispatch we cannot prove is inside TCPA hours."""
+
+    def _raise(_dt, _tz, **_k):
+        raise ValueError("unknown timezone")
+
+    monkeypatch.setattr(quiet_hours, "next_allowed", _raise)
+    r = _create(compat_client, compat_headers)
+    assert r.status_code == 400, r.text
+    assert r.json()["message"] == "blocked_quiet_hours"
+    mock_dispatch.assert_not_awaited()  # no SIP call placed
+
+
 def test_get_call_returns_same_id(compat_client, compat_headers, mock_dispatch, allow_quiet_hours):
     created = _create(compat_client, compat_headers).json()
     r = compat_client.get(f"/v2/get-call/{created['call_id']}", headers=compat_headers)

@@ -3,9 +3,10 @@
 ``render_invite_email`` builds the subject + text/HTML bodies from an invitation; the
 HTML mirrors the text and carries the accept link as a button plus a visible fallback
 URL. ``send_invite_email`` wraps the transport in a best-effort try/except: the invite is
-already committed and the link works regardless, so a send failure is logged (recipient +
-invite id + error type only — never the token, which rides inside the accept link) and
-reported as ``False`` rather than raised.
+already committed and the link works regardless, so a send failure is logged (a
+non-reversible recipient fingerprint + invite id + error type only — never the raw
+email, and never the token, which rides inside the accept link) and reported as
+``False`` rather than raised.
 """
 
 import asyncio
@@ -16,6 +17,7 @@ from loguru import logger
 
 from usan_api.db.models import Invitation
 from usan_api.gmail_sender import GmailMailer, Mailer
+from usan_api.masking import email_fingerprint
 from usan_api.settings import Settings
 
 _SUBJECT = "You're invited to USAN Admin"
@@ -91,7 +93,7 @@ async def send_invite_email(
         )
         return True
     except Exception as exc:  # noqa: BLE001 — best-effort: a send failure must not lose the invite
-        logger.bind(invite_id=str(invite.id), recipient=invite.email).warning(
+        logger.bind(invite_id=str(invite.id), recipient=email_fingerprint(invite.email)).warning(
             "invite email send failed (invite {invite_id}, {error_type}); "
             "the link still works — admin can copy it",
             invite_id=str(invite.id),

@@ -205,12 +205,17 @@ async def references_to(db: AsyncSession, name: str) -> list[dict[str, Any]]:
     only, never prompt text or per-call values (spec §7 / FR-007).
     """
     pattern = _token_re(name)
-    like = "%{{" + name + "}}%"
+    # Escape LIKE metacharacters in `name` so an underscore (allowed by the variable
+    # name schema) is matched literally rather than as a single-char wildcard, keeping
+    # the prefilter set tight. The surrounding {{ }} are literal text, the outer % are
+    # the intended wildcards. `_token_re` is the authoritative confirm regardless.
+    safe = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like = "%{{" + safe + "}}%"
     by_profile: dict[uuid.UUID, dict[str, Any]] = {}
 
     draft_rows = await db.execute(
         select(AgentProfile.id, AgentProfile.name, AgentProfile.draft_config).where(
-            cast(AgentProfile.draft_config, Text).ilike(like)
+            cast(AgentProfile.draft_config, Text).ilike(like, escape="\\")
         )
     )
     for pid, pname, cfg in draft_rows.all():
@@ -227,7 +232,7 @@ async def references_to(db: AsyncSession, name: str) -> list[dict[str, Any]]:
             AgentProfileVersion.config,
         )
         .join(AgentProfile, AgentProfile.id == AgentProfileVersion.profile_id)
-        .where(cast(AgentProfileVersion.config, Text).ilike(like))
+        .where(cast(AgentProfileVersion.config, Text).ilike(like, escape="\\"))
         .order_by(AgentProfileVersion.version)
     )
     for pid, pname, version, cfg in version_rows.all():

@@ -30,6 +30,7 @@ from usan_api import livekit_dispatch
 from usan_api.admin_actor import get_actor_email
 from usan_api.auth import get_tenant_db, require_admin_role, require_super_admin
 from usan_api.db.base import AdminRole
+from usan_api.masking import email_fingerprint
 from usan_api.prompt_substitution import build_vars, substitute
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
@@ -213,7 +214,7 @@ async def run_llm_test(
         detail={"kind": "test_llm"},
     )
     await db.commit()
-    logger.bind(actor=actor, profile_id=str(profile_id), kind="test_llm").info(
+    logger.bind(actor=email_fingerprint(actor), profile_id=str(profile_id), kind="test_llm").info(
         "Agent text test run"
     )
     return TestLlmResponse(assistant=assistant_text, tool_calls=echoed_tool_calls)
@@ -268,7 +269,7 @@ async def run_audio_test(
         detail={"kind": "test_audio", "room": room},
     )
     await db.commit()
-    logger.bind(actor=actor, profile_id=str(profile_id), kind="test_audio").info(
+    logger.bind(actor=email_fingerprint(actor), profile_id=str(profile_id), kind="test_audio").info(
         "Agent audio test dispatched"
     )
     return TestAudioResponse(url=settings.livekit_url, token=token, room=room)
