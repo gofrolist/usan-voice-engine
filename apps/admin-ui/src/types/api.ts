@@ -274,6 +274,35 @@ export interface SetTimezoneRequest {
   timezone: string;
 }
 
+// Admin self-service contact lifecycle (admin.py: ContactCreate/Update/Detail).
+export interface ContactCreate {
+  name: string;
+  phone_e164: string;
+  timezone: string;
+  external_id?: string | null;
+  preferred_voice?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+// PATCH: every field optional; omitted keys are left unchanged. `phone_e164` is a
+// full E.164 *replacement* — the stored number is never echoed back to the browser.
+export interface ContactUpdate {
+  name?: string;
+  phone_e164?: string;
+  timezone?: string;
+  external_id?: string | null;
+  preferred_voice?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ContactDetail extends ContactSummary {
+  external_id: string | null;
+  preferred_voice: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 // ---------------------------------------------------------------------------
 // Auth (auth.py)
 // ---------------------------------------------------------------------------
@@ -437,4 +466,100 @@ export interface QueuesSummary {
   flags_acknowledged: number;
   callbacks_open: number;
   callbacks_acknowledged: number;
+}
+
+// ---------------------------------------------------------------------------
+// Schedules — admin self-service (admin_schedules.py). Full request/response
+// types land in Task 5; the Weekday union is declared here because the shared
+// DaysOfWeekPicker primitive (Task 1) needs it.
+// ---------------------------------------------------------------------------
+
+export type Weekday =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+
+// ---------------------------------------------------------------------------
+// Ad-hoc outbound calls (admin_calls.py: AdminCreateCallRequest / CallResponse)
+// ---------------------------------------------------------------------------
+
+// Admin ad-hoc outbound (admin_calls.py: AdminCreateCallRequest). idempotency_key
+// is minted server-side, so it is NOT sent.
+export interface AdminCreateCallRequest {
+  contact_id: string;
+  dynamic_vars?: Record<string, string>;
+  profile_override?: string | null;
+}
+
+// POST /v1/admin/calls returns the full CallResponse; the UI reads this subset.
+// status is "queued" on a normal enqueue and "dnc_blocked" when the number is on
+// the DNC list (HTTP 200, not an error).
+export interface CallResponse {
+  id: string;
+  contact_id: string | null;
+  direction: string;
+  status: string;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Schedules — full request/response types (admin_schedules.py). Weekday is
+// declared above near the DaysOfWeekPicker block.
+// ---------------------------------------------------------------------------
+
+export type ScheduleSlot = "morning" | "evening";
+
+export interface ScheduleResponse {
+  id: string;
+  contact_id: string;
+  slot: ScheduleSlot;
+  enabled: boolean;
+  window_start_local: string; // "HH:MM:SS"
+  window_end_local: string; // "HH:MM:SS"
+  days_of_week: Weekday[];
+  dynamic_vars: Record<string, unknown>;
+  profile_override: string | null;
+  next_run_at: string;
+  last_materialized_date: string | null;
+  last_result: string | null;
+  last_result_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateScheduleRequest {
+  contact_id: string;
+  slot?: ScheduleSlot;
+  window_start_local: string; // "HH:MM" accepted by the server
+  window_end_local: string;
+  days_of_week?: Weekday[];
+  enabled?: boolean;
+  dynamic_vars?: Record<string, string>;
+  profile_override?: string | null;
+}
+
+export interface UpdateScheduleRequest {
+  enabled?: boolean;
+  window_start_local?: string;
+  window_end_local?: string;
+  days_of_week?: Weekday[];
+  dynamic_vars?: Record<string, string>;
+  profile_override?: string | null;
+}
+
+// DNC — admin self-service (dnc.py). The list/add response carries ONLY the masked
+// phone (raw phone_e164 is never exposed); removal targets the full E.164 by path.
+export interface AdminDNCResponse {
+  masked_phone: string;
+  reason: string | null;
+  added_at: string;
+}
+
+export interface DNCCreate {
+  phone_e164: string;
+  reason?: string | null;
 }

@@ -5,6 +5,7 @@ import { PageLayout } from "./components/PageLayout";
 import { ProfileEditorPage } from "./features/editor/ProfileEditorPage";
 import { VersionHistoryPage } from "./features/versions/VersionHistoryPage";
 import { ContactsPage } from "./features/contacts/ContactsPage";
+import { ContactDetailPage } from "./features/contacts/ContactDetailPage";
 import { CallsPage } from "./features/calls/CallsPage";
 import { CallDetailPage } from "./features/calls/CallDetailPage";
 import { QueuesPage } from "./features/queues/QueuesPage";
@@ -13,6 +14,8 @@ import { AuditPage } from "./features/audit/AuditPage";
 import { MembersPage } from "./features/members/MembersPage";
 import { OrgConsolePage } from "./features/orgs/OrgConsolePage";
 import { CustomVariablesPage } from "./features/customVariables/CustomVariablesPage";
+import { SchedulesPage } from "./features/schedules/SchedulesPage";
+import { DncPage } from "./features/dnc/DncPage";
 import { AcceptInvitePage } from "./features/invites/AcceptInvitePage";
 import { HomeLanding } from "./components/HomeLanding";
 import { RequireAdmin, RequireSuperAdmin } from "./auth/RequireTier";
@@ -48,6 +51,30 @@ export const router = createBrowserRouter([
             element: (
               <RequireAdmin>
                 <ContactsPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "contacts/:id",
+            element: (
+              <RequireAdmin>
+                <ContactDetailPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "schedules",
+            element: (
+              <RequireAdmin>
+                <SchedulesPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "dnc",
+            element: (
+              <RequireAdmin>
+                <DncPage />
               </RequireAdmin>
             ),
           },
