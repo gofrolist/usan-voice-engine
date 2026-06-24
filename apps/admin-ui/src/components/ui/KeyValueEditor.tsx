@@ -52,16 +52,16 @@ export function KeyValueEditor({
     <div>
       <div className="mb-1 block text-xs font-medium text-slate-600">{label}</div>
       <div className="space-y-2">
-        {rows.map((r) => (
+        {rows.map((r, i) => (
           <div key={r.id} className="flex items-center gap-2">
             <Input
-              aria-label={`${label} key`}
+              aria-label={`${label} key ${i + 1}`}
               placeholder="first_name"
               value={r.key}
               onChange={(e) => setRow(r.id, { key: e.target.value })}
             />
             <Input
-              aria-label={`${label} value`}
+              aria-label={`${label} value ${i + 1}`}
               placeholder="Jane"
               value={r.value}
               onChange={(e) => setRow(r.id, { value: e.target.value })}

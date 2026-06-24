@@ -24,6 +24,8 @@ describe("dynamicVars helpers", () => {
   it("byte size counts JSON bytes and the cap is 8192", () => {
     expect(DYNAMIC_VARS_MAX_BYTES).toBe(8192);
     expect(dynamicVarsByteSize({ a: "b" })).toBe(JSON.stringify({ a: "b" }).length);
+    const emoji = { k: "🔥" };
+    expect(dynamicVarsByteSize(emoji)).toBeGreaterThan(JSON.stringify(emoji).length);
   });
 
   it("rowsToRecord drops empty keys; last duplicate wins", () => {
@@ -49,8 +51,8 @@ describe("KeyValueEditor", () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(screen.getByRole("button", { name: "Add variable" }));
-    await user.type(screen.getByLabelText("Variables key"), "first_name");
-    await user.type(screen.getByLabelText("Variables value"), "Jane");
+    await user.type(screen.getByLabelText("Variables key 1"), "first_name");
+    await user.type(screen.getByLabelText("Variables value 1"), "Jane");
     expect(screen.getByTestId("record")).toHaveTextContent('{"first_name":"Jane"}');
     await user.click(screen.getByRole("button", { name: /Remove/ }));
     expect(screen.getByTestId("record")).toHaveTextContent("{}");
