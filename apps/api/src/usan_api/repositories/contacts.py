@@ -1,7 +1,8 @@
 import uuid
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.models import AgentProfile, Contact
@@ -108,3 +109,13 @@ async def set_timezone(db: AsyncSession, contact_id: uuid.UUID, timezone: str) -
     contact.timezone = timezone
     await db.flush()
     return contact
+
+
+async def delete_contact(db: AsyncSession, contact_id: uuid.UUID) -> bool:
+    """Delete a contact by id; return True iff a row was removed. CASCADE drops the
+    contact's schedules; calls.contact_id is ON DELETE SET NULL so history survives."""
+    result = cast(
+        "CursorResult[Any]",
+        await db.execute(delete(Contact).where(Contact.id == contact_id)),
+    )
+    return result.rowcount > 0

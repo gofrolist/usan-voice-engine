@@ -40,3 +40,11 @@ async def remove_entry(db: AsyncSession, phone_e164: str) -> bool:
     await db.delete(entry)
     await db.flush()
     return True
+
+
+async def list_entries(db: AsyncSession, *, limit: int = 200, offset: int = 0) -> list[DNCEntry]:
+    """Newest-first page of DNC entries for the current org (RLS-scoped)."""
+    result = await db.execute(
+        select(DNCEntry).order_by(DNCEntry.added_at.desc()).limit(limit).offset(offset)
+    )
+    return list(result.scalars().all())

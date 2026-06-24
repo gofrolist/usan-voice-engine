@@ -9,24 +9,26 @@ import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import phi_audit, recording_urls
 from usan_api.admin_actor import get_actor_email
-from usan_api.auth import get_tenant_db, require_admin_session
+from usan_api.auth import get_tenant_db, require_admin_role, require_admin_session
 from usan_api.client_ip import client_ip
-from usan_api.db.base import CallDirection, CallStatus
+from usan_api.db.base import AdminRole, CallDirection, CallStatus
 from usan_api.db.models import Call
 from usan_api.masking import mask_phone
 from usan_api.repositories import admin_audit
 from usan_api.repositories import admin_calls as admin_calls_repo
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import contacts as contacts_repo
+from usan_api.repositories import dnc as dnc_repo
 from usan_api.repositories import transcripts as transcripts_repo
-from usan_api.schemas.admin_calls import AdminCallDetail, AdminCallSummary
-from usan_api.schemas.call import TranscriptSegment, parse_origin
+from usan_api.schemas.admin_calls import AdminCallDetail, AdminCallSummary, AdminCreateCallRequest
+from usan_api.schemas.call import CallResponse, CreateCallRequest, TranscriptSegment, parse_origin
+from usan_api.services import outbound_calls
 from usan_api.settings import Settings, get_settings
 
 router = APIRouter(
@@ -201,4 +203,68 @@ async def get_call_detail(
         presigned_recording_url=url,
         recording_url_ttl_s=ttl_s,
         transcript=[TranscriptSegment.from_model(t) for t in transcript],
+    )
+
+
+@router.post("/calls", status_code=status.HTTP_202_ACCEPTED, response_model=CallResponse)
+async def call_now(
+    body: AdminCreateCallRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_tenant_db),
+    settings: Settings = Depends(get_settings),
+    actor: str = Depends(get_actor_email),
+    _: object = Depends(require_admin_role(AdminRole.ADMIN)),
+) -> CallResponse:
+    """Ad-hoc outbound call. DNC hard-blocks (200 dnc_blocked); quiet-hours are not
+    enforced here (the UI carries the 'outside window' ack). Mints a unique
+    non-reserved idempotency key so origin reads adhoc."""
+    contact = await contacts_repo.get_contact(db, body.contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="contact not found")
+
+    # Build the internal create request with a server-minted adhoc key.
+    create = CreateCallRequest(
+        contact_id=body.contact_id,
+        idempotency_key=f"admin-{uuid.uuid4()}",
+        dynamic_vars=body.dynamic_vars,
+        profile_override=body.profile_override,
+    )
+
+    await dnc_repo.lock_phone(db, contact.phone_e164)
+    if create.profile_override is not None:
+        await outbound_calls.require_live_override(db, create.profile_override)
+
+    await admin_audit.record(
+        db,
+        actor_email=actor,
+        action="call.enqueue",
+        entity_type="contact",
+        entity_id=str(contact.id),
+        detail={
+            "profile_override": str(create.profile_override) if create.profile_override else None
+        },
+    )
+
+    if await dnc_repo.is_blocked(db, contact.phone_e164):
+        call = await calls_repo.create_call(
+            db,
+            contact_id=contact.id,
+            direction=CallDirection.OUTBOUND,
+            status=CallStatus.DNC_BLOCKED,
+            idempotency_key=create.idempotency_key,
+            dynamic_vars=create.dynamic_vars,
+            profile_override=create.profile_override,
+        )
+        await db.commit()
+        await db.refresh(call)
+        response.status_code = status.HTTP_200_OK
+        return CallResponse.from_model(call)
+
+    # Do NOT commit here: keep the lock_phone advisory lock held across the is_blocked
+    # check and the call creation inside create_and_dispatch, closing the TOCTOU window
+    # against a concurrent add_dnc. create_and_dispatch's first commit (after create_call,
+    # before dispatch) flushes the pending audit row atomically with the QUEUED call; on
+    # dispatch failure it commits the FAILED status too, so the audit is never lost.
+    return await outbound_calls.create_and_dispatch(
+        db, body=create, contact=contact, settings=settings
     )

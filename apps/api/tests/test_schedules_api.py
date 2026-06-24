@@ -162,10 +162,10 @@ def test_create_schedule_defensive_none_maps_to_422(client, monkeypatch):
     # intersections (§3.3.3 rule 2) and this router never passes policy bounds —
     # but if the branch is ever reached it must fail closed through the same
     # handled 422 path as the other ValueErrors, never escape as a 500.
-    from usan_api.routers import schedules as schedules_router
+    from usan_api.services import schedules as schedules_svc
 
     contact_id = _seed_contact(client)
-    monkeypatch.setattr(schedules_router, "next_run_at", lambda *a, **k: None)
+    monkeypatch.setattr(schedules_svc, "next_run_at", lambda *a, **k: None)
     r = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP)
     assert r.status_code == 422
 

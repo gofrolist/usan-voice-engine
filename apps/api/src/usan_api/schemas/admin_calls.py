@@ -5,12 +5,15 @@ Reuses ``TranscriptSegment``/``CallOrigin`` from ``schemas/call.py`` and the
 the ``types/api.ts`` mirror.
 """
 
+import json
 import uuid
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
-from usan_api.schemas.call import CallOrigin, TranscriptSegment
+from usan_api.schemas._validators import reject_nested_dynamic_vars
+from usan_api.schemas.call import MAX_DYNAMIC_VARS_BYTES, CallOrigin, TranscriptSegment
 
 
 class AdminCallSummary(BaseModel):
@@ -51,3 +54,20 @@ class AdminCallDetail(AdminCallSummary):
     presigned_recording_url: str | None
     recording_url_ttl_s: int | None  # clamped effective TTL when URL present
     transcript: list[TranscriptSegment]
+
+
+class AdminCreateCallRequest(BaseModel):
+    """Admin 'call now' body. No idempotency_key — the endpoint mints a unique
+    non-reserved key server-side (origin=adhoc)."""
+
+    contact_id: uuid.UUID
+    dynamic_vars: dict[str, Any] = Field(default_factory=dict)
+    profile_override: uuid.UUID | None = None
+
+    @field_validator("dynamic_vars")
+    @classmethod
+    def _cap_dynamic_vars(cls, v: dict[str, Any]) -> dict[str, Any]:
+        reject_nested_dynamic_vars(v)
+        if len(json.dumps(v)) > MAX_DYNAMIC_VARS_BYTES:
+            raise ValueError(f"dynamic_vars must serialize to <= {MAX_DYNAMIC_VARS_BYTES} bytes")
+        return v
