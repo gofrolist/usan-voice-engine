@@ -22,7 +22,7 @@ Design spec: `docs/superpowers/specs/2026-05-25-usan-voice-engine-design.md`
 ### API
 ```bash
 cd apps/api && uv sync
-uv run pytest            # parallel by default (-n auto via pyproject addopts; ~67s)
+uv run pytest            # parallel by default (-n auto via pyproject addopts; ~31s)
 uv run pytest -n0 tests/test_x.py::test_y -s   # serial, for pdb / -s debugging
 ruff check . && ruff format .
 ```
