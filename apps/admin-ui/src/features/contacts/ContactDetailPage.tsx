@@ -7,6 +7,7 @@ import { useIsAdmin } from "../../auth/useSession";
 import { CallNowDialog } from "./CallNowDialog";
 import { ContactFormDialog } from "./ContactFormDialog";
 import { useContact, useDeleteContact } from "./hooks";
+import { ScheduleSection } from "../schedules/ScheduleSection";
 
 // Per-contact home: header + edit/delete + call-now + schedules. Call-now (Task 4)
 // and the schedules section (Task 6) mount at the marked extension points.
@@ -66,7 +67,7 @@ export function ContactDetailPage() {
         </div>
       </div>
 
-      {/* SCHEDULES_SECTION — Task 6 mounts <ScheduleSection contactId={c.id} /> here. */}
+      <ScheduleSection contactId={c.id} />
 
       <div>
         <Link className="text-sm text-accent hover:underline" to={`/calls?contact_id=${c.id}`}>
