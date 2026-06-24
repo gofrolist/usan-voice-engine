@@ -15,6 +15,7 @@ import { MembersPage } from "./features/members/MembersPage";
 import { OrgConsolePage } from "./features/orgs/OrgConsolePage";
 import { CustomVariablesPage } from "./features/customVariables/CustomVariablesPage";
 import { SchedulesPage } from "./features/schedules/SchedulesPage";
+import { DncPage } from "./features/dnc/DncPage";
 import { AcceptInvitePage } from "./features/invites/AcceptInvitePage";
 import { HomeLanding } from "./components/HomeLanding";
 import { RequireAdmin, RequireSuperAdmin } from "./auth/RequireTier";
@@ -66,6 +67,14 @@ export const router = createBrowserRouter([
             element: (
               <RequireAdmin>
                 <SchedulesPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "dnc",
+            element: (
+              <RequireAdmin>
+                <DncPage />
               </RequireAdmin>
             ),
           },

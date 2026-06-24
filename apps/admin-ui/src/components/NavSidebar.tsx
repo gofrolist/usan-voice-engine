@@ -11,6 +11,7 @@ import {
   CallsIcon,
   ContactsIcon,
   DefaultsIcon,
+  DncIcon,
   MembersIcon,
   OrganizationsIcon,
   ProfilesIcon,
@@ -41,6 +42,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { to: "/contacts", label: "Contacts", icon: ContactsIcon, adminOnly: true },
       { to: "/schedules", label: "Schedules", icon: SchedulesIcon, adminOnly: true },
+      { to: "/dnc", label: "DNC", icon: DncIcon, adminOnly: true },
       // Org admins author their own org's defaults/variables; viewers read-only (RLS-scoped).
       { to: "/defaults", label: "Defaults", icon: DefaultsIcon },
       { to: "/custom-variables", label: "Variables", icon: VariablesIcon },

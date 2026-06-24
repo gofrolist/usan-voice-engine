@@ -550,3 +550,16 @@ export interface UpdateScheduleRequest {
   dynamic_vars?: Record<string, string>;
   profile_override?: string | null;
 }
+
+// DNC — admin self-service (dnc.py). The list/add response carries ONLY the masked
+// phone (raw phone_e164 is never exposed); removal targets the full E.164 by path.
+export interface AdminDNCResponse {
+  masked_phone: string;
+  reason: string | null;
+  added_at: string;
+}
+
+export interface DNCCreate {
+  phone_e164: string;
+  reason?: string | null;
+}
