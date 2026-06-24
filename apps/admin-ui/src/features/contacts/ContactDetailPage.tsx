@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/button";
 import { Spinner } from "../../components/ui/spinner";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useIsAdmin } from "../../auth/useSession";
+import { CallNowDialog } from "./CallNowDialog";
 import { ContactFormDialog } from "./ContactFormDialog";
 import { useContact, useDeleteContact } from "./hooks";
 
@@ -15,6 +16,7 @@ export function ContactDetailPage() {
   const navigate = useNavigate();
   const contact = useContact(id);
   const del = useDeleteContact();
+  const [callOpen, setCallOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -54,7 +56,7 @@ export function ContactDetailPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {/* CALL_NOW_BUTTON — Task 4 inserts the "Call now" button here. */}
+          <Button onClick={() => setCallOpen(true)}>📞 Call now</Button>
           <Button variant="secondary" onClick={() => setEditOpen(true)}>
             Edit
           </Button>
@@ -72,6 +74,7 @@ export function ContactDetailPage() {
         </Link>
       </div>
 
+      {callOpen ? <CallNowDialog contact={c} onClose={() => setCallOpen(false)} /> : null}
       {editOpen ? (
         <ContactFormDialog mode="edit" contact={c} onClose={() => setEditOpen(false)} />
       ) : null}

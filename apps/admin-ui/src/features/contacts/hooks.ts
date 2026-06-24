@@ -3,6 +3,8 @@ import { api } from "../../lib/api";
 import type { ApiError } from "../../lib/api";
 import { pushToast } from "../../components/ui/toast";
 import type {
+  AdminCreateCallRequest,
+  CallResponse,
   ContactCreate,
   ContactDetail,
   ContactSummary,
@@ -100,5 +102,13 @@ export function useDeleteContact() {
     },
     // A delete blocked by a dependent record (FK) surfaces its server detail as a toast.
     onError: (err) => pushToast(err.detail),
+  });
+}
+
+// Ad-hoc call. Returns the CallResponse (status may be "dnc_blocked"). Errors
+// (404/422/503) are surfaced by the dialog, so no toast here.
+export function useCallNow() {
+  return useMutation<CallResponse, ApiError, AdminCreateCallRequest>({
+    mutationFn: (body) => api.post<CallResponse>("/v1/admin/calls", body),
   });
 }

@@ -482,3 +482,26 @@ export type Weekday =
   | "friday"
   | "saturday"
   | "sunday";
+
+// ---------------------------------------------------------------------------
+// Ad-hoc outbound calls (admin_calls.py: AdminCreateCallRequest / CallResponse)
+// ---------------------------------------------------------------------------
+
+// Admin ad-hoc outbound (admin_calls.py: AdminCreateCallRequest). idempotency_key
+// is minted server-side, so it is NOT sent.
+export interface AdminCreateCallRequest {
+  contact_id: string;
+  dynamic_vars?: Record<string, string>;
+  profile_override?: string | null;
+}
+
+// POST /v1/admin/calls returns the full CallResponse; the UI reads this subset.
+// status is "queued" on a normal enqueue and "dnc_blocked" when the number is on
+// the DNC list (HTTP 200, not an error).
+export interface CallResponse {
+  id: string;
+  contact_id: string | null;
+  direction: string;
+  status: string;
+  created_at: string;
+}
