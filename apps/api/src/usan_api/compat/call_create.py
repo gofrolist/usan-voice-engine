@@ -2,7 +2,7 @@
 
 Number-first Contact upsert, create-time DNC + quiet-hours gating (explicit 400 — the
 stakeholder decision), deterministic idempotency synthesis, then reuse of the native
-dispatch core (``routers.calls._create_and_dispatch``) so dial + built-in-resolution logic
+dispatch core (``services.outbound_calls.create_and_dispatch``) so dial + built-in-resolution logic
 never drifts from the native ``/v1/calls`` path.
 """
 

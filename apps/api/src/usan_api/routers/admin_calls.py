@@ -9,8 +9,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -210,11 +209,12 @@ async def get_call_detail(
 @router.post("/calls", status_code=status.HTTP_202_ACCEPTED, response_model=CallResponse)
 async def call_now(
     body: AdminCreateCallRequest,
+    response: Response,
     db: AsyncSession = Depends(get_tenant_db),
     settings: Settings = Depends(get_settings),
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
-) -> CallResponse | JSONResponse:
+) -> CallResponse:
     """Ad-hoc outbound call. DNC hard-blocks (200 dnc_blocked); quiet-hours are not
     enforced here (the UI carries the 'outside window' ack). Mints a unique
     non-reserved idempotency key so origin reads adhoc."""
@@ -257,10 +257,8 @@ async def call_now(
         )
         await db.commit()
         await db.refresh(call)
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content=CallResponse.from_model(call).model_dump(mode="json"),
-        )
+        response.status_code = status.HTTP_200_OK
+        return CallResponse.from_model(call)
 
     # create_and_dispatch owns its own commits; commit the audit row first so it is
     # not lost if dispatch raises.
