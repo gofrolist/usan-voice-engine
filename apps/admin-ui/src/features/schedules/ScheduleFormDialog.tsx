@@ -66,6 +66,7 @@ export function ScheduleFormDialog({
   const [enabled, setEnabled] = useState(schedule?.enabled ?? true);
   const [override, setOverride] = useState(schedule?.profile_override ?? "");
   const [rows, setRows] = useState<KvRow[]>(recordToRows(schedule?.dynamic_vars ?? {}));
+  const [varsTouched, setVarsTouched] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const profiles = useProfiles();
@@ -101,9 +102,9 @@ export function ScheduleFormDialog({
         window_start_local: start,
         window_end_local: end,
         days_of_week: days,
-        dynamic_vars: vars,
         profile_override: override || null,
       };
+      if (varsTouched) body.dynamic_vars = vars;
       update.mutate({ id: schedule.id, body }, { onSuccess: onClose });
       return;
     }
@@ -124,9 +125,7 @@ export function ScheduleFormDialog({
     <Dialog open onClose={onClose} title={isEdit ? "Edit schedule" : "New schedule"}>
       <div className="space-y-3">
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="sf-slot">
-            Slot
-          </label>
+          <div className="mb-1 block text-xs font-medium text-slate-600">Slot</div>
           {isEdit ? (
             <p className="text-sm text-ink">
               {slot} (slot is fixed; delete and recreate to change)
@@ -189,7 +188,7 @@ export function ScheduleFormDialog({
             ))}
           </Select>
         </div>
-        <KeyValueEditor rows={rows} onChange={setRows} label="Schedule variables" />
+        <KeyValueEditor rows={rows} onChange={(r) => { setRows(r); setVarsTouched(true); }} label="Schedule variables" />
         <label className="flex items-center gap-2 text-sm text-slate-700">
           <input
             type="checkbox"

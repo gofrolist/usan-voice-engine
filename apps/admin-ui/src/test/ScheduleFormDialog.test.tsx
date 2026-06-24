@@ -159,5 +159,6 @@ describe("ScheduleFormDialog — edit", () => {
     expect(body.window_start_local).toBe("09:00");
     expect(body.window_end_local).toBe("12:00");
     expect(body.slot).toBeUndefined();
+    expect("dynamic_vars" in body).toBe(false);
   });
 });

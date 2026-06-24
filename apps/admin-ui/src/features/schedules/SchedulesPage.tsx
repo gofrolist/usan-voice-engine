@@ -107,7 +107,7 @@ export function SchedulesPage() {
                   <Td className="font-mono text-xs">
                     {s.window_start_local.slice(0, 5)}–{s.window_end_local.slice(0, 5)}
                   </Td>
-                  <Td className="text-xs">{s.days_of_week.length}</Td>
+                  <Td className="text-xs">{s.days_of_week.map((d) => d.slice(0, 3)).join(", ")}</Td>
                   <Td>{s.enabled ? <Badge tone="green">on</Badge> : <Badge>off</Badge>}</Td>
                   <Td className="whitespace-nowrap text-xs">{fmtDate(s.next_run_at)}</Td>
                   <Td className="text-xs">{s.last_result ?? "—"}</Td>

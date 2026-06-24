@@ -50,7 +50,7 @@ export function ScheduleSection({ contactId }: { contactId: string }) {
               <div className="text-sm">
                 <span className="font-medium capitalize">{s.slot}</span>{" "}
                 <span className="text-muted">
-                  {fmtWindow(s)} · {s.days_of_week.length} days
+                  {fmtWindow(s)} · {s.days_of_week.map((d) => d.slice(0, 3)).join(", ")}
                 </span>{" "}
                 {s.enabled ? <Badge tone="green">on</Badge> : <Badge>off</Badge>}
               </div>

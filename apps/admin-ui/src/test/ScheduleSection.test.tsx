@@ -89,6 +89,13 @@ describe("ScheduleSection", () => {
     );
   });
 
+  it("hides Add schedule when both slots are taken", async () => {
+    schedules = [sched({ slot: "morning" }), sched({ id: "s2", slot: "evening" })];
+    renderSection();
+    await screen.findByText(/morning/i);
+    expect(screen.queryByRole("button", { name: /Add schedule/i })).not.toBeInTheDocument();
+  });
+
   it("deletes a schedule after confirmation", async () => {
     const user = userEvent.setup();
     delMock.mockResolvedValue(undefined);

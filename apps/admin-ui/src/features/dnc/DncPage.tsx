@@ -61,11 +61,12 @@ export function DncPage() {
               </Tr>
             ) : null}
             {entries.map((e) => (
-              <Tr key={e.masked_phone + e.added_at}>
+              <Tr key={`${e.masked_phone}_${e.added_at}`}>
                 <Td className="font-mono text-xs">{e.masked_phone}</Td>
                 <Td>{e.reason ?? "—"}</Td>
                 <Td className="whitespace-nowrap text-xs">{fmtDate(e.added_at)}</Td>
                 <Td>
+                  {/* Removal requires re-typing the full E.164 number; dialog is row-agnostic by design. */}
                   <Button variant="danger" onClick={() => setRemoving(true)}>
                     Remove
                   </Button>

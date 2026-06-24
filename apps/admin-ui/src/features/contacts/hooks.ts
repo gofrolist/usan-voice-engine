@@ -97,8 +97,9 @@ export function useDeleteContact() {
   const qc = useQueryClient();
   return useMutation<void, ApiError, string>({
     mutationFn: (id) => api.del<void>(`/v1/admin/contacts/${id}`),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       void qc.invalidateQueries({ queryKey: CONTACTS_KEY });
+      void qc.invalidateQueries({ queryKey: [...CONTACTS_KEY, "detail", id] });
     },
     // A delete blocked by a dependent record (FK) surfaces its server detail as a toast.
     onError: (err) => pushToast(err.detail),
