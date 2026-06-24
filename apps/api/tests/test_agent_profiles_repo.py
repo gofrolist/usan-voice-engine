@@ -208,6 +208,67 @@ async def test_archive_blocked_when_assigned_to_contact(session_factory):
             await repo.archive_profile(db, pid)
 
 
+async def test_count_assigned_contacts_bulk_matches_per_profile(session_factory):
+    async with session_factory() as db:
+        p1 = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        p2 = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        p3 = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        for pid, n in ((p1.id, 2), (p2.id, 1)):
+            for _ in range(n):
+                db.add(
+                    Contact(
+                        name="c",
+                        phone_e164=f"+1555{uuid.uuid4().int % 10_000_000:07d}",
+                        timezone="America/New_York",
+                        agent_profile_id=pid,
+                    )
+                )
+        await db.commit()
+
+    async with session_factory() as db:
+        counts = await repo.count_assigned_contacts_bulk(db, [p1.id, p2.id, p3.id])
+        # p3 has no assignments — absent from the map; the caller defaults it to 0.
+        assert counts == {p1.id: 2, p2.id: 1}
+        # Parity with the per-profile path it replaces.
+        for pid in (p1.id, p2.id, p3.id):
+            assert counts.get(pid, 0) == await repo.count_assigned_contacts(db, pid)
+        # Empty input short-circuits without a query.
+        assert await repo.count_assigned_contacts_bulk(db, []) == {}
+
+
+async def test_unpublished_draft_flags_bulk_matches_per_profile(session_factory):
+    async with session_factory() as db:
+        # never published -> True
+        p1 = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        # published, draft == live -> False
+        p2 = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        await repo.publish(db, p2.id, note=None, actor_email="op")
+        # published then diverged -> True
+        p3 = await repo.create_profile(db, name=_name(), description=None, actor_email="op")
+        await repo.publish(db, p3.id, note=None, actor_email="op")
+        await db.commit()
+        changed = DEFAULT_AGENT_CONFIG.model_copy(
+            update={"llm": DEFAULT_AGENT_CONFIG.llm.model_copy(update={"temperature": 0.5})}
+        )
+        await repo.update_draft(
+            db, p3.id, config=changed.model_dump(), description=None, actor_email="op"
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        profiles = await repo.list_profiles(db)
+        flags = await repo.unpublished_draft_flags_bulk(db, profiles)
+        by_id = {p.id: p for p in profiles}
+        assert flags[p1.id] is True
+        assert flags[p2.id] is False
+        assert flags[p3.id] is True
+        # Parity with the per-profile path it replaces.
+        for pid, p in by_id.items():
+            assert flags[pid] == await repo.has_unpublished_draft(db, p)
+        # Empty input short-circuits without a query.
+        assert await repo.unpublished_draft_flags_bulk(db, []) == {}
+
+
 async def test_set_default_self_reassignment_is_idempotent(session_factory):
     async with session_factory() as db:
         p = await repo.create_profile(db, name=_name(), description=None, actor_email="op")

@@ -74,6 +74,11 @@ class Contact(Base, TenantScoped):
     phone_e164: Mapped[str] = mapped_column(Text, nullable=False)
     timezone: Mapped[str] = mapped_column(Text, nullable=False)
     preferred_voice: Mapped[str | None] = mapped_column(Text)
+    # NOTE: a partial index already covers this column for the profile-list count
+    # queries — ``idx_elders_agent_profile ON contacts (agent_profile_id) WHERE
+    # agent_profile_id IS NOT NULL`` (created in migration 0010 on the old ``elders``
+    # table, carried through the 0027 rename which kept legacy index names). No
+    # ``index=True`` here so autogenerate doesn't propose a redundant duplicate.
     agent_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("agent_profiles.id", ondelete="SET NULL")
     )

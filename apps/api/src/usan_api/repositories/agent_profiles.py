@@ -1,12 +1,12 @@
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import time
 from typing import Any, Literal
 
 from loguru import logger
 from pydantic import ValidationError
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.base import CallStatus, ProfileStatus
@@ -273,6 +273,62 @@ async def count_assigned_contacts(db: AsyncSession, profile_id: uuid.UUID) -> in
         select(func.count()).select_from(Contact).where(Contact.agent_profile_id == profile_id)
     )
     return int(result.scalar_one())
+
+
+async def count_assigned_contacts_bulk(
+    db: AsyncSession, profile_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """Assigned-contact counts for many profiles in one grouped query.
+
+    Replaces the per-profile :func:`count_assigned_contacts` fan-out in the list
+    endpoint. Profiles with zero assignments are absent from the map (the GROUP BY
+    emits no row); callers default missing ids to 0. Returns ``{}`` for empty input
+    without touching the database.
+    """
+    if not profile_ids:
+        return {}
+    result = await db.execute(
+        select(Contact.agent_profile_id, func.count())
+        .where(Contact.agent_profile_id.in_(profile_ids))
+        .group_by(Contact.agent_profile_id)
+    )
+    return {row[0]: int(row[1]) for row in result.all()}
+
+
+async def unpublished_draft_flags_bulk(
+    db: AsyncSession, profiles: Sequence[AgentProfile]
+) -> dict[uuid.UUID, bool]:
+    """has-unpublished-draft flag for many profiles, batching the version lookup.
+
+    Mirrors :func:`has_unpublished_draft` exactly: a profile has an unpublished
+    draft when it was never published, when its live published version row is
+    missing, or when that row's config differs from the current draft. The single
+    composite-key ``IN`` query fetches every live version at once instead of one
+    SELECT per profile. Returns ``{}`` for empty input without touching the database.
+    """
+    if not profiles:
+        return {}
+    pairs = [(p.id, p.published_version) for p in profiles if p.published_version is not None]
+    live_config_by_profile: dict[uuid.UUID, dict[str, Any]] = {}
+    if pairs:
+        result = await db.execute(
+            select(AgentProfileVersion.profile_id, AgentProfileVersion.config).where(
+                tuple_(AgentProfileVersion.profile_id, AgentProfileVersion.version).in_(pairs)
+            )
+        )
+        live_config_by_profile = {row[0]: row[1] for row in result.all()}
+
+    flags: dict[uuid.UUID, bool] = {}
+    for p in profiles:
+        if p.published_version is None:
+            flags[p.id] = True
+            continue
+        live_config = live_config_by_profile.get(p.id)
+        if live_config is None:
+            flags[p.id] = True
+            continue
+        flags[p.id] = bool(live_config != p.draft_config)
+    return flags
 
 
 async def archive_profile(db: AsyncSession, profile_id: uuid.UUID) -> AgentProfile | None:

@@ -44,18 +44,18 @@ router = APIRouter(
 @router.get("", response_model=list[ProfileSummary])
 async def list_profiles(db: AsyncSession = Depends(get_tenant_db)) -> list[ProfileSummary]:
     profiles = await repo.list_profiles(db)
-    summaries: list[ProfileSummary] = []
-    # TODO(perf): N+1 — has_unpublished_draft + count_assigned_contacts run per profile.
-    # Batch into a single join/group-by query when the profile list grows.
-    for p in profiles:
-        summaries.append(
-            ProfileSummary.from_model(
-                p,
-                has_unpublished_draft=await repo.has_unpublished_draft(db, p),
-                assigned_contact_count=await repo.count_assigned_contacts(db, p.id),
-            )
+    # Two set-based queries instead of the old 1 + 2N fan-out: one grouped count of
+    # assigned contacts, one composite-key batch load of live published versions.
+    counts = await repo.count_assigned_contacts_bulk(db, [p.id for p in profiles])
+    draft_flags = await repo.unpublished_draft_flags_bulk(db, profiles)
+    return [
+        ProfileSummary.from_model(
+            p,
+            has_unpublished_draft=draft_flags[p.id],
+            assigned_contact_count=counts.get(p.id, 0),
         )
-    return summaries
+        for p in profiles
+    ]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ProfileSummary)
