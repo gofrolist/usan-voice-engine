@@ -30,7 +30,10 @@ sub-app. The admin-ui edits authoritative **native** config only.
 Verified against `apps/admin-ui` during brainstorming:
 
 - **Stack:** React 19 + TypeScript + Vite + React Router v7 + **React Query v5** +
-  **Tailwind v4** + **React Hook Form + Zod**. Hand-rolled UI primitives; no component library.
+  **Tailwind v4**. Hand-rolled UI primitives; no component library. **Dialog forms hand-roll
+  `useState` + manual validation** (cf. `DeclareVariableDialog`, `MembersPage`,
+  `NewProfileDialog`); React Hook Form + Zod are present but used **only** in the profile
+  editor's section forms — so PR B's dialogs follow the `useState` precedent, not RHF.
 - **API client:** `src/lib/api.ts` — typed `fetch` wrapper (`api.get/post/patch/del`),
   `credentials:"include"`, `ApiError{status,detail}`, 401 → full-page redirect to login.
   Data via `useQuery`/`useMutation`; mutations `invalidateQueries` the list key.
@@ -142,7 +145,10 @@ contact outside their normal window" — Confirm disabled until checked. `POST /
 
 ## 7. Forms & validation
 
-React Hook Form + `zodResolver`. Zod schemas mirror the backend (§ "backend contract"):
+Dialog forms use `useState` + manual validation (matching `DeclareVariableDialog` /
+`MembersPage` — **no RHF/Zod** in these dialogs; that lives only in the profile editor). The
+checks below mirror the backend for fast pre-submit feedback, with server `422`/`409`
+authoritative (D8):
 
 - **Contact:** `name` 1–200; `phone_e164` `^\+[1-9]\d{7,14}$` (required on create, optional/
   replacement on edit); `timezone` non-empty (server validates IANA); `external_id`/
