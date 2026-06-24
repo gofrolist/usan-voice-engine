@@ -42,15 +42,17 @@ const contact: ContactDetail = {
 };
 
 function renderDialog() {
+  const onClose = vi.fn();
   getMock.mockImplementation((u: string) =>
     u.startsWith("/v1/admin/profiles") ? Promise.resolve([]) : Promise.reject(new Error(u)),
   );
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  render(
     <QueryClientProvider client={qc}>
-      <CallNowDialog contact={contact} onClose={vi.fn()} />
+      <CallNowDialog contact={contact} onClose={onClose} />
     </QueryClientProvider>,
   );
+  return { onClose };
 }
 
 beforeEach(() => {
@@ -70,7 +72,7 @@ describe("CallNowDialog", () => {
       status: "queued",
       created_at: "",
     });
-    renderDialog();
+    const { onClose } = renderDialog();
     const callBtn = await screen.findByRole("button", { name: /^Call/ });
     expect(callBtn).toBeDisabled();
     await user.click(screen.getByLabelText(/outside their normal window/i));
@@ -79,6 +81,8 @@ describe("CallNowDialog", () => {
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith("/v1/admin/calls", { contact_id: contact.id }),
     );
+    expect(pushToastMock).toHaveBeenCalledWith("Call queued.", "info");
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   it("surfaces a DNC-blocked result inline (not as an error)", async () => {
@@ -94,6 +98,7 @@ describe("CallNowDialog", () => {
     await user.click(await screen.findByLabelText(/outside their normal window/i));
     await user.click(screen.getByRole("button", { name: /^Call/ }));
     expect(await screen.findByText(/Do-Not-Call list/)).toBeInTheDocument();
+    expect(pushToastMock).not.toHaveBeenCalled();
   });
 
   it("surfaces a 503 (telephony unavailable) inline", async () => {

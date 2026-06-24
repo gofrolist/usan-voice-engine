@@ -78,7 +78,6 @@ export function CallNowDialog({ contact, onClose }: CallNowDialogProps) {
             type="checkbox"
             checked={ack}
             onChange={(e) => setAck(e.target.checked)}
-            aria-label="acknowledge outside their normal window"
           />
           I understand this calls the contact <strong>outside their normal window</strong>.
         </label>
