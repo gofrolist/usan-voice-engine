@@ -8,9 +8,17 @@ PENDING-FREEZE are pinned against the captured CRM oracle before the contract te
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+# --- Enums ------------------------------------------------------------------------------
+class DataStorageSetting(StrEnum):
+    everything = "everything"
+    everything_except_pii = "everything_except_pii"
+    basic_attributes_only = "basic_attributes_only"
 
 
 # --- Requests ---------------------------------------------------------------------------
@@ -40,13 +48,14 @@ class CreatePhoneCallRequest(BaseModel):
 
 
 class UpdateCallRequest(BaseModel):
-    """PATCH /v2/update-call/{id} — mutable metadata / dynamic variables. ``data_storage_setting``
-    and ``custom_attributes`` are accepted for contract compatibility (PENDING-FREEZE oracle:
-    semantics) and currently echoed/no-op."""
+    """PATCH /v2/update-call/{id}. ``override_dynamic_variables`` is the oracle field name on
+    THIS op; ``data_storage_setting`` is enum-validated (no-op behavior); ``custom_attributes``
+    is accepted/echoed."""
 
     metadata: dict[str, Any] | None = None
     retell_llm_dynamic_variables: dict[str, Any] | None = None
-    data_storage_setting: str | None = None
+    override_dynamic_variables: dict[str, Any] | None = None
+    data_storage_setting: DataStorageSetting | None = None
     custom_attributes: dict[str, Any] | None = None
 
 

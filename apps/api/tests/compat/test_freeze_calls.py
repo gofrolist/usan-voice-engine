@@ -37,3 +37,22 @@ def test_custom_sip_headers_values_coerced_to_string():
         custom_sip_headers={"X-Trace": 42},
     )
     assert req.custom_sip_headers == {"X-Trace": "42"}  # int coerced to str
+
+
+def test_update_call_accepts_override_dynamic_variables(compat_client, compat_headers, seeded_call):
+    r = compat_client.patch(
+        f"/v2/update-call/{seeded_call}",
+        json={"override_dynamic_variables": {"first_name": "Bo"}},
+        headers=compat_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["retell_llm_dynamic_variables"]["first_name"] == "Bo"
+
+
+def test_update_call_rejects_bad_data_storage_setting(compat_client, compat_headers, seeded_call):
+    r = compat_client.patch(
+        f"/v2/update-call/{seeded_call}",
+        json={"data_storage_setting": "bogus"},
+        headers=compat_headers,
+    )
+    assert r.status_code == 422, r.text

@@ -115,8 +115,9 @@ async def update_call(
 ) -> CompatCall:
     call = await _load_call(db, call_id)
     dynamic_variables, metadata = unpack_dynamic_vars(call.dynamic_vars)
-    if body.retell_llm_dynamic_variables is not None:
-        dynamic_variables = body.retell_llm_dynamic_variables
+    new_vars = body.override_dynamic_variables or body.retell_llm_dynamic_variables
+    if new_vars is not None:
+        dynamic_variables = new_vars
     if body.metadata is not None:
         metadata = body.metadata
     call.dynamic_vars = pack_dynamic_vars(dynamic_variables, metadata)
