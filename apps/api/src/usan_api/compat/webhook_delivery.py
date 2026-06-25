@@ -84,7 +84,7 @@ async def _build_body(
 ) -> dict[str, object]:
     """The byte-faithful RetellAI webhook body: ``{event, call: <full Call object>}``."""
     compat_call = await call_serializer.serialize_call(db, call, settings, client_host=client_host)
-    return {"event": event, "call": compat_call.model_dump(mode="json")}
+    return {"event": event, "call": compat_call.model_dump(mode="json", exclude_none=True)}
 
 
 async def deliver_one(

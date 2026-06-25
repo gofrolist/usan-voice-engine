@@ -57,7 +57,10 @@ async def _load_call(db: AsyncSession, call_id: str) -> Call:
 
 
 @router.post(
-    "/v2/create-phone-call", status_code=status.HTTP_201_CREATED, response_model=CompatCall
+    "/v2/create-phone-call",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CompatCall,
+    response_model_exclude_none=True,
 )
 async def create_phone_call(
     body: CreatePhoneCallRequest,
@@ -74,7 +77,7 @@ async def create_phone_call(
     return await call_serializer.serialize_call(db, call, settings, client_host=client_ip(request))
 
 
-@router.get("/v2/get-call/{call_id}", response_model=CompatCall)
+@router.get("/v2/get-call/{call_id}", response_model=CompatCall, response_model_exclude_none=True)
 async def get_call(
     call_id: str,
     request: Request,
@@ -104,8 +107,15 @@ async def stop_call(
 
 # PATCH is the documented method; POST is accepted too (some clients send it) but hidden
 # from the OpenAPI so the two methods don't collide on one auto-generated operation id.
-@router.patch("/v2/update-call/{call_id}", response_model=CompatCall)
-@router.post("/v2/update-call/{call_id}", response_model=CompatCall, include_in_schema=False)
+@router.patch(
+    "/v2/update-call/{call_id}", response_model=CompatCall, response_model_exclude_none=True
+)
+@router.post(
+    "/v2/update-call/{call_id}",
+    response_model=CompatCall,
+    include_in_schema=False,
+    response_model_exclude_none=True,
+)
 async def update_call(
     call_id: str,
     body: UpdateCallRequest,
@@ -184,7 +194,7 @@ async def _count_calls(db: AsyncSession, body: ListCallsRequest) -> int:
     return int((await db.execute(stmt)).scalar_one())
 
 
-@router.post("/v3/list-calls", response_model=ListCallsResponse)
+@router.post("/v3/list-calls", response_model=ListCallsResponse, response_model_exclude_none=True)
 async def list_calls(
     body: ListCallsRequest,
     request: Request,

@@ -127,7 +127,6 @@ class CompatCall(BaseModel):
     duration_ms: int | None = None
     transcript: str | None = None
     transcript_object: list[TranscriptUtterance] = Field(default_factory=list)
-    transcript_with_tool_calls: str | None = None
     recording_url: str | None = None
     public_log_url: str | None = None  # no native source -> null
     disconnection_reason: str | None = None

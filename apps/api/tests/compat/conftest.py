@@ -18,7 +18,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from usan_api import dialer, livekit_dispatch, quiet_hours
+from usan_api.schemas.voice_catalog import VOICE_CATALOG
 from usan_api.settings import get_settings
+
+_RETELL_VOICE = "retell-" + VOICE_CATALOG[0].name.split(" - ")[0].split()[0]
 
 
 @pytest.fixture(autouse=True)
@@ -71,11 +74,42 @@ def create_call(compat_client, compat_headers, **overrides):
     return compat_client.post("/v2/create-phone-call", json=body, headers=compat_headers)
 
 
+def _published_agent_id(client, headers: dict) -> str:
+    """Create a compat LLM + agent + publish it so agent_id and agent_version are non-null.
+
+    Required for oracle-conformant Call objects: V2CallBase marks agent_id and agent_version
+    as required (not nullable), so the call must be linked to a published profile.
+    """
+    llm = client.post(
+        "/create-retell-llm",
+        json={"start_speaker": "agent", "general_prompt": "hi"},
+        headers=headers,
+    ).json()
+    agent = client.post(
+        "/create-agent",
+        json={
+            "response_engine": {"type": "retell-llm", "llm_id": llm["llm_id"]},
+            "voice_id": _RETELL_VOICE,
+            "agent_name": "Seed Agent",
+        },
+        headers=headers,
+    ).json()
+    agent_id = agent["agent_id"]
+    client.post(
+        f"/publish-agent-version/{agent_id}",
+        json={"version": 1},
+        headers=headers,
+    )
+    return agent_id
+
+
 @pytest.fixture
 def seeded_call(compat_client, compat_headers, mock_dispatch, allow_quiet_hours) -> str:
     """Seed one call via the compat API and return its ``call_id``.
 
-    Consumed by Tasks 6-8, 14, 15 contract-freeze tests that need an existing call
-    in the DB.
+    Creates a published agent first so the serialized Call has non-null agent_id and
+    agent_version — required fields in V2CallBase (oracle contract).
+    Consumed by Tasks 6-8, 14, 15 contract-freeze tests that need an existing call in the DB.
     """
-    return create_call(compat_client, compat_headers).json()["call_id"]
+    agent_id = _published_agent_id(compat_client, compat_headers)
+    return create_call(compat_client, compat_headers, override_agent_id=agent_id).json()["call_id"]

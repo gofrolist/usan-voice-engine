@@ -65,24 +65,24 @@ def test_update_call_rejects_bad_data_storage_setting(compat_client, compat_head
     assert r.status_code == 422, r.text
 
 
-# --- Task 7: Call sub-object shape freeze ------------------------------------------------
+# --- Task 7 / Task 8: Call sub-object shape freeze --------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "13 oracle violations in current serialization — all share the same root cause: "
-        "null fields that the oracle does not mark nullable must be omitted (exclude_none). "
-        "Distinct failing fields: collected_dynamic_variables, start_timestamp, end_timestamp, "
-        "duration_ms, transcript, transcript_with_tool_calls (also wrong type: str vs array), "
-        "recording_url, public_log_url, latency, disconnection_reason, call_analysis, "
-        "call_cost, llm_token_usage. Green after Task 8 removes transcript_with_tool_calls "
-        "and the serialization layer adopts exclude_none."
-    ),
-    strict=True,
-)
 def test_call_object_conforms_to_oracle(compat_client, compat_headers, seeded_call) -> None:
     body = compat_client.get(f"/v2/get-call/{seeded_call}", headers=compat_headers).json()
     assert_conforms(body, "V2PhoneCallResponse")
+
+
+def test_transcript_with_tool_calls_is_omitted(compat_client, compat_headers, seeded_call):
+    body = compat_client.get(f"/v2/get-call/{seeded_call}", headers=compat_headers).json()
+    # transcript_with_tool_calls is removed (oracle typed it array, we had str — field dropped).
+    assert "transcript_with_tool_calls" not in body
+    # transcript and transcript_object are NOT removed from the schema (they stay, just
+    # omitted when null via exclude_none — that's oracle-correct behaviour).
+    from usan_api.compat.schemas.calls import CompatCall
+
+    assert "transcript" in CompatCall.model_fields
+    assert "transcript_object" in CompatCall.model_fields
 
 
 def test_user_sentiment_default_is_null() -> None:
