@@ -396,7 +396,7 @@ def serialize_agent_list_item(profile: AgentProfile) -> AgentListItemResponse:
     """
     return AgentListItemResponse(
         agent_id=ids.encode_agent_id(profile.id),
-        agent_name=profile.name,
+        agent_name=profile.name or "",
         channel="voice",
         user_modified_timestamp=to_ms(profile.updated_at) or 0,
         tags={},

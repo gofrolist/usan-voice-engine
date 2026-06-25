@@ -188,10 +188,14 @@ async def list_agents_v2(
         if fc.channel is not None and fc.channel.value == "chat":
             # Voice-only engine: chat channel always yields an empty list.
             profiles = []
-        # query: case-insensitive substring match on agent_name (profile.name).
+        # query: case-insensitive substring match on agent_name OR agent_id (oracle conformance).
         if fc.query is not None and profiles:
             q = fc.query.lower()
-            profiles = [p for p in profiles if q in (p.name or "").lower()]
+            profiles = [
+                p
+                for p in profiles
+                if q in (p.name or "").lower() or q in ids.encode_agent_id(p.id).lower()
+            ]
 
     items = [
         agent_bridge.serialize_agent_list_item(p).model_dump(exclude_none=True) for p in profiles

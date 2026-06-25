@@ -133,7 +133,7 @@ class AgentListItemResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     agent_id: str
-    agent_name: str | None = None
+    agent_name: str
     channel: str
     user_modified_timestamp: int
     tags: dict[str, Any] = Field(default_factory=dict)
