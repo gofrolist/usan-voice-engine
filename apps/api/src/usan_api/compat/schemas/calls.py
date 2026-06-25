@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # --- Requests ---------------------------------------------------------------------------
@@ -26,9 +26,17 @@ class CreatePhoneCallRequest(BaseModel):
     override_agent_version: int | str | None = None
     metadata: dict[str, Any] | None = None
     retell_llm_dynamic_variables: dict[str, Any] | None = None
-    # Accepted for contract compatibility (PENDING-FREEZE oracle: applied to the SIP INVITE);
-    # currently echoed/no-op so a CRM sending it is not rejected.
-    custom_sip_headers: dict[str, Any] | None = None
+    # FROZEN (oracle additionalProperties:string): accept + echo; values coerced to str.
+    custom_sip_headers: dict[str, str] | None = None
+
+    @field_validator("custom_sip_headers", mode="before")
+    @classmethod
+    def _coerce_sip_header_values_to_str(cls, v: Any) -> dict[str, str] | None:
+        if v is None:
+            return None
+        if not isinstance(v, dict):
+            raise ValueError("custom_sip_headers must be a mapping")
+        return {k: str(val) for k, val in v.items()}
 
 
 class UpdateCallRequest(BaseModel):
