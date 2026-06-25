@@ -21,8 +21,9 @@ class CreatePhoneCallRequest(BaseModel):
     from_number: str
     to_number: str
     override_agent_id: str | None = None
-    # PENDING-FREEZE (oracle): RetellAI's override_agent_version int-vs-string form.
-    override_agent_version: int | None = None
+    # FROZEN (oracle AgentVersionReference): int version OR string tag ("latest"/"prod").
+    # Numeric selects that version; a string tag serves the current published version (MVP).
+    override_agent_version: int | str | None = None
     metadata: dict[str, Any] | None = None
     retell_llm_dynamic_variables: dict[str, Any] | None = None
     # Accepted for contract compatibility (PENDING-FREEZE oracle: applied to the SIP INVITE);

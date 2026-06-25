@@ -4,17 +4,25 @@ The surface-coverage test (test_surface_coverage.py) only inspects route tables 
 never touches a real database.  This conftest provides the minimum Settings env-vars so
 ``get_settings()`` does not raise when called without the top-level conftest's
 ``database_url`` / ``client`` fixtures.
+
+Fixtures that require a live DB (``mock_dispatch``, ``allow_quiet_hours``,
+``seeded_call``) compose with the top-level ``compat_client`` / ``compat_headers``
+fixtures; they are used by the contract-freeze tests (T047).
 """
 
 from __future__ import annotations
 
+from collections.abc import Generator
+from unittest.mock import AsyncMock
+
 import pytest
 
+from usan_api import dialer, livekit_dispatch, quiet_hours
 from usan_api.settings import get_settings
 
 
 @pytest.fixture(autouse=True)
-def _compat_minimal_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _compat_minimal_env(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     """Set the minimum required env-vars for Settings validation.
 
     Values are obviously fake — they are only used for route-inspection tests that
@@ -31,3 +39,43 @@ def _compat_minimal_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
     monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
     monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def mock_dispatch(monkeypatch):
+    """Stub out livekit_dispatch.dispatch_agent and dialer.schedule_dial.
+
+    Returns the AsyncMock so callers can assert it was awaited.
+    """
+    agent = AsyncMock()
+    monkeypatch.setattr(livekit_dispatch, "dispatch_agent", agent)
+    monkeypatch.setattr(dialer, "schedule_dial", lambda call_id, settings: None)
+    return agent
+
+
+@pytest.fixture
+def allow_quiet_hours(monkeypatch):
+    """Neutralize the quiet-hours gate so happy-path tests are wall-clock-deterministic."""
+    monkeypatch.setattr(quiet_hours, "next_allowed", lambda dt, tz, **k: dt)
+
+
+def create_call(compat_client, compat_headers, **overrides):
+    """Helper (not a fixture) — POST /v2/create-phone-call with sensible defaults.
+
+    Callers may pass keyword overrides to test specific request fields.
+    """
+    body = {"from_number": "+15551230000", "to_number": "+15557654321"}
+    body.update(overrides)
+    return compat_client.post("/v2/create-phone-call", json=body, headers=compat_headers)
+
+
+@pytest.fixture
+def seeded_call(compat_client, compat_headers, mock_dispatch, allow_quiet_hours) -> str:
+    """Seed one call via the compat API and return its ``call_id``.
+
+    Consumed by Tasks 6-8, 14, 15 contract-freeze tests that need an existing call
+    in the DB.
+    """
+    return create_call(compat_client, compat_headers).json()["call_id"]
