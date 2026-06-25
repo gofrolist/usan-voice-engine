@@ -73,8 +73,9 @@ CI runs `npm run typecheck` (tsc) **and** `npm run build` for admin-ui — local
 - Apply this pinned path in both `webhook_delivery.py` (native) and `compat/webhook_delivery.py` (compat), replacing the current "guard then `client.stream`" sequence.
 - The exact httpx mechanism (the `sni_hostname` extension vs. a custom transport) is verified by the implementer against the pinned httpx version during TDD; the **invariant the tests enforce** is: the socket connects to a guard-validated IP, and cert validation still uses the original hostname.
 
-### B. Delivery-time allow-list re-check (compat only)
-- In `compat/webhook_delivery.py`, before delivering, re-validate the destination host is present in `COMPAT_WEBHOOK_ALLOWED_HOSTS` (fail-closed: empty list ⇒ no delivery). Today the allow-list is enforced only at registration, so a host removed from the list still receives deliveries from old registrations. This makes the allow-list authoritative at send time — directly relevant because this phase opens PHI egress.
+### B. Delivery-time allow-list re-check (compat only) — already present; lock with a test
+- Verified in source: `compat/webhook_delivery.py::_guard_host` **already** enforces `host not in COMPAT_WEBHOOK_ALLOWED_HOSTS ⇒ SsrfBlocked` (fail-closed on empty list) before `resolve_public_or_raise`, on every POST. So the allow-list is already authoritative at delivery time — this item is **not new code**.
+- The gap is test coverage: there is **no test module for `compat/webhook_delivery.py`** today. Phase 1c adds a regression test that pins this behavior (host absent from the allow-list ⇒ zero deliveries, `ssrf_blocked`) so it cannot silently regress — directly relevant because this phase opens PHI egress.
 
 ### Error handling
 Both checks fail closed by raising the existing `SsrfBlocked` (or the established delivery-skip path), logged **without PHI** (no transcript/recording/number in the log line). A blocked delivery is recorded as a delivery failure per the existing retry/housekeeping semantics — it does not crash the poller.
