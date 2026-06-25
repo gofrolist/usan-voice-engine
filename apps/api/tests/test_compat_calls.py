@@ -51,7 +51,7 @@ def test_missing_key_returns_401_envelope(compat_client):
 
 
 def test_create_phone_call_returns_201_call_object(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
 ):
     r = _create(
         compat_client,
@@ -73,7 +73,7 @@ def test_create_phone_call_returns_201_call_object(
 
 
 def test_create_phone_call_unresolvable_timezone_fails_closed(
-    compat_client, compat_headers, mock_dispatch, monkeypatch
+    compat_client, compat_headers, published_default_agent, mock_dispatch, monkeypatch
 ):
     """H-3: an unresolvable contact timezone must FAIL CLOSED (400 blocked_quiet_hours),
     not fall through to an immediate dispatch we cannot prove is inside TCPA hours."""
@@ -88,7 +88,9 @@ def test_create_phone_call_unresolvable_timezone_fails_closed(
     mock_dispatch.assert_not_awaited()  # no SIP call placed
 
 
-def test_get_call_returns_same_id(compat_client, compat_headers, mock_dispatch, allow_quiet_hours):
+def test_get_call_returns_same_id(
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
+):
     created = _create(compat_client, compat_headers).json()
     r = compat_client.get(f"/v2/get-call/{created['call_id']}", headers=compat_headers)
     assert r.status_code == 200
@@ -110,7 +112,7 @@ def test_get_malformed_call_id_returns_422(compat_client, compat_headers):
 
 
 def test_list_calls_returns_envelope(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
 ):
     _create(compat_client, compat_headers)
     r = compat_client.post(
@@ -125,14 +127,16 @@ def test_list_calls_returns_envelope(
     assert data["total"] >= 1
 
 
-def test_stop_call_returns_204(compat_client, compat_headers, mock_dispatch, allow_quiet_hours):
+def test_stop_call_returns_204(
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
+):
     created = _create(compat_client, compat_headers).json()
     r = compat_client.post(f"/v2/stop-call/{created['call_id']}", headers=compat_headers)
     assert r.status_code == 204
 
 
 def test_update_call_echoes_metadata(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
 ):
     created = _create(compat_client, compat_headers).json()
     r = compat_client.patch(

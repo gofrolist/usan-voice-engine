@@ -22,14 +22,14 @@ pytestmark = pytest.mark.frozen
 
 
 def test_override_agent_version_accepts_string_tag(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
 ):
     r = create_call(compat_client, compat_headers, override_agent_version="latest")
     assert r.status_code == 201, r.text
 
 
 def test_override_agent_version_accepts_int(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
 ):
     r = create_call(compat_client, compat_headers, override_agent_version=3)
     assert r.status_code == 201, r.text
@@ -106,7 +106,7 @@ def test_list_calls_filter_ignores_unknown_keys(compat_client, compat_headers, s
 
 
 def test_duplicate_create_is_idempotent(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
 ):
     """Two identical create-phone-call requests return the same call_id (sha256 dedupe)."""
     a = create_call(compat_client, compat_headers).json()["call_id"]
@@ -115,7 +115,7 @@ def test_duplicate_create_is_idempotent(
 
 
 def test_metadata_name_and_external_id_populate_contact(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
 ):
     """metadata keys ``name`` and ``external_id`` are FROZEN: the contact-upsert path
     reads them to populate Contact.name and Contact.external_id."""

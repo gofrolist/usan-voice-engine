@@ -144,6 +144,14 @@ async def create_compat_call(
     ):
         raise CompatError(422, "override_agent_id must reference a published agent")
 
+    # Oracle V2CallBase requires a non-null agent_id/agent_version on every call. When the
+    # caller gives no override, a PUBLISHED default outbound profile must exist; otherwise we
+    # would emit a null-agent (non-conformant) call. Refuse early with 422.
+    if profile_override is None:
+        default = await agent_profiles_repo.get_default_profile(db, "outbound")
+        if default is None or not await agent_profiles_repo.is_live_profile(db, default.id):
+            raise CompatError(422, "no published agent profile available to place the call")
+
     # Create-time quiet-hours gate -> EXPLICIT 400 (the native path only checks at dial time).
     now = datetime.now(UTC)
     try:
