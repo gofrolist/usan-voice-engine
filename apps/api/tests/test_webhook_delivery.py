@@ -456,7 +456,7 @@ async def test_groups_deliver_concurrently_ordered_within(session_factory, monke
 
     async def handler(request: httpx.Request) -> httpx.Response:
         order.append(request.headers["X-Usan-Delivery-Id"])
-        if request.url.host == "b.example.com":
+        if request.headers["Host"] == "b.example.com":
             gate.set()
         elif request.headers["X-Usan-Delivery-Id"] == str(a1):
             # A's first delivery parks until B's lands: only concurrent
@@ -486,7 +486,7 @@ async def test_one_bad_group_does_not_abort_other_groups(session_factory, monkey
     good_id = await _seed_delivery(session_factory, endpoint_good)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "bad.example.com":
+        if request.headers["Host"] == "bad.example.com":
             raise RuntimeError(f"SENTINEL-EXC-TEXT worker bug for {URL}")
         return httpx.Response(200)
 
@@ -646,3 +646,29 @@ def test_housekeeping_due_helper():
     assert webhook_delivery._housekeeping_due(None, t) is True  # first cycle always
     assert webhook_delivery._housekeeping_due(t, t + 3599.0) is False
     assert webhook_delivery._housekeeping_due(t, t + 3600.0) is True
+
+
+async def test_delivery_pins_connection_to_validated_ip(session_factory, monkeypatch):
+    # The validated IP — not a hostname httpx re-resolves — is the socket target,
+    # closing the resolve-then-connect TOCTOU. _public_resolve yields 93.184.216.34.
+    endpoint_id = await _seed_endpoint(session_factory)
+    await _seed_delivery(session_factory, endpoint_id)
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200)
+
+    _install_client(monkeypatch, handler)
+    stats = await webhook_delivery.poll_once(session_factory, _settings())
+    assert stats["delivered"] == 1
+
+    (request,) = seen
+    # Connect target is the vetted IP literal (no second DNS lookup); Host header +
+    # SNI keep the original hostname for routing and certificate verification.
+    assert request.url.host == "93.184.216.34"
+    assert request.headers["Host"] == "hooks.example.com"
+    assert request.extensions["sni_hostname"] == "hooks.example.com"
+    # Pinning leaves the signed body + headers untouched.
+    assert request.headers["X-Usan-Event"] == "call.completed"

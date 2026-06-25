@@ -122,8 +122,8 @@ async def deliver_one(
 
         response_code: int | None = None
         try:
-            # Layer-2 SSRF gate before EVERY POST (spec §8.2).
-            await ssrf_guard.resolve_public_or_raise(urlsplit(url).hostname or "")
+            # Layer-2 SSRF gate before EVERY POST (spec §8.2): validate AND pin.
+            addrs = await ssrf_guard.resolve_public_or_raise(urlsplit(url).hostname or "")
             # Sign-what-you-send (spec §7): canonical bytes at send time, with
             # the dedupe key injected BEFORE signing (spec §6.1).
             body = dict(claimed.payload)
@@ -139,10 +139,17 @@ async def deliver_one(
                     ts_ms, webhook_signing.sign(secret, ts_ms, raw)
                 ),
             }
+            connect_url, host_header, sni = ssrf_guard.pin_to_ip(url, addrs[0])
             # Stream the response and drain at most max_response_bytes: a customer-
             # controlled receiver that returns an unbounded body could otherwise OOM the
             # API process (groups deliver concurrently). We only need the status code.
-            async with client.stream("POST", url, content=raw, headers=headers) as response:
+            async with client.stream(
+                "POST",
+                connect_url,
+                content=raw,
+                headers={**headers, "Host": host_header},
+                extensions={"sni_hostname": sni},
+            ) as response:
                 response_code = response.status_code
                 drained = 0
                 async for chunk in response.aiter_bytes():
