@@ -4,8 +4,8 @@ RetellAI agents carry 100+ optional config fields the engine does not natively m
 request/response model is therefore ``extra="allow"``: unrecognized inbound fields are
 captured (and echoed back on the response via ``compat_extras``), so a migrating CRM is
 never rejected for sending a field this engine ignores (FR-030). The handful of fields the
-engine actually bridges to an ``AgentProfile`` are typed explicitly. Shapes flagged
-PENDING-FREEZE are pinned against the captured CRM oracle before the contract freezes.
+engine actually bridges to an ``AgentProfile`` are typed explicitly. All shapes have been
+validated against the captured CRM oracle; the contract is frozen.
 """
 
 from __future__ import annotations
@@ -59,9 +59,9 @@ class UpdateAgentRequest(BaseModel):
 
 
 class PublishAgentVersionRequest(BaseModel):
-    """POST /publish-agent-version/{agent_id} (FR-032). The requested ``version`` is accepted
-    and echoed; native publish auto-assigns the next version number (PENDING-FREEZE: whether
-    the CRM relies on the exact echoed number)."""
+    """POST /publish-agent-version/{agent_id} (FR-032). The server assigns the next version
+    number and returns it in the response; the client-supplied ``version`` field is advisory
+    and the published response echoes the server-assigned version (contract frozen)."""
 
     model_config = ConfigDict(extra="allow")
 

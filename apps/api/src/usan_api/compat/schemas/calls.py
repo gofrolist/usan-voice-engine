@@ -1,9 +1,8 @@
 """Pydantic request/response models for the RetellAI-compatible call endpoints (feature 003).
 
 The response **Call object** (``CompatCall``) is the central RetellAI resource, assembled by
-``compat.call_serializer``. Field names + shapes are the external contract. Items flagged
-PENDING-FREEZE are pinned against the captured CRM oracle before the contract tests freeze
-(tasks.md contract-freeze gate).
+``compat.call_serializer``. Field names + shapes are the external contract, frozen and
+validated against the captured CRM oracle (tasks.md contract-freeze gate).
 """
 
 from __future__ import annotations
