@@ -82,6 +82,7 @@ class ListCallsRequest(BaseModel):
 
 # --- Response sub-objects ---------------------------------------------------------------
 class TranscriptUtterance(BaseModel):
+    # FROZEN: role enum agent|user|transfer_target; words [] (oracle Utterance).
     role: str
     content: str
     # Word-level timing is not captured natively; emitted empty (RetellAI marks it optional).
@@ -98,7 +99,8 @@ class CallCost(BaseModel):
 class CallAnalysis(BaseModel):
     call_summary: str | None = None
     in_voicemail: bool = False
-    # PENDING-FREEZE (oracle): no reliable per-call sentiment natively — emitted null.
+    # FROZEN: null now; non-null vocab is title-case Negative/Positive/Neutral/Unknown
+    # (oracle CallAnalysis).
     user_sentiment: str | None = None
     call_successful: bool | None = None
     custom_analysis_data: dict[str, Any] | None = None
@@ -118,7 +120,7 @@ class CompatCall(BaseModel):
     telephony_identifier: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     retell_llm_dynamic_variables: dict[str, Any] = Field(default_factory=dict)
-    # LLM-written-during-call vars are not tracked separately natively -> null (PENDING-FREEZE).
+    # FROZEN: null pre-end; shape per oracle V3CallBase / CallLatency.
     collected_dynamic_variables: dict[str, Any] | None = None
     start_timestamp: int | None = None
     end_timestamp: int | None = None
@@ -131,7 +133,8 @@ class CompatCall(BaseModel):
     disconnection_reason: str | None = None
     call_analysis: CallAnalysis | None = None
     call_cost: CallCost | None = None
-    latency: dict[str, Any] | None = None  # per-turn latency aggregate (PENDING-FREEZE) -> null
+    # FROZEN: null pre-end; shape per oracle V3CallBase / CallLatency.
+    latency: dict[str, Any] | None = None
     llm_token_usage: dict[str, Any] | None = None
 
 
