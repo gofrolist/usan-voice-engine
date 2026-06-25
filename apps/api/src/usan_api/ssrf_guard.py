@@ -41,7 +41,7 @@ untrusted-DNS receivers at scale.
 import asyncio
 import ipaddress
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 
 class SsrfBlocked(Exception):
@@ -119,22 +119,44 @@ async def _resolve(host: str) -> list[str]:
     return [info[4][0] for info in infos]
 
 
-async def resolve_public_or_raise(host: str) -> None:
+async def resolve_public_or_raise(host: str) -> list[str]:
     """Delivery-time SSRF gate (layer 2, spec §8.2), run before EVERY POST.
 
-    Fails closed: at least one address must resolve AND every resolved
-    address must be globally routable.
+    Fails closed: at least one address must resolve AND every resolved address
+    must be globally routable. Returns the validated addresses so the caller can
+    PIN the connection to a vetted IP (see ``pin_to_ip``), closing the
+    resolve-then-connect TOCTOU instead of letting httpx re-resolve at connect.
     """
     addrs = await _resolve(host)
     if not addrs:
-        # Fail-closed on empty resolution: all(...) over [] is vacuously true,
-        # so non-emptiness must be checked first (spec §8.2 review fix).
         raise SsrfBlocked("DNS resolution returned no addresses")
     for addr in addrs:
         ip: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address(addr)
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-            # Explicit IPv4-mapped unwrap: ::ffff:a.b.c.d is judged as its
-            # IPv4 self regardless of runtime is_global semantics (spec §8.2).
             ip = ip.ipv4_mapped
         if not ip.is_global:
             raise SsrfBlocked("resolved address is not globally routable")
+    return addrs
+
+
+def pin_to_ip(url: str, ip: str) -> tuple[str, str, str]:
+    """Pin a validated webhook URL to a vetted IP, closing the SSRF TOCTOU.
+
+    Returns ``(connect_url, host_header, sni_hostname)``:
+    - ``connect_url`` is ``url`` with its host replaced by ``ip`` (an IP literal,
+      so httpx connects WITHOUT a second DNS lookup); scheme, port, path, and
+      query are preserved, IPv6 is bracketed.
+    - ``host_header`` is the original host (with port if explicit) for the HTTP
+      ``Host`` header, so request routing is unchanged.
+    - ``sni_hostname`` is the original hostname for the ``sni_hostname`` request
+      extension, so TLS SNI and certificate verification still use the real name.
+
+    The IP the guard validated is therefore the exact IP the socket connects to.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    literal = f"[{ip}]" if ":" in ip else ip
+    netloc = literal if parts.port is None else f"{literal}:{parts.port}"
+    connect_url = urlunsplit((parts.scheme, netloc, parts.path, parts.query, ""))
+    host_header = host if parts.port is None else f"{host}:{parts.port}"
+    return connect_url, host_header, host
