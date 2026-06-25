@@ -55,3 +55,24 @@ def test_every_catalog_voice_gender_is_oracle_mappable():
             f"catalog voice {spec.name!r} has gender {spec.gender!r} with no oracle mapping; "
             f"/list-voices would 500. Add a mapping or fix the catalog entry."
         )
+
+
+def test_voice_id_round_trips_retell_prefix():
+    """Voice id round-trips: cartesia_id -> retell-<Name> alias -> cartesia_id."""
+    from usan_api.compat import voice_map
+    from usan_api.schemas.voice_catalog import VOICE_CATALOG
+
+    spec = VOICE_CATALOG[0]
+    alias = voice_map.to_retell_voice_id(spec.cartesia_voice_id)
+    assert alias.startswith("retell-"), f"alias {alias!r} does not start with 'retell-'"
+    assert voice_map.resolve_voice_id(alias) == spec.cartesia_voice_id
+
+
+def test_unhosted_voice_id_raises_422():
+    """Unhosted voice id raises CompatError(422)."""
+    from usan_api.compat import voice_map
+    from usan_api.compat.errors import CompatError
+
+    with pytest.raises(CompatError) as ei:
+        voice_map.resolve_voice_id("11labs-Nonexistent")
+    assert ei.value.status_code == 422
