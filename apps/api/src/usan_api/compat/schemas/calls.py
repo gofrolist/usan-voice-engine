@@ -159,3 +159,41 @@ class ListCallsResponse(BaseModel):
     pagination_key: str | None = None
     has_more: bool = False
     total: int | None = None
+
+
+# --- update-live-call schemas -----------------------------------------------------------
+class LiveCallFieldsOverride(BaseModel):
+    """PATCH /v2/update-live-call fields_to_override sub-object.
+
+    Oracle (15186-15315): override_dynamic_variables (str→str, nullable),
+    metadata (any, nullable), data_storage_setting (enum, nullable).
+    data_storage_setting and metadata are accepted + no-op for parity.
+    """
+
+    override_dynamic_variables: dict[str, str] | None = None
+    metadata: dict[str, Any] | None = None
+    data_storage_setting: DataStorageSetting | None = None
+
+
+class LiveCallControl(BaseModel):
+    """PATCH /v2/update-live-call call_control sub-object.
+
+    Oracle: trigger_response (bool, nullable), additional_context (str, nullable).
+    Accepted but no-op this phase (documented partial parity).
+    """
+
+    trigger_response: bool | None = None
+    additional_context: str | None = None
+
+
+class UpdateLiveCallRequest(BaseModel):
+    """PATCH /v2/update-live-call/{call_id} request body."""
+
+    fields_to_override: LiveCallFieldsOverride | None = None
+    call_control: LiveCallControl | None = None
+
+
+class UpdateLiveCallResponse(BaseModel):
+    """PATCH /v2/update-live-call/{call_id} response: oracle requires {success: bool}."""
+
+    success: bool

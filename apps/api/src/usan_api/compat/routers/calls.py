@@ -31,6 +31,8 @@ from usan_api.compat.schemas.calls import (
     ListCallsResponse,
     RegisterPhoneCallRequest,
     UpdateCallRequest,
+    UpdateLiveCallRequest,
+    UpdateLiveCallResponse,
 )
 from usan_api.compat.serialization import pack_dynamic_vars, unpack_dynamic_vars
 from usan_api.db.base import CallStatus
@@ -269,3 +271,31 @@ async def delete_call(
     await db.commit()
     _audit(request, "delete-call", call_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/v2/update-live-call/{call_id}", response_model=UpdateLiveCallResponse)
+async def update_live_call(
+    call_id: str,
+    body: UpdateLiveCallRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> UpdateLiveCallResponse:
+    try:
+        call = await _load_call(db, call_id)
+    except CompatError as exc:
+        # Malformed id (422) is also "not found" from the caller's perspective.
+        raise CompatError(404, "call not found") from exc
+    new_vars = (
+        body.fields_to_override.override_dynamic_variables if body.fields_to_override else None
+    )
+    if new_vars:
+        existing, meta = unpack_dynamic_vars(call.dynamic_vars)
+        merged = {**existing, **{k: str(v) for k, v in new_vars.items()}}
+        call.dynamic_vars = pack_dynamic_vars(merged, meta)
+        await db.commit()
+        if call.livekit_room:
+            await livekit_dispatch.send_dynamic_vars(call.livekit_room, new_vars, settings)
+    # call_control verbs are accepted but no-op this phase (documented partial parity).
+    _audit(request, "update-live-call", call_id)
+    return UpdateLiveCallResponse(success=True)
