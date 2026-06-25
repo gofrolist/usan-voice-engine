@@ -965,6 +965,12 @@ def _sms_template_instructions(tools: _ToolsConfigLike) -> str:
     )
 
 
+# Public alias used by worker.py to build the full instruction template for the
+# mid-call dynamic-vars receiver (FIX 2: the receiver must reproduce the agent's
+# COMPLETE instructions, including this SMS suffix, on every update).
+sms_template_instructions = _sms_template_instructions
+
+
 def build_check_in_agent(
     cfg: AgentConfig | None = None,
     *,

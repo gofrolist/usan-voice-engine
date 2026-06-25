@@ -22,6 +22,7 @@ from usan_agent.check_in import (
     build_check_in_agent,
     build_inbound_agent,
     build_test_agent,
+    sms_template_instructions,
 )
 from usan_agent.crisis_watcher import CrisisWatcher
 from usan_agent.dynamic_vars import DYNAMIC_VARS_TOPIC, apply_dynamic_vars
@@ -151,7 +152,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
             ctx,
             agent,
             _inbound_vars,
-            cfg.prompts.inbound_personalization_template,
+            cfg.prompts.inbound_personalization_template + sms_template_instructions(cfg.tools),
         )
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
@@ -274,7 +275,7 @@ async def _run_test_session(ctx: JobContext, settings: Settings, meta: CallMetad
         ctx,
         agent,
         _test_vars,
-        cfg.prompts.checkin_flow_instructions,
+        cfg.prompts.checkin_flow_instructions + sms_template_instructions(cfg.tools),
     )
     await session.start(agent=agent, room=ctx.room)
     log.info("Test session started; waiting for browser participant")
@@ -365,22 +366,29 @@ def _register_dynamic_vars_receiver(
     Args:
         ctx: The LiveKit JobContext (provides ``ctx.room.on``).
         agent: The ``livekit.agents.voice.Agent`` instance for the running session.
-        current_vars: The vars dict currently in use for this call (mutable; mutations
-            are visible to subsequent packets within the same call).
-        template: The raw (unsubstituted) instruction template string.
+        current_vars: The vars dict currently in use for this call (read-only snapshot
+            taken at registration time; each incoming packet merges its vars over this
+            snapshot — subsequent packets do NOT accumulate into ``current_vars``).
+        template: The FULL (unsubstituted) instruction template string, including any
+            static suffix (e.g. SMS template instructions). ``substitute(template,
+            merged_vars)`` must reproduce the agent's complete instructions exactly.
     """
     room_name = ctx.room.name
 
     def _on_data(data_packet: Any) -> None:
         if data_packet.topic != DYNAMIC_VARS_TOPIC:
             return
+
+        async def _apply(new_instructions: str) -> None:
+            await agent.update_instructions(new_instructions)
+            logger.bind(room=room_name).debug("dynamic-vars: instructions updated mid-call")
+
         apply_dynamic_vars(
             data_packet.data,
             current_vars=current_vars,
             template=template,
-            on_update=lambda new_instructions: agent.update_instructions(new_instructions),
+            on_update=lambda new_instructions: asyncio.ensure_future(_apply(new_instructions)),
         )
-        logger.bind(room=room_name).debug("dynamic-vars: instructions updated mid-call")
 
     ctx.room.on("data_received", _on_data)
 
@@ -434,7 +442,8 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         # Register the mid-call dynamic-var receiver BEFORE session.start() so it
         # is live when the LLM loop begins.  current_vars mirrors what build_check_in_agent
-        # used; the template is the raw (unsubstituted) flow instructions.
+        # used; the template is the full (unsubstituted) flow instructions including the
+        # static SMS suffix so update reproduces the agent's complete instructions.
         _outbound_vars = prompt_vars.build_vars(
             meta.resolved_vars or {},
             meta.dynamic_vars or {},
@@ -445,7 +454,7 @@ async def entrypoint(ctx: JobContext) -> None:
             ctx,
             agent,
             _outbound_vars,
-            cfg.prompts.checkin_flow_instructions,
+            cfg.prompts.checkin_flow_instructions + sms_template_instructions(cfg.tools),
         )
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)

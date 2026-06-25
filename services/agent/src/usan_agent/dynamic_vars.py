@@ -31,13 +31,16 @@ def apply_dynamic_vars(
     *,
     current_vars: Mapping[str, str],
     template: str,
-    on_update: Callable[[str], None],
+    on_update: Callable[[str], object],
 ) -> None:
     """Parse a dynamic-vars data packet and re-substitute the instruction template.
 
     Args:
         payload: Raw bytes from the LiveKit data packet (``DataPacket.data``).
-        current_vars: The vars map currently in use for this call (read-only).
+        current_vars: A read-only snapshot of the vars map taken at registration time.
+            Each incoming packet merges its vars over this snapshot independently —
+            subsequent packets do NOT accumulate into ``current_vars`` (acceptable for
+            v1, where the API broadcasts a full vars map per update).
         template: The raw (unsubstituted) instruction template string.
         on_update: Called with the newly substituted instruction text when the
             payload carries a non-empty update.  Typically a closure that calls
