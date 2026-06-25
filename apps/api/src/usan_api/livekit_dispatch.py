@@ -329,6 +329,43 @@ async def _delete_room(room: str, settings: Settings) -> None:
         logger.bind(room=room).warning("delete_room failed during dial cleanup")
 
 
+DYNAMIC_VARS_TOPIC = "usan/vars"
+
+
+async def force_hangup(room: str, settings: Settings) -> None:
+    """Abruptly disconnect every participant (incl. the SIP/PSTN leg) in a live room.
+
+    Best-effort: a missing room or transient LiveKit error is logged, never raised — the
+    caller's primary outcome (marking the call cancelled) must not be masked.
+    """
+    try:
+        async with build_livekit_api(settings) as lkapi:
+            await lkapi.room.delete_room(api.DeleteRoomRequest(room=room))
+    except Exception:
+        logger.bind(room=room).warning("force_hangup failed (best-effort)")
+
+
+async def send_dynamic_vars(room: str, variables: dict[str, str], settings: Settings) -> None:
+    """Broadcast a dynamic-variable update to a live room over the data plane.
+
+    Wire contract (mirrored in services/agent dynamic_vars.py): topic 'usan/vars', RELIABLE,
+    JSON object of str->str. Best-effort; never raises.
+    """
+    try:
+        payload = json.dumps(variables).encode()
+        async with build_livekit_api(settings) as lkapi:
+            await lkapi.room.send_data(
+                api.SendDataRequest(
+                    room=room,
+                    data=payload,
+                    kind=api.DataPacket.Kind.RELIABLE,
+                    topic=DYNAMIC_VARS_TOPIC,
+                )
+            )
+    except Exception:
+        logger.bind(room=room).warning("send_dynamic_vars failed (best-effort)")
+
+
 async def dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
     """Background task entrypoint: dial + classify, guarded so an infra failure
     still marks the call FAILED instead of leaving it stuck at ``dialing``."""

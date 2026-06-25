@@ -135,6 +135,86 @@ def test_stop_call_returns_204(
     assert r.status_code == 204
 
 
+def test_stop_call_force_hangs_up_live_room(
+    compat_client,
+    compat_headers,
+    published_default_agent,
+    mock_dispatch,
+    allow_quiet_hours,
+    monkeypatch,
+):
+    """stop-call on a non-terminal call with a livekit_room must invoke force_hangup."""
+    import uuid
+
+    from usan_api.compat.routers import calls as calls_router
+    from usan_api.db.base import CallDirection, CallStatus
+    from usan_api.db.models import Call
+
+    hung_up: list = []
+
+    async def _fake_force_hangup(room, settings):
+        hung_up.append(room)
+
+    monkeypatch.setattr(calls_router.livekit_dispatch, "force_hangup", _fake_force_hangup)
+
+    # Monkeypatch _load_call to return a non-terminal call with a livekit_room set,
+    # and monkeypatch set_status to a no-op so we don't need an actual DB row.
+    fake_call = Call(
+        id=uuid.uuid4(),
+        direction=CallDirection.OUTBOUND,
+        status=CallStatus.DIALING,
+        livekit_room="test-room-xyz",
+        dynamic_vars={},
+    )
+
+    async def _fake_load_call(db, call_id):
+        return fake_call
+
+    monkeypatch.setattr(calls_router, "_load_call", _fake_load_call)
+
+    calls_set: list = []
+
+    async def _fake_set_status(db, call_id, new_status):
+        calls_set.append(new_status)
+
+    monkeypatch.setattr(calls_router.calls_repo, "set_status", _fake_set_status)
+
+    created = _create(compat_client, compat_headers).json()
+    r = compat_client.post(f"/v2/stop-call/{created['call_id']}", headers=compat_headers)
+    assert r.status_code == 204
+    assert "test-room-xyz" in hung_up
+
+
+def test_stop_call_terminal_call_does_not_force_hangup(
+    compat_client,
+    compat_headers,
+    published_default_agent,
+    mock_dispatch,
+    allow_quiet_hours,
+    monkeypatch,
+):
+    """stop-call on an already-terminal call must NOT invoke force_hangup."""
+    from usan_api.compat.routers import calls as calls_router
+
+    hung_up: list = []
+
+    async def _fake_force_hangup(room, settings):
+        hung_up.append(room)
+
+    monkeypatch.setattr(calls_router.livekit_dispatch, "force_hangup", _fake_force_hangup)
+
+    # First stop the call to make it terminal (CANCELLED).
+    created = _create(compat_client, compat_headers).json()
+    call_id_str = created["call_id"]
+    compat_client.post(f"/v2/stop-call/{call_id_str}", headers=compat_headers)
+    hung_up.clear()  # clear from first stop
+
+    # Second stop — call is already terminal, force_hangup must NOT be called.
+    r = compat_client.post(f"/v2/stop-call/{call_id_str}", headers=compat_headers)
+    assert r.status_code == 204
+    assert hung_up == []
+
+
 def test_update_call_echoes_metadata(
     compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
 ):

@@ -19,6 +19,7 @@ from loguru import logger
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from usan_api import livekit_dispatch
 from usan_api.client_ip import client_ip
 from usan_api.compat import call_create, call_serializer, ids, status_map
 from usan_api.compat.auth import get_compat_db
@@ -94,11 +95,14 @@ async def stop_call(
     call_id: str,
     request: Request,
     db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
 ) -> Response:
     call = await _load_call(db, call_id)
     # Best-effort cancel: mark a not-yet-terminal call CANCELLED so the dialer/poller never
-    # (re)dials it. An already-connected room is not force-hung-up in the MVP (noted).
+    # (re)dials it. Force-hang-up any live LiveKit room first (best-effort, never raises).
     if not status_map.is_terminal(call.status):
+        if call.livekit_room:
+            await livekit_dispatch.force_hangup(call.livekit_room, settings)
         await calls_repo.set_status(db, call.id, CallStatus.CANCELLED)
         await db.commit()
     _audit(request, "stop-call", call_id)
