@@ -139,6 +139,7 @@ async def deliver_one(
                     ts_ms, webhook_signing.sign(secret, ts_ms, raw)
                 ),
             }
+            # addrs is non-empty: resolve_public_or_raise raises on empty resolution.
             connect_url, host_header, sni = ssrf_guard.pin_to_ip(url, addrs[0])
             # Stream the response and drain at most max_response_bytes: a customer-
             # controlled receiver that returns an unbounded body could otherwise OOM the

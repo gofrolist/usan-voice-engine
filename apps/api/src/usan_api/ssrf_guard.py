@@ -129,10 +129,14 @@ async def resolve_public_or_raise(host: str) -> list[str]:
     """
     addrs = await _resolve(host)
     if not addrs:
+        # Fail-closed on empty resolution: all(...) over [] is vacuously true,
+        # so non-emptiness must be checked first (spec §8.2 review fix).
         raise SsrfBlocked("DNS resolution returned no addresses")
     for addr in addrs:
         ip: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address(addr)
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            # Explicit IPv4-mapped unwrap: ::ffff:a.b.c.d is judged as its
+            # IPv4 self regardless of runtime is_global semantics (spec §8.2).
             ip = ip.ipv4_mapped
         if not ip.is_global:
             raise SsrfBlocked("resolved address is not globally routable")

@@ -664,6 +664,7 @@ async def test_delivery_pins_connection_to_validated_ip(session_factory, monkeyp
     stats = await webhook_delivery.poll_once(session_factory, _settings())
     assert stats["delivered"] == 1
 
+    assert len(seen) == 1
     (request,) = seen
     # Connect target is the vetted IP literal (no second DNS lookup); Host header +
     # SNI keep the original hostname for routing and certificate verification.

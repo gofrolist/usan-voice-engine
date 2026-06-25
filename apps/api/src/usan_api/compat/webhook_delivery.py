@@ -137,6 +137,7 @@ async def deliver_one(
                     ts_ms, webhook_signature.sign(secret, raw, ts_ms)
                 ),
             }
+            # addrs is non-empty: resolve_public_or_raise raises on empty resolution.
             connect_url, host_header, sni = ssrf_guard.pin_to_ip(url, addrs[0])
             async with client.stream(
                 "POST",
