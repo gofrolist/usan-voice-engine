@@ -283,6 +283,22 @@ async def publish_agent_version(
     return profile
 
 
+async def delete_agent_version(db: AsyncSession, agent_id: str, version: int) -> None:
+    """Delete one historical agent version row, refusing (409) to delete the published one.
+
+    The currently-published version number lives in ``profile.published_version`` (an int).
+    AgentProfileVersion rows have no archived flag — hard delete is appropriate for
+    historical version rows. The caller must not delete the currently-live version.
+    """
+    profile = await _load_active(db, ids.decode_agent_id(agent_id), kind="agent")
+    if profile.published_version == version:
+        raise CompatError(409, "cannot delete the currently published version")
+    removed = await agent_profiles_repo.delete_version(db, profile.id, version)
+    if removed is None:
+        raise CompatError(404, "agent version not found")
+    await db.commit()
+
+
 async def delete_agent(db: AsyncSession, agent_id: str) -> None:
     """RetellAI delete == archive: the agent leaves the API view (get/list 404/omit) while the
     config is retained for audit. Hard delete is intentionally not exposed."""

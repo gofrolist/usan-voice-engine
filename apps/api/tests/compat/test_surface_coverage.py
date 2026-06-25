@@ -36,8 +36,7 @@ def _norm(path: str) -> str:
 # ---------------------------------------------------------------------------
 KNOWN_GAPS: frozenset[tuple[str, str]] = frozenset(
     {
-        # --- 5 Pri-1 new endpoints (not yet implemented) ---
-        ("DELETE", "/delete-agent-version/{}"),  # 1b: new-endpoint
+        # --- 4 Pri-1 new endpoints (not yet implemented) ---
         ("POST", "/v2/list-agents"),  # 1b: new-endpoint
         ("POST", "/publish-agent/{}"),  # 1b: new-endpoint
         # --- 501-router path-drift (stub exists but path is wrong) ---

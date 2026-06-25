@@ -152,3 +152,15 @@ async def get_agent_versions(
         agent_bridge.serialize_agent_version(profile, v).model_dump(exclude_none=True)
         for v in versions
     ]
+
+
+@router.delete("/delete-agent-version/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent_version(
+    agent_id: str,
+    request: Request,
+    version: int = Query(..., ge=0),
+    db: AsyncSession = Depends(get_compat_db),
+) -> Response:
+    await agent_bridge.delete_agent_version(db, agent_id, version)
+    _audit(request, "delete-agent-version", agent_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
