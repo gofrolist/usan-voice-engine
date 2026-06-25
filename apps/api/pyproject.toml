@@ -30,6 +30,8 @@ dev = [
     "mypy>=1.13.0",
     "testcontainers[postgres]>=4.8.0",
     "pytest-xdist>=3.6",
+    "retell-sdk==5.53.0",
+    "openapi-schema-validator>=0.6.2",
 ]
 
 [build-system]
@@ -58,6 +60,9 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "f
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "frozen: contract-frozen conformance assertions against the pinned RetellAI oracle",
+]
 # Run in parallel by default (pytest-xdist). The suite is dominated by per-test DB
 # I/O wait, not CPU, so parallelism gives a near-linear speedup (~585s -> ~31s on a
 # 14-core box). Tests are already order-independent (the `client` fixture truncates
