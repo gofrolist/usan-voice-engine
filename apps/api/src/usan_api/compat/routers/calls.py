@@ -36,6 +36,7 @@ from usan_api.compat.serialization import pack_dynamic_vars, unpack_dynamic_vars
 from usan_api.db.base import CallStatus
 from usan_api.db.models import Call
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.settings import Settings, get_settings
 
 router = APIRouter(tags=["compat-calls"])
@@ -54,6 +55,8 @@ def _org_id(request: Request) -> uuid.UUID:
 async def _load_call(db: AsyncSession, call_id: str) -> Call:
     call = await calls_repo.get_call(db, ids.decode_call_id(call_id))
     if call is None:
+        raise CompatError(404, "call not found")
+    if call.archived_at is not None:
         raise CompatError(404, "call not found")
     return call
 
@@ -146,7 +149,7 @@ async def _query_calls(db: AsyncSession, body: ListCallsRequest) -> list[Call]:
     """Filter + keyset-paginate the org's calls (RLS-scoped). Filtering is intentionally
     minimal in the MVP (agent_id); unknown filter_criteria keys are silently ignored —
     FROZEN (oracle): pinned by test_list_calls_filter_ignores_unknown_keys."""
-    stmt = select(Call)
+    stmt = select(Call).where(Call.archived_at.is_(None))
     fc = body.filter_criteria or {}
     agent = fc.get("agent_id")
     if isinstance(agent, str) and agent:
@@ -189,7 +192,7 @@ async def _query_calls(db: AsyncSession, body: ListCallsRequest) -> list[Call]:
 
 
 async def _count_calls(db: AsyncSession, body: ListCallsRequest) -> int:
-    stmt = select(func.count()).select_from(Call)
+    stmt = select(func.count()).select_from(Call).where(Call.archived_at.is_(None))
     fc = body.filter_criteria or {}
     agent = fc.get("agent_id")
     if isinstance(agent, str) and agent:
@@ -244,3 +247,25 @@ async def register_phone_call(
     )
     _audit(request, "register-phone-call", result.call_id)
     return result
+
+
+@router.delete("/v2/delete-call/{call_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_call(
+    call_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+) -> Response:
+    try:
+        call = await _load_call(db, call_id)  # 404s if missing or already archived
+    except CompatError as exc:
+        # Malformed id (422) is also "not found" from the caller's perspective.
+        raise CompatError(404, "call not found") from exc
+    # PHI-redact: null recording fields + error, delete transcript rows; retain id/cost/timestamps.
+    call.recording_uri = None
+    call.recording_status = None
+    call.error = None
+    await transcripts_repo.delete_for_call(db, call.id)
+    call.archived_at = func.now()
+    await db.commit()
+    _audit(request, "delete-call", call_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

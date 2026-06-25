@@ -164,6 +164,7 @@ class Call(Base, TenantScoped):
     egress_id: Mapped[str | None] = mapped_column(Text)
     recording_status: Mapped[str | None] = mapped_column(Text)
     error: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
