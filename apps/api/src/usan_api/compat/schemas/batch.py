@@ -21,6 +21,47 @@ from pydantic import BaseModel, ConfigDict, Field
 from usan_api.schemas.batch import MAX_BATCH_TARGETS
 
 
+class CallTimeWindowSlot(BaseModel):
+    """One time window: [start, end) in minutes since local midnight (oracle: TimeWindow).
+
+    Oracle field names are ``start``/``end`` (minutes), NOT ``start_hour``/``end_hour``.
+    Cross-midnight windows (start >= end) are explicitly disallowed by the oracle
+    description ("must satisfy startMin < endMin"); endMin=1440 (24:00) is valid.
+    ``extra="allow"`` preserves any future oracle fields.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    start: int = Field(ge=0, le=1440)  # minutes since midnight
+    end: int = Field(ge=0, le=1440)  # minutes since midnight; 1440 = 24:00
+
+
+class CallTimeWindow(BaseModel):
+    """Typed echo of the RetellAI ``call_time_window`` object (oracle: CallTimeWindow).
+
+    Oracle fields (captured 2026-06-25):
+      - windows: list[TimeWindow] (required, minItems=1) — [start, end) in minutes
+      - timezone: str | None — IANA tz (e.g. "America/New_York"); default is "America/Los_Angeles"
+      - day: list[DayOfWeek] | None — full English day names ("Monday".."Sunday")
+
+    Mapping gaps (documented; never silently dropped):
+      1. Only windows[0] maps to the native BatchWindow (native supports one window).
+         Additional windows are echoed in the response but not applied.
+      2. timezone is echoed but NOT applied to the native window: BatchWindow is
+         per-contact-local and has no tz field.
+      3. Cross-midnight (start >= end for windows[0]) cannot be expressed in the native
+         window (BatchWindow rejects start_local >= end_local); in that case the native
+         window is left unset and the typed value is still echoed.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    windows: list[CallTimeWindowSlot] = Field(min_length=1)
+    timezone: str | None = None
+    # Oracle DayOfWeek enum: "Monday", "Tuesday", ..., "Sunday"
+    day: list[str] | None = None
+
+
 class BatchCallTask(BaseModel):
     """One outbound target: a destination number plus optional per-call dynamic
     variables, agent override, and CRM metadata (unknown fields echoed/ignored)."""
@@ -41,9 +82,7 @@ class CreateBatchCallRequest(BaseModel):
     name: str | None = None
     trigger_timestamp: int | None = Field(default=None, ge=0)  # epoch MS; omit = immediate
     reserved_concurrency: int | None = Field(default=None, ge=1)
-    # Opaque echo (PENDING-FREEZE: the exact RetellAI shape + whether it maps onto the
-    # native dial window is pinned against the captured oracle before the contract freezes).
-    call_time_window: dict[str, Any] | None = None
+    call_time_window: CallTimeWindow | None = None
 
 
 class BatchCallResponse(BaseModel):
@@ -54,4 +93,4 @@ class BatchCallResponse(BaseModel):
     from_number: str
     scheduled_timestamp: int  # epoch SECONDS — deliberate Retell-faithful exception
     total_task_count: int
-    call_time_window: dict[str, Any] | None = None
+    call_time_window: CallTimeWindow | None = None

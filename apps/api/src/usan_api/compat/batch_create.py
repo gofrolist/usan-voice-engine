@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from typing import Any
 
 from pydantic import ValidationError
@@ -32,15 +32,79 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from usan_api.compat.call_create import upsert_contact_for_number
 from usan_api.compat.errors import CompatError
 from usan_api.compat.ids import decode_agent_id
-from usan_api.compat.schemas.batch import CreateBatchCallRequest
+from usan_api.compat.schemas.batch import CallTimeWindow, CreateBatchCallRequest
 from usan_api.compat.serialization import RESERVED_VAR_PREFIX, pack_dynamic_vars
 from usan_api.db.models import CallBatch
 from usan_api.phone import to_e164
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import call_batches as batches_repo
-from usan_api.schemas.batch import BatchTargetIn, CreateBatchRequest, payload_digest
+from usan_api.schedule_windows import days_to_mask
+from usan_api.schemas.batch import BatchTargetIn, BatchWindow, CreateBatchRequest, payload_digest
 
 _IDEM_PREFIX = "compat-batch:"
+
+# Oracle DayOfWeek (full English names) → native 3-letter lowercase day abbreviations.
+# Oracle convention: "Monday"=week start (ISO 8601); no int mapping — the oracle's
+# ``day`` field carries full-name strings directly (DayOfWeek enum).
+_ORACLE_DAY_TO_NATIVE: dict[str, str] = {
+    "Monday": "mon",
+    "Tuesday": "tue",
+    "Wednesday": "wed",
+    "Thursday": "thu",
+    "Friday": "fri",
+    "Saturday": "sat",
+    "Sunday": "sun",
+}
+
+
+def _map_call_time_window(ctw: CallTimeWindow | None) -> BatchWindow | None:
+    """Map a typed RetellAI ``CallTimeWindow`` onto the native ``BatchWindow``.
+
+    Partial-map gaps (documented; none silently dropped):
+      1. Only ``windows[0]`` maps — native supports a single window.
+         Additional windows are echoed in the compat response but not applied.
+      2. ``timezone`` cannot be expressed — ``BatchWindow`` is per-contact-local
+         with no tz field. Echoed in the response; not applied here.
+      3. Cross-midnight (slot.start >= slot.end) is rejected by ``BatchWindow``
+         (``start_local >= end_local``). When this occurs, return None so the
+         native window is left unset; the typed value is still echoed.
+      4. Unknown/invalid oracle day names are silently skipped (extra="allow" on
+         the oracle schema means forward-compat unknown names may appear).
+    """
+    if ctw is None:
+        return None
+
+    slot = ctw.windows[0]
+
+    # Oracle uses minutes-since-midnight; native uses time objects.
+    start_min = slot.start
+    end_min = slot.end
+
+    # Cross-midnight guard: oracle says startMin < endMin is required, but a
+    # client could send an invalid window; native would reject it with a 422 deep
+    # in BatchWindow validation. Intercept here to echo the typed value cleanly.
+    if start_min >= end_min:
+        # Gap: cross-midnight or zero-length window — cannot map; leave native unset.
+        return None
+
+    start_local = time(hour=start_min // 60, minute=start_min % 60)
+    end_local = time(hour=end_min // 60, minute=end_min % 60)
+
+    days_of_week: list[str] | None = None
+    if ctw.day:
+        mapped = [_ORACLE_DAY_TO_NATIVE[d] for d in ctw.day if d in _ORACLE_DAY_TO_NATIVE]
+        days_of_week = mapped if mapped else None
+
+    try:
+        return BatchWindow(
+            start_local=start_local,
+            end_local=end_local,
+            days_of_week=days_of_week,
+        )
+    except ValueError:
+        # Gap: BatchWindow validator rejected the window (e.g. no quiet-hours
+        # intersection). Echo the typed value; leave native window unset.
+        return None
 
 
 class _PreparedTask:
@@ -208,12 +272,16 @@ async def create_compat_batch(
     # body.name is a label; a missing one is synthesized from the (label-free) key so
     # it stays stable across retries (PHI-free — never an contact's name, by convention).
     name = (body.name or "").strip() or f"batch-{idem_key[len(_IDEM_PREFIX) :][:12]}"
+    # Map call_time_window onto the native dial window (partial map: only windows[0],
+    # no timezone, cross-midnight → None; see _map_call_time_window for all gaps).
+    native_window = _map_call_time_window(body.call_time_window)
+
     try:
         native_req = CreateBatchRequest(
             name=name,
             idempotency_key=idem_key,
             trigger_at=trigger_at,
-            window=None,  # call_time_window is echoed, not mapped (PENDING-FREEZE)
+            window=native_window,
             max_concurrency=body.reserved_concurrency,
             profile_override=None,  # RetellAI overrides are per-task, never batch-level
             targets=target_ins,
@@ -228,9 +296,13 @@ async def create_compat_batch(
             idempotency_key=idem_key,
             payload_digest=payload_digest(native_req),
             trigger_at=native_req.trigger_at,
-            window_start_local=None,
-            window_end_local=None,
-            days_of_week=None,
+            window_start_local=native_req.window.start_local if native_req.window else None,
+            window_end_local=native_req.window.end_local if native_req.window else None,
+            days_of_week=(
+                days_to_mask(native_req.window.days_of_week)
+                if native_req.window and native_req.window.days_of_week
+                else None
+            ),
             max_concurrency=native_req.max_concurrency,
             profile_override=None,
             targets=native_req.targets,

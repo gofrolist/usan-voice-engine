@@ -234,10 +234,13 @@ def test_reserved_concurrency_maps_to_max_concurrency(
 
 
 def test_call_time_window_is_echoed(compat_client, compat_headers):
-    window = {"start_hour": 9, "end_hour": 17}
+    # Oracle shape: windows[].start/end are minutes since midnight (not start_hour/end_hour).
+    # The typed CallTimeWindow requires ``windows`` (list[TimeWindow], minItems=1).
+    window = {"windows": [{"start": 540, "end": 1020}], "timezone": "America/New_York"}
     r = _create_batch(compat_client, compat_headers, call_time_window=window)
     assert r.status_code == 201
-    assert r.json()["call_time_window"] == window
+    assert r.json()["call_time_window"]["windows"] == [{"start": 540, "end": 1020}]
+    assert r.json()["call_time_window"]["timezone"] == "America/New_York"
 
 
 # --- per-task override liveness --------------------------------------------------------
