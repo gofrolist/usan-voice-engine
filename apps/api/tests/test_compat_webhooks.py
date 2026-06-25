@@ -82,9 +82,23 @@ class _CaptureClient:
     async def __aexit__(self, *_a: object) -> bool:
         return False
 
-    def stream(self, method: str, url: str, *, content: bytes, headers: dict[str, str]) -> _Resp:
+    def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        content: bytes,
+        headers: dict[str, str],
+        extensions: dict[str, object] | None = None,
+    ) -> _Resp:
         self.sink.append(
-            {"method": method, "url": url, "content": content, "headers": dict(headers)}
+            {
+                "method": method,
+                "url": url,
+                "content": content,
+                "headers": dict(headers),
+                "extensions": dict(extensions or {}),
+            }
         )
         return _Resp(self.status)
 
@@ -205,7 +219,11 @@ def test_lifecycle_delivers_three_signed_events(
     delivered_events = set()
     delivered_ids = set()
     for req in sink:
-        assert req["url"] == _WEBHOOK_URL
+        # Pinned to the validated IP (_fake_resolve → 93.184.216.34); Host + SNI keep
+        # the original allow-listed hostname for routing and certificate verification.
+        assert req["url"] == "https://93.184.216.34/retell"
+        assert req["headers"]["Host"] == _ALLOWED_HOST
+        assert req["extensions"]["sni_hostname"] == _ALLOWED_HOST
         headers = req["headers"]
         body = req["content"]
         # The body is the byte-faithful RetellAI {event, call} (delivery_id is a HEADER only).
@@ -313,3 +331,32 @@ def test_register_rejects_non_https_url(async_database_url, compat_env) -> None:
     with pytest.raises(CompatError) as exc:
         asyncio.run(_try_register(async_database_url, _settings(), f"http://{_ALLOWED_HOST}/x"))
     assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_guard_host_blocks_host_not_in_allowlist(monkeypatch) -> None:
+    # Delivery-time PHI gate: a registered host that has since left the allow-list is
+    # blocked at SEND time (fail-closed), not just at registration.
+    async def _fake(_host: str) -> list[str]:
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(ssrf_guard, "_resolve", _fake)
+    with pytest.raises(ssrf_guard.SsrfBlocked):
+        await cwd._guard_host("evil.example.com", frozenset({"hooks.example.com"}))
+
+
+@pytest.mark.asyncio
+async def test_guard_host_blocks_when_allowlist_empty() -> None:
+    # Empty allow-list => NOTHING leaves (the ship-inert PHI default).
+    with pytest.raises(ssrf_guard.SsrfBlocked):
+        await cwd._guard_host("hooks.example.com", frozenset())
+
+
+@pytest.mark.asyncio
+async def test_guard_host_allows_listed_host_and_returns_addrs(monkeypatch) -> None:
+    async def _fake(_host: str) -> list[str]:
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(ssrf_guard, "_resolve", _fake)
+    addrs = await cwd._guard_host("hooks.example.com", frozenset({"hooks.example.com"}))
+    assert addrs == ["93.184.216.34"]
