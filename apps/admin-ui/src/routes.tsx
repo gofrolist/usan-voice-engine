@@ -19,6 +19,7 @@ import { DncPage } from "./features/dnc/DncPage";
 import { AcceptInvitePage } from "./features/invites/AcceptInvitePage";
 import { HomeLanding } from "./components/HomeLanding";
 import { RequireAdmin, RequireSuperAdmin } from "./auth/RequireTier";
+import { CompatKeysPage } from "./features/compat-keys/CompatKeysPage";
 
 // All routes are gated by RequireAuth and rendered inside AppLayout. The api
 // wrapper handles 401 with a full-page redirect to /v1/auth/login.
@@ -107,6 +108,14 @@ export const router = createBrowserRouter([
             element: (
               <RequireSuperAdmin>
                 <OrgConsolePage />
+              </RequireSuperAdmin>
+            ),
+          },
+          {
+            path: "compat-keys",
+            element: (
+              <RequireSuperAdmin>
+                <CompatKeysPage />
               </RequireSuperAdmin>
             ),
           },

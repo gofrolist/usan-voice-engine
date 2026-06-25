@@ -9,6 +9,7 @@ import { OrgSwitcher } from "./OrgSwitcher";
 import {
   AuditIcon,
   CallsIcon,
+  CompatKeysIcon,
   ContactsIcon,
   DefaultsIcon,
   DncIcon,
@@ -65,6 +66,12 @@ const GROUPS: NavGroup[] = [
         to: "/organizations",
         label: "Organizations",
         icon: OrganizationsIcon,
+        superAdminOnly: true,
+      },
+      {
+        to: "/compat-keys",
+        label: "Compat API Keys",
+        icon: CompatKeysIcon,
         superAdminOnly: true,
       },
     ],
