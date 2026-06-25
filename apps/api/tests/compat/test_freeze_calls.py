@@ -75,14 +75,15 @@ def test_call_object_conforms_to_oracle(compat_client, compat_headers, seeded_ca
 
 def test_transcript_with_tool_calls_is_omitted(compat_client, compat_headers, seeded_call):
     body = compat_client.get(f"/v2/get-call/{seeded_call}", headers=compat_headers).json()
-    # transcript_with_tool_calls is removed (oracle typed it array, we had str — field dropped).
+    # The str-vs-array mismatched field is gone from the wire entirely.
     assert "transcript_with_tool_calls" not in body
-    # transcript and transcript_object are NOT removed from the schema (they stay, just
-    # omitted when null via exclude_none — that's oracle-correct behaviour).
+    # transcript_object defaults to [] (not None) so exclude_none keeps it on the wire.
+    assert "transcript_object" in body
+    assert isinstance(body["transcript_object"], list)
+    # transcript is str|None → omitted when null; assert field remains in schema.
     from usan_api.compat.schemas.calls import CompatCall
 
     assert "transcript" in CompatCall.model_fields
-    assert "transcript_object" in CompatCall.model_fields
 
 
 def test_user_sentiment_default_is_null() -> None:
