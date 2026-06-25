@@ -100,12 +100,11 @@ The 5 settings (defined in `apps/api/src/usan_api/settings.py`): `COMPAT_DOCS_EN
 
 ### Activation runbook (in `infra/README.md` and/or the wiring doc)
 Ordered operator steps to go live with PHI-bearing webhooks:
-1. Deploy the merged code (cut a `v*` tag). Surface is still key-inert.
-2. In the admin UI → **Compat API Keys** → create a key for the client; hand off the one-time token securely.
-3. Set `COMPAT_WEBHOOK_ALLOWED_HOSTS=<attested CRM webhook FQDN>` (operator-supplied prod value) and `COMPAT_WEBHOOK_DELIVERY_ENABLED=true`.
-4. Seed these into Secret Manager `usan-prod-env` **and** refresh the VM `/opt/usan/infra/.env` **before** the tag deploy (or reboot the VM to re-fetch via `startup.sh`).
-5. Verify the api runs as the non-superuser `usan_app` role (RLS enforcing) — the tenant-isolation guarantee for compat traffic.
-6. (When shrinking the allow-list later) audit `compat_webhook_endpoints.webhook_url` against the new list; the delivery-time re-check (§5.B) blocks sends to removed hosts, but stale registrations should still be reviewed.
+1. **Seed the prod env BEFORE the tag.** Set `COMPAT_WEBHOOK_ALLOWED_HOSTS=<attested CRM webhook FQDN>` (operator-supplied prod value) and `COMPAT_WEBHOOK_DELIVERY_ENABLED=true`; push to Secret Manager `usan-prod-env` **and** refresh the VM `/opt/usan/infra/.env` (reboot to re-fetch via `startup.sh`, or IAP-SSH and edit by hand). **This must precede the tag** — the deploy does not re-fetch the secret. The settings are harmless before a key exists: no key ⇒ every compat endpoint 401s ⇒ no webhook registrations ⇒ nothing to deliver.
+2. **Cut the `v*` tag.** The code (including the Compat Keys UI) goes live with those settings active. The surface is still key-inert — every compat endpoint 401s because no key exists yet.
+3. **Mint the compat key** in the admin UI → **Compat API Keys** → create a key for the client (act-as the target org first); hand off the one-time token securely. PHI calls and their webhooks (SSRF-pinned, delivered only to the attested allow-listed host) can now flow.
+4. **Verify** the api runs as the non-superuser `usan_app` role (RLS enforcing) — the tenant-isolation guarantee for compat traffic.
+5. (When shrinking the allow-list later) audit `compat_webhook_endpoints.webhook_url` against the new list; the delivery-time re-check (§5.B) blocks sends to removed hosts, but stale registrations should still be reviewed.
 
 ## 7. Cross-cutting
 
