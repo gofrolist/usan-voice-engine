@@ -70,13 +70,14 @@ def _build_client(settings: Settings) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=settings.webhook_delivery_timeout_s, follow_redirects=False)
 
 
-async def _guard_host(host: str, allowed: frozenset[str]) -> None:
+async def _guard_host(host: str, allowed: frozenset[str]) -> list[str]:
     """Delivery-time PHI gate: the host MUST be in the allow-list (empty list => nothing
-    leaves) AND globally routable. Defense-in-depth — registration already gates the host,
+    leaves) AND globally routable. Returns the validated addresses so the caller can pin
+    the connection to a vetted IP. Defense-in-depth — registration already gates the host,
     but the allow-list may have shrunk since."""
     if not allowed or host.lower() not in allowed:
         raise SsrfBlocked("compat webhook host not in COMPAT_WEBHOOK_ALLOWED_HOSTS")
-    await ssrf_guard.resolve_public_or_raise(host)
+    return await ssrf_guard.resolve_public_or_raise(host)
 
 
 async def _build_body(
@@ -124,7 +125,7 @@ async def deliver_one(
 
         response_code: int | None = None
         try:
-            await _guard_host(host, settings.compat_webhook_allowed_hosts_set)
+            addrs = await _guard_host(host, settings.compat_webhook_allowed_hosts_set)
             body = await _build_body(db, settings, call, claimed.event, client_host=host)
             raw = json.dumps(body, separators=(",", ":")).encode()
             ts_ms = int(time.time() * 1000)
@@ -136,7 +137,15 @@ async def deliver_one(
                     ts_ms, webhook_signature.sign(secret, raw, ts_ms)
                 ),
             }
-            async with client.stream("POST", url, content=raw, headers=headers) as response:
+            # addrs is non-empty: resolve_public_or_raise raises on empty resolution.
+            pinned = ssrf_guard.pin_request(url, addrs[0], headers)
+            async with client.stream(
+                "POST",
+                pinned.url,
+                content=raw,
+                headers=pinned.headers,
+                extensions=pinned.extensions,
+            ) as response:
                 response_code = response.status_code
                 drained = 0
                 async for chunk in response.aiter_bytes():

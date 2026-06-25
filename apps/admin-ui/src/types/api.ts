@@ -564,3 +564,19 @@ export interface DNCCreate {
   phone_e164: string;
   reason?: string | null;
 }
+
+// RetellAI-compat API keys (super-admin; /v1/admin/compat-keys). Mirrors
+// apps/api schemas/compat_api_keys.py — CompatKeyResponse + the create-only token.
+export interface CompatKey {
+  id: string;
+  key_prefix: string;
+  status: string;
+  label: string | null;
+  created_at: string;
+  revoked_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface CompatKeyCreated extends CompatKey {
+  token: string;
+}

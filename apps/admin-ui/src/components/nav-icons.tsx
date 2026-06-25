@@ -156,3 +156,12 @@ export function OrganizationsIcon() {
     </Icon>
   );
 }
+
+// System → Compat API Keys (key icon).
+export function CompatKeysIcon() {
+  return (
+    <Icon>
+      <path d="m21 2-2 2m-3.5 3.5L19 4m-3.5 3.5a5.5 5.5 0 1 1-7.778 7.778A5.5 5.5 0 0 1 15.5 7.5m0 0 3 3" />
+    </Icon>
+  );
+}

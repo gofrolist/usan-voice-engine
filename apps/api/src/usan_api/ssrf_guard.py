@@ -41,7 +41,8 @@ untrusted-DNS receivers at scale.
 import asyncio
 import ipaddress
 import re
-from urllib.parse import urlsplit
+from dataclasses import dataclass
+from urllib.parse import urlsplit, urlunsplit
 
 
 class SsrfBlocked(Exception):
@@ -119,11 +120,13 @@ async def _resolve(host: str) -> list[str]:
     return [info[4][0] for info in infos]
 
 
-async def resolve_public_or_raise(host: str) -> None:
+async def resolve_public_or_raise(host: str) -> list[str]:
     """Delivery-time SSRF gate (layer 2, spec §8.2), run before EVERY POST.
 
-    Fails closed: at least one address must resolve AND every resolved
-    address must be globally routable.
+    Fails closed: at least one address must resolve AND every resolved address
+    must be globally routable. Returns the validated addresses so the caller can
+    PIN the connection to a vetted IP (see ``pin_to_ip``), closing the
+    resolve-then-connect TOCTOU instead of letting httpx re-resolve at connect.
     """
     addrs = await _resolve(host)
     if not addrs:
@@ -138,3 +141,50 @@ async def resolve_public_or_raise(host: str) -> None:
             ip = ip.ipv4_mapped
         if not ip.is_global:
             raise SsrfBlocked("resolved address is not globally routable")
+    return addrs
+
+
+def pin_to_ip(url: str, ip: str) -> tuple[str, str, str]:
+    """Pin a validated webhook URL to a vetted IP, closing the SSRF TOCTOU.
+
+    Returns ``(connect_url, host_header, sni_hostname)``:
+    - ``connect_url`` is ``url`` with its host replaced by ``ip`` (an IP literal,
+      so httpx connects WITHOUT a second DNS lookup); scheme, port, path, and
+      query are preserved, IPv6 is bracketed.
+    - ``host_header`` is the original host (with port if explicit) for the HTTP
+      ``Host`` header, so request routing is unchanged.
+    - ``sni_hostname`` is the original hostname for the ``sni_hostname`` request
+      extension, so TLS SNI and certificate verification still use the real name.
+
+    The IP the guard validated is therefore the exact IP the socket connects to.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    literal = f"[{ip}]" if ":" in ip else ip
+    netloc = literal if parts.port is None else f"{literal}:{parts.port}"
+    connect_url = urlunsplit((parts.scheme, netloc, parts.path, parts.query, ""))
+    host_header = host if parts.port is None else f"{host}:{parts.port}"
+    return connect_url, host_header, host
+
+
+@dataclass(frozen=True)
+class PinnedRequest:
+    """The httpx-request arguments for a POST pinned to a validated IP."""
+
+    url: str
+    headers: dict[str, str]
+    extensions: dict[str, str]
+
+
+def pin_request(url: str, ip: str, headers: dict[str, str]) -> PinnedRequest:
+    """Wire a validated IP into the pinned httpx request — the single source for the
+    Host-header + ``sni_hostname`` wiring, so the two webhook senders cannot diverge in
+    their SSRF protection. ``url``'s host becomes the IP literal (no second DNS lookup);
+    the original host is preserved in the ``Host`` header and the TLS SNI/cert hostname.
+    """
+    connect_url, host_header, sni = pin_to_ip(url, ip)
+    return PinnedRequest(
+        url=connect_url,
+        headers={**headers, "Host": host_header},
+        extensions={"sni_hostname": sni},
+    )

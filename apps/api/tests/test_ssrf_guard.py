@@ -141,3 +141,63 @@ async def test_resolve_real_localhost_blocked():
     # deterministic on any host.
     with pytest.raises(SsrfBlocked):
         await resolve_public_or_raise("localhost")
+
+
+async def test_resolve_public_or_raise_returns_validated_addrs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The pin path needs the validated IPs back so the caller connects to a vetted
+    # address rather than letting httpx re-resolve (TOCTOU close, §8.2).
+    async def _fake_resolve(host: str) -> list[str]:
+        return ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]
+
+    monkeypatch.setattr(ssrf_guard, "_resolve", _fake_resolve)
+    addrs = await resolve_public_or_raise("hooks.example.com")
+    assert addrs == ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]
+
+
+def test_pin_request_wires_host_and_sni():
+    pinned = ssrf_guard.pin_request(
+        "https://hooks.example.com/p?x=y", "93.184.216.34", {"User-Agent": "x"}
+    )
+    assert pinned.url == "https://93.184.216.34/p?x=y"
+    assert pinned.headers == {"User-Agent": "x", "Host": "hooks.example.com"}
+    assert pinned.extensions == {"sni_hostname": "hooks.example.com"}
+
+
+@pytest.mark.parametrize(
+    ("url", "ip", "expected_url", "expected_host", "expected_sni"),
+    [
+        # IPv4, path + query preserved, default port
+        (
+            "https://hooks.example.com/sink?token=abc",
+            "93.184.216.34",
+            "https://93.184.216.34/sink?token=abc",
+            "hooks.example.com",
+            "hooks.example.com",
+        ),
+        # explicit non-default port preserved on both connect URL and Host header
+        (
+            "https://hooks.example.com:8443/retell",
+            "93.184.216.34",
+            "https://93.184.216.34:8443/retell",
+            "hooks.example.com:8443",
+            "hooks.example.com",
+        ),
+        # IPv6 is bracketed in the connect URL; Host/SNI stay the hostname
+        (
+            "https://hooks.example.com/",
+            "2606:2800:220:1:248:1893:25c8:1946",
+            "https://[2606:2800:220:1:248:1893:25c8:1946]/",
+            "hooks.example.com",
+            "hooks.example.com",
+        ),
+    ],
+)
+def test_pin_to_ip(
+    url: str, ip: str, expected_url: str, expected_host: str, expected_sni: str
+) -> None:
+    connect_url, host_header, sni = ssrf_guard.pin_to_ip(url, ip)
+    assert connect_url == expected_url
+    assert host_header == expected_host
+    assert sni == expected_sni

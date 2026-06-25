@@ -333,6 +333,14 @@ services:
       INVITE_EMAIL_SENDER: ${INVITE_EMAIL_SENDER:-noreply@usanretirement.com}
       INVITE_EMAIL_FROM_NAME: ${INVITE_EMAIL_FROM_NAME:-USAN Admin}
       INVITE_EMAIL_TIMEOUT_S: ${INVITE_EMAIL_TIMEOUT_S:-10}
+      # RetellAI-compatible public API (feature 003). SHIP-INERT: the compat surface
+      # is always mounted but returns 401 until a super-admin mints a compat key, and
+      # webhook delivery + docs default OFF. To go live see docs/deployment/compat-settings-wiring.md.
+      COMPAT_DOCS_ENABLED: ${COMPAT_DOCS_ENABLED:-false}
+      COMPAT_WEBHOOK_ALLOWED_HOSTS: ${COMPAT_WEBHOOK_ALLOWED_HOSTS:-}
+      COMPAT_DEFAULT_TIMEZONE: ${COMPAT_DEFAULT_TIMEZONE:-America/New_York}
+      COMPAT_KEY_RATE_LIMIT: ${COMPAT_KEY_RATE_LIMIT:-600/minute}
+      COMPAT_WEBHOOK_DELIVERY_ENABLED: ${COMPAT_WEBHOOK_DELIVERY_ENABLED:-false}
     # The API is stateless: no on-disk writes outside /tmp, so run the root
     # filesystem read-only and block privilege escalation. /tmp is a tmpfs for
     # any transient scratch (e.g. signed-URL staging).
