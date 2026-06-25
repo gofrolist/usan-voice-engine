@@ -270,8 +270,9 @@ async def update_response_engine(
 async def publish_agent_version(
     db: AsyncSession, agent_id: str, body: PublishAgentVersionRequest
 ) -> AgentProfile:
-    """Publish the current draft as a new version. The requested body.version is accepted but
-    native publish auto-assigns the next number (PENDING-FREEZE on exact numbering)."""
+    """Publish the current draft as a new version. The requested body.version is advisory;
+    native publish auto-assigns the next number — FROZEN (oracle): pinned by
+    test_publish_returns_server_authoritative_version."""
     profile = await _load_active(db, ids.decode_agent_id(agent_id), kind="agent")
     note = body.version_title or "compat publish-agent-version"
     version = await agent_profiles_repo.publish(db, profile.id, note=note, actor_email=_ACTOR)
@@ -310,9 +311,13 @@ async def list_agent_profiles(db: AsyncSession) -> list[AgentProfile]:
     return [p for p in profiles if p.status != ProfileStatus.ARCHIVED]
 
 
-async def list_agent_versions(db: AsyncSession, agent_id: str) -> list[AgentProfileVersion]:
+async def list_agent_versions(
+    db: AsyncSession, agent_id: str
+) -> tuple[AgentProfile, list[AgentProfileVersion]]:
+    """Return (profile, versions) so the router can re-use the profile for serialization."""
     profile = await _load_active(db, ids.decode_agent_id(agent_id), kind="agent")
-    return await agent_profiles_repo.list_versions(db, profile.id)
+    versions = await agent_profiles_repo.list_versions(db, profile.id)
+    return profile, versions
 
 
 # --- serialization ---------------------------------------------------------------------
@@ -322,6 +327,26 @@ def _version_fields(profile: AgentProfile) -> dict[str, Any]:
         "is_published": profile.published_version is not None,
         "last_modification_timestamp": to_ms(profile.updated_at),
     }
+
+
+def serialize_agent_version(
+    profile: AgentProfile, version_row: AgentProfileVersion
+) -> AgentResponse:
+    """Full AgentResponse for one historical version entry.
+
+    Builds the response from the *current* live profile config, overlaying the
+    row's ``version`` number and ``published_at`` timestamp.  Historical per-version
+    config snapshots are a known Phase-1 fidelity limit: the oracle requires the full
+    AgentResponse shape for each entry, not a point-in-time config snapshot.
+    """
+    base = serialize_agent(profile)
+    return base.model_copy(
+        update={
+            "version": version_row.version,
+            "last_modification_timestamp": to_ms(version_row.published_at),
+            "is_published": True,
+        }
+    )
 
 
 def serialize_agent(profile: AgentProfile, *, webhook_secret: str | None = None) -> AgentResponse:

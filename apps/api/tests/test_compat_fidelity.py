@@ -49,7 +49,9 @@ def test_list_voices_bare_array_shape(compat_client, compat_headers):
     assert isinstance(body, list)  # bare array, not a wrapper object
     assert body  # non-empty
     sample = body[0]
-    for key in ("voice_id", "voice_name", "provider", "accent", "gender", "age"):
+    # accent/age/preview_audio_url are optional oracle fields not populated by the
+    # curated catalog; they are excluded from the response (response_model_exclude_none).
+    for key in ("voice_id", "voice_name", "provider", "gender"):
         assert key in sample
     assert all(v["provider"] == "cartesia" for v in body)
     assert _RETELL in {v["voice_id"] for v in body}  # the default voice's alias is listed

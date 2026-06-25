@@ -1,16 +1,23 @@
 """Pydantic request/response models for the RetellAI-compatible call endpoints (feature 003).
 
 The response **Call object** (``CompatCall``) is the central RetellAI resource, assembled by
-``compat.call_serializer``. Field names + shapes are the external contract. Items flagged
-PENDING-FREEZE are pinned against the captured CRM oracle before the contract tests freeze
-(tasks.md contract-freeze gate).
+``compat.call_serializer``. Field names + shapes are the external contract, frozen and
+validated against the captured CRM oracle (tasks.md contract-freeze gate).
 """
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+# --- Enums ------------------------------------------------------------------------------
+class DataStorageSetting(StrEnum):
+    everything = "everything"
+    everything_except_pii = "everything_except_pii"
+    basic_attributes_only = "basic_attributes_only"
 
 
 # --- Requests ---------------------------------------------------------------------------
@@ -21,23 +28,33 @@ class CreatePhoneCallRequest(BaseModel):
     from_number: str
     to_number: str
     override_agent_id: str | None = None
-    # PENDING-FREEZE (oracle): RetellAI's override_agent_version int-vs-string form.
-    override_agent_version: int | None = None
+    # FROZEN (oracle AgentVersionReference): int version OR string tag ("latest"/"prod").
+    # Numeric selects that version; a string tag serves the current published version (MVP).
+    override_agent_version: int | str | None = None
     metadata: dict[str, Any] | None = None
     retell_llm_dynamic_variables: dict[str, Any] | None = None
-    # Accepted for contract compatibility (PENDING-FREEZE oracle: applied to the SIP INVITE);
-    # currently echoed/no-op so a CRM sending it is not rejected.
-    custom_sip_headers: dict[str, Any] | None = None
+    # FROZEN (oracle additionalProperties:string): accept + echo; values coerced to str.
+    custom_sip_headers: dict[str, str] | None = None
+
+    @field_validator("custom_sip_headers", mode="before")
+    @classmethod
+    def _coerce_sip_header_values_to_str(cls, v: Any) -> dict[str, str] | None:
+        if v is None:
+            return None
+        if not isinstance(v, dict):
+            raise ValueError("custom_sip_headers must be a mapping")
+        return {k: str(val) for k, val in v.items()}
 
 
 class UpdateCallRequest(BaseModel):
-    """PATCH /v2/update-call/{id} — mutable metadata / dynamic variables. ``data_storage_setting``
-    and ``custom_attributes`` are accepted for contract compatibility (PENDING-FREEZE oracle:
-    semantics) and currently echoed/no-op."""
+    """PATCH /v2/update-call/{id}. ``override_dynamic_variables`` is the oracle field name on
+    THIS op; ``data_storage_setting`` is enum-validated (no-op behavior); ``custom_attributes``
+    is accepted/echoed."""
 
     metadata: dict[str, Any] | None = None
     retell_llm_dynamic_variables: dict[str, Any] | None = None
-    data_storage_setting: str | None = None
+    override_dynamic_variables: dict[str, Any] | None = None
+    data_storage_setting: DataStorageSetting | None = None
     custom_attributes: dict[str, Any] | None = None
 
 
@@ -64,6 +81,7 @@ class ListCallsRequest(BaseModel):
 
 # --- Response sub-objects ---------------------------------------------------------------
 class TranscriptUtterance(BaseModel):
+    # FROZEN: role enum agent|user|transfer_target; words [] (oracle Utterance).
     role: str
     content: str
     # Word-level timing is not captured natively; emitted empty (RetellAI marks it optional).
@@ -80,7 +98,8 @@ class CallCost(BaseModel):
 class CallAnalysis(BaseModel):
     call_summary: str | None = None
     in_voicemail: bool = False
-    # PENDING-FREEZE (oracle): no reliable per-call sentiment natively — emitted null.
+    # FROZEN: null now; non-null vocab is title-case Negative/Positive/Neutral/Unknown
+    # (oracle CallAnalysis).
     user_sentiment: str | None = None
     call_successful: bool | None = None
     custom_analysis_data: dict[str, Any] | None = None
@@ -100,20 +119,20 @@ class CompatCall(BaseModel):
     telephony_identifier: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     retell_llm_dynamic_variables: dict[str, Any] = Field(default_factory=dict)
-    # LLM-written-during-call vars are not tracked separately natively -> null (PENDING-FREEZE).
+    # FROZEN: null pre-end; shape per oracle V3CallBase / CallLatency.
     collected_dynamic_variables: dict[str, Any] | None = None
     start_timestamp: int | None = None
     end_timestamp: int | None = None
     duration_ms: int | None = None
     transcript: str | None = None
     transcript_object: list[TranscriptUtterance] = Field(default_factory=list)
-    transcript_with_tool_calls: str | None = None
     recording_url: str | None = None
     public_log_url: str | None = None  # no native source -> null
     disconnection_reason: str | None = None
     call_analysis: CallAnalysis | None = None
     call_cost: CallCost | None = None
-    latency: dict[str, Any] | None = None  # per-turn latency aggregate (PENDING-FREEZE) -> null
+    # FROZEN: null pre-end; shape per oracle V3CallBase / CallLatency.
+    latency: dict[str, Any] | None = None
     llm_token_usage: dict[str, Any] | None = None
 
 

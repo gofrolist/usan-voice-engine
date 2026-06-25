@@ -119,7 +119,6 @@ async def serialize_call(
     dynamic_variables, metadata = unpack_dynamic_vars(call.dynamic_vars)
 
     transcript_str: str | None = None
-    transcript_with_tools: str | None = None
     transcript_object: list[TranscriptUtterance] = []
     if include_transcript:
         segments = await transcripts_repo.list_for_call(db, call.id)
@@ -136,7 +135,6 @@ async def serialize_call(
             transcript_str = "\n".join(
                 _segment_line(s, with_tools=False) for s in segments if s.tool_name is None
             )
-            transcript_with_tools = "\n".join(_segment_line(s, with_tools=True) for s in segments)
 
     recording_url: str | None = None
     if include_recording:
@@ -171,7 +169,6 @@ async def serialize_call(
         duration_ms=duration_ms(call.duration_seconds),
         transcript=transcript_str,
         transcript_object=transcript_object,
-        transcript_with_tool_calls=transcript_with_tools,
         recording_url=recording_url,
         disconnection_reason=status_map.to_disconnection_reason(call.status),
         call_analysis=await _build_analysis(db, call),

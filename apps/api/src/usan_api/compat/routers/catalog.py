@@ -19,7 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.compat.auth import get_compat_db
 from usan_api.compat.errors import CompatError
-from usan_api.compat.schemas.voices import ConcurrencyResponse, VoiceResponse
+from usan_api.compat.schemas.voices import (
+    CompatVoiceGender,
+    ConcurrencyResponse,
+    VoiceProvider,
+    VoiceResponse,
+)
 from usan_api.compat.voice_map import resolve_voice_id, to_retell_voice_id
 from usan_api.repositories import calls as calls_repo
 from usan_api.schemas.voice_catalog import VOICE_CATALOG, VoiceSpec
@@ -27,8 +32,11 @@ from usan_api.settings import Settings, get_settings
 
 router = APIRouter(tags=["compat-catalog"])
 
-# Curated VoiceGender (feminine/masculine/gender_neutral) -> RetellAI's male/female.
-_GENDER_MAP = {"feminine": "female", "masculine": "male"}
+# Curated gender (feminine/masculine) -> oracle-pinned CompatVoiceGender enum.
+_GENDER_MAP: dict[str, CompatVoiceGender] = {
+    "feminine": CompatVoiceGender.female,
+    "masculine": CompatVoiceGender.male,
+}
 
 
 def _audit(request: Request, op: str) -> None:
@@ -37,15 +45,18 @@ def _audit(request: Request, op: str) -> None:
 
 
 def _serialize_voice(spec: VoiceSpec) -> VoiceResponse:
+    gender = _GENDER_MAP.get(spec.gender or "")
+    if gender is None:
+        raise ValueError(
+            f"voice {spec.cartesia_voice_id!r} has unmappable gender {spec.gender!r}; "
+            "only 'masculine' and 'feminine' map to oracle VoiceGender (CompatVoiceGender)"
+        )
     return VoiceResponse(
         # Catalog ids always map; fall back to the raw id so voice_id is never null.
         voice_id=to_retell_voice_id(spec.cartesia_voice_id) or spec.cartesia_voice_id,
         voice_name=spec.name,
-        provider="cartesia",
-        accent=None,
-        gender=_GENDER_MAP.get(spec.gender) if spec.gender else None,
-        age=None,
-        preview_audio_url=None,
+        provider=VoiceProvider.cartesia,
+        gender=gender,
     )
 
 
@@ -60,7 +71,7 @@ def _find_spec(voice_id: str) -> VoiceSpec | None:
     return next((s for s in VOICE_CATALOG if s.cartesia_voice_id == cartesia), None)
 
 
-@router.get("/list-voices", response_model=list[VoiceResponse])
+@router.get("/list-voices", response_model=list[VoiceResponse], response_model_exclude_none=True)
 async def list_voices(request: Request) -> list[VoiceResponse]:
     """A BARE array of hosted voices. Deprecated voices are hidden from this
     new-selection list (matching the admin-UI picker); ``get-voice`` still resolves
@@ -69,7 +80,7 @@ async def list_voices(request: Request) -> list[VoiceResponse]:
     return [_serialize_voice(s) for s in VOICE_CATALOG if not s.deprecated]
 
 
-@router.get("/get-voice/{voice_id}", response_model=VoiceResponse)
+@router.get("/get-voice/{voice_id}", response_model=VoiceResponse, response_model_exclude_none=True)
 async def get_voice(voice_id: str, request: Request) -> VoiceResponse:
     spec = _find_spec(voice_id)
     if spec is None:

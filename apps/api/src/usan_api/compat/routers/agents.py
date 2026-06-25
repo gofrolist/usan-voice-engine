@@ -30,7 +30,6 @@ from usan_api.compat.schemas.agents import (
     PublishAgentVersionRequest,
     UpdateAgentRequest,
 )
-from usan_api.compat.serialization import to_ms
 from usan_api.settings import Settings, get_settings
 
 router = APIRouter(tags=["compat-agents"])
@@ -52,19 +51,23 @@ async def create_agent(
     profile, secret = await agent_bridge.bind_agent(db, settings, body)
     response.status_code = status.HTTP_201_CREATED
     _audit(request, "create-agent", ids.encode_agent_id(profile.id))
-    return agent_bridge.serialize_agent(profile, webhook_secret=secret).model_dump()
+    return agent_bridge.serialize_agent(profile, webhook_secret=secret).model_dump(
+        exclude_none=True
+    )
 
 
 @router.get("/get-agent/{agent_id}")
 async def get_agent(
     agent_id: str,
     request: Request,
-    version: int | None = Query(default=None),  # accepted; current is served (PENDING-FREEZE)
+    # FROZEN (oracle): ?version accepted; current config always served.
+    # Pinned by test_get_agent_accepts_version_query_and_serves_current.
+    version: int | None = Query(default=None),
     db: AsyncSession = Depends(get_compat_db),
 ) -> dict[str, Any]:
     profile = await agent_bridge.get_agent_profile(db, agent_id)
     _audit(request, "get-agent", agent_id)
-    return agent_bridge.serialize_agent(profile).model_dump()
+    return agent_bridge.serialize_agent(profile).model_dump(exclude_none=True)
 
 
 @router.get("/list-agents")
@@ -95,7 +98,7 @@ async def list_agents(
             if cut is not None:
                 profiles = profiles[cut + 1 :]
     _audit(request, "list-agents")
-    return [agent_bridge.serialize_agent(p).model_dump() for p in profiles[:limit]]
+    return [agent_bridge.serialize_agent(p).model_dump(exclude_none=True) for p in profiles[:limit]]
 
 
 @router.patch("/update-agent/{agent_id}")
@@ -109,7 +112,9 @@ async def update_agent(
 ) -> dict[str, Any]:
     profile, secret = await agent_bridge.update_agent(db, settings, agent_id, body)
     _audit(request, "update-agent", agent_id)
-    return agent_bridge.serialize_agent(profile, webhook_secret=secret).model_dump()
+    return agent_bridge.serialize_agent(profile, webhook_secret=secret).model_dump(
+        exclude_none=True
+    )
 
 
 @router.delete("/delete-agent/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -132,7 +137,7 @@ async def publish_agent_version(
 ) -> dict[str, Any]:
     profile = await agent_bridge.publish_agent_version(db, agent_id, body)
     _audit(request, "publish-agent-version", agent_id)
-    return agent_bridge.serialize_agent(profile).model_dump()
+    return agent_bridge.serialize_agent(profile).model_dump(exclude_none=True)
 
 
 @router.get("/get-agent-versions/{agent_id}")
@@ -141,14 +146,9 @@ async def get_agent_versions(
     request: Request,
     db: AsyncSession = Depends(get_compat_db),
 ) -> list[dict[str, Any]]:
-    versions = await agent_bridge.list_agent_versions(db, agent_id)
+    profile, versions = await agent_bridge.list_agent_versions(db, agent_id)
     _audit(request, "get-agent-versions", agent_id)
     return [
-        {
-            "agent_id": agent_id,
-            "version": v.version,
-            "version_title": v.note,
-            "last_modification_timestamp": to_ms(v.published_at),
-        }
+        agent_bridge.serialize_agent_version(profile, v).model_dump(exclude_none=True)
         for v in versions
     ]

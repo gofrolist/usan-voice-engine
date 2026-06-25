@@ -6,10 +6,7 @@ module aliases that external id onto the native ``cartesia_voice_id`` of the cur
 while the engine speaks the catalog's real Cartesia ids. An unmapped/unhosted ``voice_id``
 raises a documented ``CompatError(422)`` (FR-033) rather than an opaque validation error.
 
-PENDING-FREEZE (oracle): the CRM's *real* historical RetellAI ``voice_id`` strings (e.g.
-``11labs-Adrian``) are not known here; they are pinned against the captured CRM usage and
-added as explicit aliases before the contract freezes. Until then the engine accepts its
-own ``retell-<Name>`` aliases and raw curated Cartesia ids, and 422s anything else.
+FROZEN (oracle VoiceResponse): retell-<Name> aliases + raw cartesia ids; 422 otherwise.
 """
 
 from __future__ import annotations
