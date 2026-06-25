@@ -39,3 +39,19 @@ def test_get_voice_conforms_to_oracle(compat_client, compat_headers):
         f"gender {v['gender']!r} not in oracle enum {{male,female}}"
     )
     assert_conforms(v, "VoiceResponse")
+
+
+def test_every_catalog_voice_gender_is_oracle_mappable():
+    """Catalog-side guard: every non-deprecated voice must have a gender mappable
+    to the oracle VoiceGender enum. Prevents future catalog additions (e.g.,
+    gender_neutral) from causing 500 errors in /list-voices or /get-voice."""
+    from usan_api.compat.routers.catalog import _GENDER_MAP
+    from usan_api.schemas.voice_catalog import VOICE_CATALOG
+
+    for spec in VOICE_CATALOG:
+        if spec.deprecated:
+            continue
+        assert spec.gender in _GENDER_MAP, (
+            f"catalog voice {spec.name!r} has gender {spec.gender!r} with no oracle mapping; "
+            f"/list-voices would 500. Add a mapping or fix the catalog entry."
+        )
