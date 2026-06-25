@@ -11,7 +11,7 @@ from usan_api.db.base import CallStatus
 # Native CallStatus -> RetellAI call_status. RetellAI's call_status enum is
 # registered | not_connected | ongoing | ended | error. We deliberately never emit
 # `not_connected` — native BUSY/NO_ANSWER reach the contact's carrier and are classified
-# `ended` (with a dial_busy / dial_no_answer disconnection_reason). PENDING-FREEZE (oracle):
+# `ended` (with a dial_busy / dial_no_answer disconnection_reason). FROZEN (oracle):
 # confirm the CRM does not require not_connected for unanswered/busy outcomes.
 _STATUS_MAP: dict[CallStatus, str] = {
     CallStatus.QUEUED: "registered",
@@ -33,7 +33,7 @@ _DISCONNECT_MAP: dict[CallStatus, str] = {
     CallStatus.VOICEMAIL_LEFT: "voicemail_reached",
     CallStatus.NO_ANSWER: "dial_no_answer",
     CallStatus.BUSY: "dial_busy",
-    CallStatus.FAILED: "dial_failed",  # PENDING-FREEZE (oracle): dial_failed vs error_unknown
+    CallStatus.FAILED: "dial_failed",  # FROZEN (oracle)
     CallStatus.CANCELLED: "manual_stopped",
 }
 
