@@ -41,6 +41,7 @@ untrusted-DNS receivers at scale.
 import asyncio
 import ipaddress
 import re
+from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -164,3 +165,26 @@ def pin_to_ip(url: str, ip: str) -> tuple[str, str, str]:
     connect_url = urlunsplit((parts.scheme, netloc, parts.path, parts.query, ""))
     host_header = host if parts.port is None else f"{host}:{parts.port}"
     return connect_url, host_header, host
+
+
+@dataclass(frozen=True)
+class PinnedRequest:
+    """The httpx-request arguments for a POST pinned to a validated IP."""
+
+    url: str
+    headers: dict[str, str]
+    extensions: dict[str, str]
+
+
+def pin_request(url: str, ip: str, headers: dict[str, str]) -> PinnedRequest:
+    """Wire a validated IP into the pinned httpx request — the single source for the
+    Host-header + ``sni_hostname`` wiring, so the two webhook senders cannot diverge in
+    their SSRF protection. ``url``'s host becomes the IP literal (no second DNS lookup);
+    the original host is preserved in the ``Host`` header and the TLS SNI/cert hostname.
+    """
+    connect_url, host_header, sni = pin_to_ip(url, ip)
+    return PinnedRequest(
+        url=connect_url,
+        headers={**headers, "Host": host_header},
+        extensions={"sni_hostname": sni},
+    )

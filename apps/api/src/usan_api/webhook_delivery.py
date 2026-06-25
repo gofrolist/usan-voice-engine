@@ -140,16 +140,16 @@ async def deliver_one(
                 ),
             }
             # addrs is non-empty: resolve_public_or_raise raises on empty resolution.
-            connect_url, host_header, sni = ssrf_guard.pin_to_ip(url, addrs[0])
+            pinned = ssrf_guard.pin_request(url, addrs[0], headers)
             # Stream the response and drain at most max_response_bytes: a customer-
             # controlled receiver that returns an unbounded body could otherwise OOM the
             # API process (groups deliver concurrently). We only need the status code.
             async with client.stream(
                 "POST",
-                connect_url,
+                pinned.url,
                 content=raw,
-                headers={**headers, "Host": host_header},
-                extensions={"sni_hostname": sni},
+                headers=pinned.headers,
+                extensions=pinned.extensions,
             ) as response:
                 response_code = response.status_code
                 drained = 0

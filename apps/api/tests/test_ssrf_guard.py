@@ -156,6 +156,15 @@ async def test_resolve_public_or_raise_returns_validated_addrs(
     assert addrs == ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]
 
 
+def test_pin_request_wires_host_and_sni():
+    pinned = ssrf_guard.pin_request(
+        "https://hooks.example.com/p?x=y", "93.184.216.34", {"User-Agent": "x"}
+    )
+    assert pinned.url == "https://93.184.216.34/p?x=y"
+    assert pinned.headers == {"User-Agent": "x", "Host": "hooks.example.com"}
+    assert pinned.extensions == {"sni_hostname": "hooks.example.com"}
+
+
 @pytest.mark.parametrize(
     ("url", "ip", "expected_url", "expected_host", "expected_sni"),
     [
