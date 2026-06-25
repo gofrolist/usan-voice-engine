@@ -35,6 +35,7 @@ from usan_api.compat import ids, voice_map
 from usan_api.compat.errors import CompatError
 from usan_api.compat.schemas.agents import (
     WEBHOOK_EVENTS,
+    AgentListItemResponse,
     AgentResponse,
     CreateAgentRequest,
     PublishAgentVersionRequest,
@@ -383,6 +384,23 @@ def serialize_agent(profile: AgentProfile, *, webhook_secret: str | None = None)
         # The dedicated signing secret is surfaced ONCE, only on the registering call.
         data["webhook_secret"] = webhook_secret
     return AgentResponse(**data)
+
+
+def serialize_agent_list_item(profile: AgentProfile) -> AgentListItemResponse:
+    """Smaller serialization for the POST /v2/list-agents paginated response.
+
+    Returns the oracle-required AgentListItemResponse shape. ``channel`` is always
+    "voice" (this engine is voice-only); ``tags`` is an empty dict (no native tag
+    concept). ``user_modified_timestamp`` reuses the same ms-epoch source as
+    ``last_modification_timestamp`` in serialize_agent (``to_ms(profile.updated_at)``).
+    """
+    return AgentListItemResponse(
+        agent_id=ids.encode_agent_id(profile.id),
+        agent_name=profile.name,
+        channel="voice",
+        user_modified_timestamp=to_ms(profile.updated_at) or 0,
+        tags={},
+    )
 
 
 def serialize_llm(profile: AgentProfile, *, webhook_secret: str | None = None) -> LlmResponse:
