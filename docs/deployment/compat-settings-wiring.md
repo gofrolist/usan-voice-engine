@@ -49,5 +49,5 @@ re-fetches the secret**, so any value change must reach the VM `.env` **before**
 ## Why deploying is safe
 
 No key exists by default, so every compat endpoint 401s. Webhook delivery and docs default OFF.
-Merging and even deploying the code changes no reachable behavior until step 2 is taken
+Merging and even deploying the code changes no reachable behavior until a key is minted (step 3)
 deliberately by an operator.
