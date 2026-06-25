@@ -23,7 +23,7 @@ export function CreatedKeyDialog({
   onDone: () => void;
 }) {
   return (
-    <Dialog open={created !== null} onClose={onDone} title="API key created">
+    <Dialog open={created !== null} onClose={onDone} title="API key created" closeOnBackdrop={false}>
       {created !== null ? (
         <div className="space-y-3">
           <p className="text-sm text-slate-700">

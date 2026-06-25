@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import type { CompatKey, CompatKeyCreated, Me } from "../types/api";
+import type { CompatKey, Me } from "../types/api";
 import { meFixture } from "./meFixture";
 
 const getMock = vi.fn();
@@ -52,7 +52,7 @@ function routeGet(url: string): Promise<unknown> {
   return Promise.reject(new Error(`unexpected GET ${url}`));
 }
 
-function key(over: Partial<CompatKeyCreated> = {}): CompatKeyCreated {
+function key(over: Partial<CompatKey> = {}): CompatKey {
   return {
     id: "00000000-0000-0000-0000-0000000000c1",
     key_prefix: "key_ab12",
@@ -61,7 +61,6 @@ function key(over: Partial<CompatKeyCreated> = {}): CompatKeyCreated {
     created_at: "2026-06-25T12:00:00Z",
     revoked_at: null,
     last_used_at: null,
-    token: "",
     ...over,
   };
 }
@@ -106,7 +105,7 @@ describe("CompatKeysPage", () => {
 
   it("creates a key, shows the token once, then closes the dialog", async () => {
     keys = [];
-    postMock.mockResolvedValue(key({ token: "key_secret_plaintext_value", label: "Acme CRM" }));
+    postMock.mockResolvedValue({ ...key({ label: "Acme CRM" }), token: "key_secret_plaintext_value" });
     renderPage();
     await userEvent.type(await screen.findByLabelText("Label (optional)"), "Acme CRM");
     await userEvent.click(screen.getByRole("button", { name: "Create key" }));
@@ -120,9 +119,23 @@ describe("CompatKeysPage", () => {
     );
   });
 
+  it("token dialog stays open on Escape and closes only on explicit Done", async () => {
+    keys = [];
+    postMock.mockResolvedValue({ ...key({ label: "Escape test" }), token: "key_escape_proof" });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Create key" }));
+    expect(await screen.findByText("key_escape_proof")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByText("key_escape_proof")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() =>
+      expect(screen.queryByText("key_escape_proof")).not.toBeInTheDocument(),
+    );
+  });
+
   it("omits the label (null) when left blank", async () => {
     keys = [];
-    postMock.mockResolvedValue(key({ token: "key_x" }));
+    postMock.mockResolvedValue({ ...key(), token: "key_x" });
     renderPage();
     await userEvent.click(await screen.findByRole("button", { name: "Create key" }));
     await waitFor(() =>

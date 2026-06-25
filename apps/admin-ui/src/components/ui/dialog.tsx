@@ -11,30 +11,32 @@ export function Dialog({
   onClose,
   title,
   children,
+  closeOnBackdrop = true,
 }: {
   open: boolean;
   onClose: () => void;
   title?: ReactNode;
   children: ReactNode;
+  closeOnBackdrop?: boolean;
 }) {
   // Escape closes from anywhere — not only when focus already sits inside the panel
   // (the backdrop's onKeyDown only fires once focus is within the portal subtree).
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && closeOnBackdrop) onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, closeOnBackdrop]);
 
   if (!open) return null;
   return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={closeOnBackdrop ? onClose : undefined}
       onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
+        if (e.key === "Escape" && closeOnBackdrop) onClose();
       }}
       role="presentation"
     >
