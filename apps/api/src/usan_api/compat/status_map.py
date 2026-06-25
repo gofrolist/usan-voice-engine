@@ -25,6 +25,7 @@ _STATUS_MAP: dict[CallStatus, str] = {
     CallStatus.FAILED: "error",
     CallStatus.CANCELLED: "ended",
     CallStatus.DNC_BLOCKED: "error",  # never serialized (explicit 400 at create)
+    CallStatus.REGISTERED: "registered",
 }
 
 # Per-terminal-status RetellAI disconnection_reason. Non-terminal statuses have none yet.

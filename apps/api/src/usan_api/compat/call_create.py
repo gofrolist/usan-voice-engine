@@ -22,8 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from usan_api import quiet_hours
 from usan_api.compat.errors import CompatError
 from usan_api.compat.ids import decode_agent_id
-from usan_api.compat.schemas.calls import CreatePhoneCallRequest
+from usan_api.compat.schemas.calls import CreatePhoneCallRequest, RegisterPhoneCallRequest
 from usan_api.compat.serialization import RESERVED_VAR_PREFIX, pack_dynamic_vars
+from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Contact
 from usan_api.phone import to_e164
 from usan_api.repositories import agent_profiles as agent_profiles_repo
@@ -189,4 +190,47 @@ async def create_compat_call(
     call = await calls_repo.get_call(db, native_resp.id)
     if call is None:  # pragma: no cover - the row was just committed
         raise CompatError(500, "internal error")
+    return call
+
+
+async def register_compat_call(
+    db: AsyncSession,
+    body: RegisterPhoneCallRequest,
+    settings: Settings,
+) -> Call:
+    """Create a Call row in REGISTERED status WITHOUT dialing.
+
+    Oracle: agent_id is required and must reference a live (published) profile.
+    The outbound poller (claim_due_retries) only claims QUEUED rows, so a REGISTERED
+    row is structurally excluded from auto-dial.
+    """
+    profile_id = decode_agent_id(body.agent_id)
+    if not await agent_profiles_repo.is_live_profile(db, profile_id):
+        raise CompatError(422, "agent_id must reference a published agent")
+
+    packed = pack_dynamic_vars(body.retell_llm_dynamic_variables, body.metadata)
+
+    # Use a placeholder contact for register calls that lack a to_number.
+    phone = to_e164(body.to_number) if body.to_number else None
+    if phone is not None:
+        contact = await upsert_contact_for_number(db, settings, phone, body.metadata)
+    else:
+        # No to_number: synthesize a placeholder contact keyed on a unique sentinel.
+        sentinel = f"+10000000{str(uuid.uuid4().int)[:6]}"
+        contact = await upsert_contact_for_number(db, settings, sentinel, body.metadata)
+
+    direction = CallDirection.INBOUND if body.direction == "inbound" else CallDirection.OUTBOUND
+
+    call = Call(
+        contact_id=contact.id,
+        direction=direction,
+        status=CallStatus.REGISTERED,
+        scheduled_at=None,
+        profile_override=profile_id,
+        dynamic_vars=packed,
+    )
+    db.add(call)
+    await db.flush()
+    await db.commit()
+    await db.refresh(call)
     return call

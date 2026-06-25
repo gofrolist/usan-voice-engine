@@ -8,9 +8,9 @@ validated against the captured CRM oracle (tasks.md contract-freeze gate).
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # --- Enums ------------------------------------------------------------------------------
@@ -44,6 +44,22 @@ class CreatePhoneCallRequest(BaseModel):
         if not isinstance(v, dict):
             raise ValueError("custom_sip_headers must be a mapping")
         return {k: str(val) for k, val in v.items()}
+
+
+class RegisterPhoneCallRequest(BaseModel):
+    """POST /v2/register-phone-call. Creates a call WITHOUT dialing (status=registered).
+    Oracle: agent_id required, all others optional."""
+
+    model_config = ConfigDict(extra="allow")
+
+    agent_id: str
+    agent_version: int | str | None = None
+    agent_override: dict[str, Any] | None = None
+    from_number: str | None = None
+    to_number: str | None = None
+    direction: Literal["inbound", "outbound"] = "outbound"
+    metadata: dict[str, Any] | None = None
+    retell_llm_dynamic_variables: dict[str, str] | None = None
 
 
 class UpdateCallRequest(BaseModel):

@@ -37,7 +37,6 @@ def _norm(path: str) -> str:
 KNOWN_GAPS: frozenset[tuple[str, str]] = frozenset(
     {
         # --- 6 Pri-1 new endpoints (not yet implemented) ---
-        ("POST", "/v2/register-phone-call"),  # 1b: new-endpoint
         ("DELETE", "/v2/delete-call/{}"),  # 1b: new-endpoint
         ("PATCH", "/v2/update-live-call/{}"),  # 1b: new-endpoint
         ("DELETE", "/delete-agent-version/{}"),  # 1b: new-endpoint

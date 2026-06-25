@@ -29,6 +29,7 @@ from usan_api.compat.schemas.calls import (
     CreatePhoneCallRequest,
     ListCallsRequest,
     ListCallsResponse,
+    RegisterPhoneCallRequest,
     UpdateCallRequest,
 )
 from usan_api.compat.serialization import pack_dynamic_vars, unpack_dynamic_vars
@@ -223,3 +224,23 @@ async def list_calls(
         has_more=len(calls) == body.limit,
         total=await _count_calls(db, body) if body.include_total else None,
     )
+
+
+@router.post(
+    "/v2/register-phone-call",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CompatCall,
+    response_model_exclude_none=True,
+)
+async def register_phone_call(
+    body: RegisterPhoneCallRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> CompatCall:
+    call = await call_create.register_compat_call(db, body, settings)
+    result = await call_serializer.serialize_call(
+        db, call, settings, client_host=client_ip(request)
+    )
+    _audit(request, "register-phone-call", result.call_id)
+    return result
