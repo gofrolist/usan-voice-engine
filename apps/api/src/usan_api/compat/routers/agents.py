@@ -155,6 +155,24 @@ async def get_agent_versions(
     ]
 
 
+@router.post("/publish-agent/{agent_id}")
+async def publish_agent(
+    agent_id: str,
+    request: Request,
+    version: int | None = Query(default=None, ge=0),
+    db: AsyncSession = Depends(get_compat_db),
+) -> dict[str, Any]:
+    """POST /publish-agent/{agent_id} — thin publish (DEPRECATED oracle op, no request body).
+
+    Delegates to the same server-authoritative versioning path as publish-agent-version.
+    The optional ``version`` query param is advisory; the server assigns the next number.
+    """
+    body = PublishAgentVersionRequest(version=version if version is not None else 0)
+    profile = await agent_bridge.publish_agent_version(db, agent_id, body)
+    _audit(request, "publish-agent", agent_id)
+    return agent_bridge.serialize_agent(profile).model_dump(exclude_none=True)
+
+
 @router.delete("/delete-agent-version/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent_version(
     agent_id: str,
