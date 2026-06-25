@@ -101,9 +101,9 @@ def _map_call_time_window(ctw: CallTimeWindow | None) -> BatchWindow | None:
             end_local=end_local,
             days_of_week=days_of_week,
         )
-    except ValueError:
-        # Gap: BatchWindow validator rejected the window (e.g. no quiet-hours
-        # intersection). Echo the typed value; leave native window unset.
+    except ValidationError:
+        # BatchWindow's model_validator is the only source: either start>=end or no
+        # quiet-hours intersection. Cross-midnight is already pre-screened above.
         return None
 
 

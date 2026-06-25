@@ -14,11 +14,9 @@ from __future__ import annotations
 import pytest
 
 from tests.compat.conformance import assert_conforms
-from usan_api.schemas.voice_catalog import VOICE_CATALOG
+from tests.compat.conftest import RETELL_VOICE
 
 pytestmark = pytest.mark.frozen
-
-_RETELL_VOICE = "retell-" + VOICE_CATALOG[0].name.split(" - ")[0].split()[0]
 
 
 def _create_agent(compat_client, compat_headers) -> str:
@@ -32,7 +30,7 @@ def _create_agent(compat_client, compat_headers) -> str:
         "/create-agent",
         json={
             "response_engine": {"type": "retell-llm", "llm_id": llm["llm_id"]},
-            "voice_id": _RETELL_VOICE,
+            "voice_id": RETELL_VOICE,
             "agent_name": "Sales Bot",
         },
         headers=compat_headers,
@@ -69,7 +67,7 @@ def test_create_agent_response_conforms_to_oracle(compat_client, compat_headers)
         "/create-agent",
         json={
             "response_engine": {"type": "retell-llm", "llm_id": llm["llm_id"]},
-            "voice_id": _RETELL_VOICE,
+            "voice_id": RETELL_VOICE,
             "agent_name": "Conform Bot",
         },
         headers=compat_headers,
@@ -133,3 +131,15 @@ def test_publish_returns_server_authoritative_version(compat_client, compat_head
     assert r.status_code == 200, r.text
     assert isinstance(r.json()["version"], int)
     assert r.json()["version"] != 999
+
+
+def test_publish_agent_version_response_conforms_to_oracle(compat_client, compat_headers):
+    """publish-agent-version must return an oracle-conformant AgentResponse."""
+    agent_id = _create_agent(compat_client, compat_headers)
+    r = compat_client.post(
+        f"/publish-agent-version/{agent_id}",
+        json={"version": 1},
+        headers=compat_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert_conforms(r.json(), "AgentResponse")

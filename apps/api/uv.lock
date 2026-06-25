@@ -1594,11 +1594,13 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "jsonschema" },
     { name = "mypy" },
     { name = "openapi-schema-validator" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-xdist" },
+    { name = "referencing" },
     { name = "retell-sdk" },
     { name = "ruff" },
     { name = "testcontainers" },
@@ -1626,11 +1628,13 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "jsonschema", specifier = ">=4.21" },
     { name = "mypy", specifier = ">=1.13.0" },
     { name = "openapi-schema-validator", specifier = ">=0.6.2" },
     { name = "pytest", specifier = ">=9.0.0" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-xdist", specifier = ">=3.6" },
+    { name = "referencing", specifier = ">=0.35" },
     { name = "retell-sdk", specifier = "==5.53.0" },
     { name = "ruff", specifier = ">=0.15.0" },
     { name = "testcontainers", extras = ["postgres"], specifier = ">=4.8.0" },

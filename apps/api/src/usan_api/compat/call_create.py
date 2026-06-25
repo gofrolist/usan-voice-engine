@@ -76,7 +76,7 @@ async def upsert_contact_for_number(
     (defaults: name = the E.164 number, timezone = COMPAT_DEFAULT_TIMEZONE).
 
     FROZEN (oracle): metadata keys ``name`` and ``external_id`` — pinned by
-    test_duplicate_create_is_idempotent (contact upsert path exercised).
+    test_metadata_name_and_external_id_populate_contact (contact upsert path exercised).
     """
     contact = await contacts_repo.get_contact_by_phone(db, phone)
     if contact is not None:

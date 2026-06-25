@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -11,7 +12,7 @@ _HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
 
 @cache
-def load_oracle() -> dict:
+def load_oracle() -> dict[str, Any]:
     return yaml.safe_load(ORACLE_PATH.read_text())
 
 
@@ -27,5 +28,5 @@ def oracle_operations() -> frozenset[tuple[str, str]]:
     )
 
 
-def component_schema(name: str) -> dict:
+def component_schema(name: str) -> dict[str, Any]:
     return load_oracle()["components"]["schemas"][name]

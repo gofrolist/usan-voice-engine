@@ -32,6 +32,8 @@ dev = [
     "pytest-xdist>=3.6",
     "retell-sdk==5.53.0",
     "openapi-schema-validator>=0.6.2",
+    "jsonschema>=4.21",
+    "referencing>=0.35",
 ]
 
 [build-system]

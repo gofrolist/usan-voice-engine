@@ -18,7 +18,7 @@ class VoiceProvider(StrEnum):
     cartesia = "cartesia"
 
 
-class VoiceGender(StrEnum):
+class CompatVoiceGender(StrEnum):
     """Oracle-pinned gender enum (VoiceResponse.gender).
 
     Oracle allows only "male" / "female" (non-nullable required field).
@@ -43,7 +43,7 @@ class VoiceResponse(BaseModel):
     voice_id: str
     voice_name: str
     provider: VoiceProvider
-    gender: VoiceGender
+    gender: CompatVoiceGender
     accent: str | None = None
     age: str | None = None
     preview_audio_url: str | None = None

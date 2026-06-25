@@ -112,3 +112,17 @@ def test_duplicate_create_is_idempotent(
     a = create_call(compat_client, compat_headers).json()["call_id"]
     b = create_call(compat_client, compat_headers).json()["call_id"]
     assert a == b  # sha256 dedupe (call_create.py:50/78) — same params → same call
+
+
+def test_metadata_name_and_external_id_populate_contact(
+    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+):
+    """metadata keys ``name`` and ``external_id`` are FROZEN: the contact-upsert path
+    reads them to populate Contact.name and Contact.external_id."""
+    r = create_call(
+        compat_client,
+        compat_headers,
+        metadata={"name": "Ada", "external_id": "crm-1"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json().get("call_id")

@@ -18,10 +18,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from usan_api import dialer, livekit_dispatch, quiet_hours
+from usan_api.compat.voice_map import to_retell_voice_id
 from usan_api.schemas.voice_catalog import VOICE_CATALOG
 from usan_api.settings import get_settings
 
-_RETELL_VOICE = "retell-" + VOICE_CATALOG[0].name.split(" - ")[0].split()[0]
+RETELL_VOICE = to_retell_voice_id(VOICE_CATALOG[0].cartesia_voice_id)
 
 
 @pytest.fixture(autouse=True)
@@ -89,7 +90,7 @@ def _published_agent_id(client, headers: dict) -> str:
         "/create-agent",
         json={
             "response_engine": {"type": "retell-llm", "llm_id": llm["llm_id"]},
-            "voice_id": _RETELL_VOICE,
+            "voice_id": RETELL_VOICE,
             "agent_name": "Seed Agent",
         },
         headers=headers,

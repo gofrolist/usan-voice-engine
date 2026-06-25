@@ -20,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from usan_api.compat.auth import get_compat_db
 from usan_api.compat.errors import CompatError
 from usan_api.compat.schemas.voices import (
+    CompatVoiceGender,
     ConcurrencyResponse,
-    VoiceGender,
     VoiceProvider,
     VoiceResponse,
 )
@@ -32,10 +32,10 @@ from usan_api.settings import Settings, get_settings
 
 router = APIRouter(tags=["compat-catalog"])
 
-# Curated VoiceGender (feminine/masculine) -> oracle-pinned VoiceGender enum.
-_GENDER_MAP: dict[str, VoiceGender] = {
-    "feminine": VoiceGender.female,
-    "masculine": VoiceGender.male,
+# Curated gender (feminine/masculine) -> oracle-pinned CompatVoiceGender enum.
+_GENDER_MAP: dict[str, CompatVoiceGender] = {
+    "feminine": CompatVoiceGender.female,
+    "masculine": CompatVoiceGender.male,
 }
 
 
@@ -49,7 +49,7 @@ def _serialize_voice(spec: VoiceSpec) -> VoiceResponse:
     if gender is None:
         raise ValueError(
             f"voice {spec.cartesia_voice_id!r} has unmappable gender {spec.gender!r}; "
-            "only 'masculine' and 'feminine' map to oracle VoiceGender"
+            "only 'masculine' and 'feminine' map to oracle VoiceGender (CompatVoiceGender)"
         )
     return VoiceResponse(
         # Catalog ids always map; fall back to the raw id so voice_id is never null.
