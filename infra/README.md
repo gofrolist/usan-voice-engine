@@ -451,3 +451,13 @@ Verify post-deploy:
   callback (audit-logged).
 - If the SPA loads but every `/v1/*` call 404s, the `/v1/*` handle is missing from
   the `{$ADMIN_DOMAIN}` Caddy block — fix `infra/Caddyfile`, not Grafana.
+
+## RetellAI-compat API (feature 003)
+
+The `/compat/*` surface ships inert — always mounted, but 401 until a super-admin mints a
+compat key in the admin UI (**System → Compat API Keys**). The 5 `COMPAT_*` settings and the
+full activation runbook (issue key → set the attested allow-list host → enable webhook delivery
+→ seed Secret Manager + VM `.env` before the tag) live in
+[`docs/deployment/compat-settings-wiring.md`](../docs/deployment/compat-settings-wiring.md).
+Like every key, a `COMPAT_*` change must reach the VM `.env` **before** the tag deploy — the
+deploy does not re-fetch the secret.
