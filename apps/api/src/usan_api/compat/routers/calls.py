@@ -291,10 +291,13 @@ async def update_live_call(
     )
     if new_vars:
         existing, meta = unpack_dynamic_vars(call.dynamic_vars)
-        merged = {**existing, **{k: str(v) for k, v in new_vars.items()}}
+        # MERGES (overrides specific keys only) — intentionally unlike update_call which
+        # replaces the whole dynamic_vars map; mid-call partial override must be non-destructive.
+        merged = {**existing, **new_vars}  # new_vars is dict[str, str] (Pydantic-validated)
         call.dynamic_vars = pack_dynamic_vars(merged, meta)
         await db.commit()
         if call.livekit_room:
+            # Send the DELTA only; the agent merges it into its running variable set.
             await livekit_dispatch.send_dynamic_vars(call.livekit_room, new_vars, settings)
     # call_control verbs are accepted but no-op this phase (documented partial parity).
     _audit(request, "update-live-call", call_id)

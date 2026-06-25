@@ -31,7 +31,7 @@ def test_create_call_no_override_with_published_default_conforms(
     resp = create_call(compat_client, compat_headers)  # no override; default resolves
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["agent_id"], "agent_id must be present (V2CallBase required)"
+    assert body.get("agent_id"), "agent_id must be present and non-empty (V2CallBase required)"
     assert body["agent_version"] is not None, "agent_version must be present"
     assert_conforms(body, "V2PhoneCallResponse")
     # retell.types.CallResponse is typing.Union[WebCallResponse, PhoneCallResponse] — not a

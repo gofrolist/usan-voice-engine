@@ -124,7 +124,11 @@ def seeded_call(compat_client, compat_headers, mock_dispatch, allow_quiet_hours)
 def published_default_agent(compat_client, compat_headers, async_database_url) -> str:
     """Publish an agent (via the compat API) and mark it the ACTIVE default OUTBOUND
     profile via a direct superuser UPDATE, so a no-override create-phone-call resolves it.
-    Returns the compat agent_id."""
+    Returns the compat agent_id.
+
+    NOTE: an identical fixture exists in tests/conftest.py; pytest visibility scoping
+    requires the duplication — keep the raw SQL in sync between both copies.
+    """
     agent_id = _published_agent_id(compat_client, compat_headers)
 
     async def _mark_default() -> None:
