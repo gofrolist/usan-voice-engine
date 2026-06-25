@@ -24,6 +24,7 @@ class CallStatus(enum.Enum):
     FAILED = "failed"
     DNC_BLOCKED = "dnc_blocked"
     CANCELLED = "cancelled"
+    REGISTERED = "registered"
 
 
 class ProfileStatus(enum.Enum):

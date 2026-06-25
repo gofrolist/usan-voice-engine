@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -578,3 +579,58 @@ async def test_dispatch_and_dial_retry_carries_resolved_vars_in_metadata(
     assert meta["timezone"] == "US/Central"
     assert meta["resolved_vars"]["first_name"] == "Margaret"
     assert meta["resolved_vars"]["call_direction"] == "outbound"
+
+
+# ---------------------------------------------------------------------------
+# Task 2: force_hangup + send_dynamic_vars helpers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_force_hangup_deletes_room(monkeypatch):
+    room_svc = MagicMock()
+    room_svc.delete_room = AsyncMock()
+    fake = MagicMock(room=room_svc)
+    fake.__aenter__ = AsyncMock(return_value=fake)
+    fake.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+
+    await livekit_dispatch.force_hangup("room-abc", _settings())
+    room_svc.delete_room.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_force_hangup_swallows_errors(monkeypatch):
+    fake = MagicMock()
+    fake.__aenter__ = AsyncMock(side_effect=RuntimeError("boom"))
+    fake.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    # Must NOT raise (best-effort, mirrors _delete_room).
+    await livekit_dispatch.force_hangup("room-abc", _settings())
+
+
+@pytest.mark.asyncio
+async def test_send_dynamic_vars_publishes_reliable_packet(monkeypatch):
+    room_svc = MagicMock()
+    room_svc.send_data = AsyncMock()
+    fake = MagicMock(room=room_svc)
+    fake.__aenter__ = AsyncMock(return_value=fake)
+    fake.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+
+    await livekit_dispatch.send_dynamic_vars("room-abc", {"first_name": "Ada"}, _settings())
+    room_svc.send_data.assert_awaited_once()
+    sent = room_svc.send_data.await_args.args[0]
+    assert sent.room == "room-abc"
+    assert sent.topic == livekit_dispatch.DYNAMIC_VARS_TOPIC == "usan/vars"
+    assert json.loads(sent.data.decode()) == {"first_name": "Ada"}
+
+
+@pytest.mark.asyncio
+async def test_send_dynamic_vars_swallows_errors(monkeypatch):
+    fake = MagicMock()
+    fake.__aenter__ = AsyncMock(side_effect=RuntimeError("boom"))
+    fake.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(livekit_dispatch, "build_livekit_api", lambda s: fake)
+    # Must NOT raise (best-effort).
+    await livekit_dispatch.send_dynamic_vars("room-abc", {"k": "v"}, _settings())

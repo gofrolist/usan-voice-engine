@@ -65,7 +65,12 @@ async def _seed_dnc(super_async_url, phone):
 
 
 def test_lazy_contact_upsert_defaults(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours, async_database_url
+    compat_client,
+    compat_headers,
+    published_default_agent,
+    mock_dispatch,
+    allow_quiet_hours,
+    async_database_url,
 ):
     phone = "+15557654321"
     assert _create(compat_client, compat_headers).status_code == 201
@@ -77,7 +82,12 @@ def test_lazy_contact_upsert_defaults(
 
 
 def test_lazy_contact_uses_metadata_name_and_external_id(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours, async_database_url
+    compat_client,
+    compat_headers,
+    published_default_agent,
+    mock_dispatch,
+    allow_quiet_hours,
+    async_database_url,
 ):
     phone = "+15550009999"
     r = _create(
@@ -93,7 +103,7 @@ def test_lazy_contact_uses_metadata_name_and_external_id(
 
 
 def test_synthesized_idempotency_no_double_dial(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
 ):
     r1 = _create(compat_client, compat_headers)
     r2 = _create(compat_client, compat_headers)  # identical -> same synth key -> replay
@@ -114,7 +124,7 @@ def test_dnc_blocked_returns_explicit_400(
 
 
 def test_quiet_hours_blocked_returns_explicit_400(
-    compat_client, compat_headers, mock_dispatch, monkeypatch
+    compat_client, compat_headers, published_default_agent, mock_dispatch, monkeypatch
 ):
     monkeypatch.setattr(quiet_hours, "next_allowed", lambda dt, tz, **k: dt + timedelta(hours=2))
     r = _create(compat_client, compat_headers, to_number="+15552223333")
@@ -124,7 +134,7 @@ def test_quiet_hours_blocked_returns_explicit_400(
 
 
 def test_metadata_preserves_types_round_trip(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
 ):
     # Non-string metadata must survive create -> get with original JSON types (review #3).
     r = _create(
@@ -142,7 +152,7 @@ def test_metadata_preserves_types_round_trip(
 
 
 def test_idempotency_invariant_to_phone_format(
-    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+    compat_client, compat_headers, published_default_agent, mock_dispatch, allow_quiet_hours
 ):
     # A retry that reformats the number must hit the same call, never double-dial (review #1).
     r1 = _create(compat_client, compat_headers, to_number="+1 (555) 888-1212")

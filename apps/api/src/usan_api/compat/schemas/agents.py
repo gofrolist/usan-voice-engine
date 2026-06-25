@@ -10,7 +10,7 @@ validated against the captured CRM oracle; the contract is frozen.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -87,3 +87,53 @@ class AgentResponse(BaseModel):
     language: str | None = None
     webhook_url: str | None = None
     webhook_events: list[str] | None = None
+
+
+# ---------------------------------------------------------------------------
+# POST /v2/list-agents schemas (Task 7 — oracle shape, paginated wrapper)
+# ---------------------------------------------------------------------------
+
+
+class ChannelStringFilter(BaseModel):
+    """StringFilter specialised for the ``channel`` field (op: eq, value: voice|chat)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["string"] = "string"
+    op: Literal["eq"] = "eq"
+    value: Literal["voice", "chat"]
+
+
+class AgentListFilter(BaseModel):
+    """Filter criteria for POST /v2/list-agents (oracle: AgentListFilter ~1332-1350)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    channel: ChannelStringFilter | None = None
+    query: str | None = None
+
+
+class ListAgentsRequest(BaseModel):
+    """Request body for POST /v2/list-agents."""
+
+    model_config = ConfigDict(extra="allow")
+
+    filter_criteria: AgentListFilter | None = None
+    pagination_key: str | None = None
+    limit: int | None = None
+
+
+class AgentListItemResponse(BaseModel):
+    """Smaller per-item shape for the paginated list (oracle: AgentListItemResponse ~1353-1387).
+
+    ``tags`` is an object (str → AgentRootTagState) in the oracle; we return an empty dict by
+    default (no native tag concept) and ``extra="allow"`` keeps us forward-compatible.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    agent_id: str
+    agent_name: str
+    channel: str
+    user_modified_timestamp: int
+    tags: dict[str, Any] = Field(default_factory=dict)

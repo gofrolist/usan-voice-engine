@@ -27,6 +27,7 @@ from usan_api.compat.auth import get_compat_db
 from usan_api.compat.errors import CompatError
 from usan_api.compat.schemas.agents import (
     CreateAgentRequest,
+    ListAgentsRequest,
     PublishAgentVersionRequest,
     UpdateAgentRequest,
 )
@@ -152,3 +153,73 @@ async def get_agent_versions(
         agent_bridge.serialize_agent_version(profile, v).model_dump(exclude_none=True)
         for v in versions
     ]
+
+
+@router.post("/publish-agent/{agent_id}")
+async def publish_agent(
+    agent_id: str,
+    request: Request,
+    version: int | None = Query(default=None, ge=0),
+    db: AsyncSession = Depends(get_compat_db),
+) -> dict[str, Any]:
+    """POST /publish-agent/{agent_id} — thin publish (DEPRECATED oracle op, no request body).
+
+    Delegates to the same server-authoritative versioning path as publish-agent-version.
+    The optional ``version`` query param is advisory; the server assigns the next number.
+    """
+    body = PublishAgentVersionRequest(version=version if version is not None else 0)
+    profile = await agent_bridge.publish_agent_version(db, agent_id, body)
+    _audit(request, "publish-agent", agent_id)
+    return agent_bridge.serialize_agent(profile).model_dump(exclude_none=True)
+
+
+@router.delete("/delete-agent-version/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent_version(
+    agent_id: str,
+    request: Request,
+    version: int = Query(..., ge=0),
+    db: AsyncSession = Depends(get_compat_db),
+) -> Response:
+    await agent_bridge.delete_agent_version(db, agent_id, version)
+    _audit(request, "delete-agent-version", agent_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/v2/list-agents")
+async def list_agents_v2(
+    body: ListAgentsRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+) -> dict[str, Any]:
+    """POST /v2/list-agents — paginated list of AgentListItemResponse (oracle shape).
+
+    Returns a paginated wrapper ``{items: [...], pagination_key: null, has_more: false}``.
+    This engine is voice-only: a ``channel=chat`` filter always returns an empty list.
+    Keyset pagination is not yet implemented; all non-archived agents are returned in a
+    single page (has_more=false, pagination_key omitted via exclude_none).
+    """
+    profiles = await agent_bridge.list_agent_profiles(db)
+
+    # Apply filter_criteria if provided.
+    fc = body.filter_criteria
+    if fc is not None:
+        if fc.channel is not None and fc.channel.value == "chat":
+            # Voice-only engine: chat channel always yields an empty list.
+            profiles = []
+        # query: case-insensitive substring match on agent_name OR agent_id (oracle conformance).
+        if fc.query is not None and profiles:
+            q = fc.query.lower()
+            profiles = [
+                p
+                for p in profiles
+                if q in (p.name or "").lower() or q in ids.encode_agent_id(p.id).lower()
+            ]
+
+    items = [
+        agent_bridge.serialize_agent_list_item(p).model_dump(exclude_none=True) for p in profiles
+    ]
+    _audit(request, "list-agents", "")
+    # Return paginated wrapper. pagination_key=None is excluded via exclude_none=True
+    # (oracle: PaginatedResponseBase fields are optional). has_more is always False
+    # (single-page implementation).
+    return {"items": items, "has_more": False}

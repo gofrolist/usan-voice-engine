@@ -12,10 +12,14 @@ fixtures; they are used by the contract-freeze tests (T047).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Generator
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 from usan_api import dialer, livekit_dispatch, quiet_hours
 from usan_api.compat.voice_map import to_retell_voice_id
@@ -114,3 +118,29 @@ def seeded_call(compat_client, compat_headers, mock_dispatch, allow_quiet_hours)
     """
     agent_id = _published_agent_id(compat_client, compat_headers)
     return create_call(compat_client, compat_headers, override_agent_id=agent_id).json()["call_id"]
+
+
+@pytest.fixture
+def published_default_agent(compat_client, compat_headers, async_database_url) -> str:
+    """Publish an agent (via the compat API) and mark it the ACTIVE default OUTBOUND
+    profile via a direct superuser UPDATE, so a no-override create-phone-call resolves it.
+    Returns the compat agent_id.
+
+    NOTE: an identical fixture exists in tests/conftest.py; pytest visibility scoping
+    requires the duplication — keep the raw SQL in sync between both copies.
+    """
+    agent_id = _published_agent_id(compat_client, compat_headers)
+
+    async def _mark_default() -> None:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text("UPDATE agent_profiles SET is_default_outbound = true WHERE name = :name"),
+                    {"name": "Seed Agent"},
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_mark_default())
+    return agent_id

@@ -8,12 +8,13 @@ Run with:
 import asyncio
 import json
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from livekit.agents import JobContext, WorkerOptions, cli
 from loguru import logger
 
-from usan_agent import api_client
+from usan_agent import api_client, prompt_vars
 from usan_agent.agent_config import AgentConfig
 from usan_agent.api_client import CrisisCategory, fetch_agent_config, start_inbound_call
 from usan_agent.check_in import (
@@ -21,8 +22,10 @@ from usan_agent.check_in import (
     build_check_in_agent,
     build_inbound_agent,
     build_test_agent,
+    sms_template_instructions,
 )
 from usan_agent.crisis_watcher import CrisisWatcher
+from usan_agent.dynamic_vars import DYNAMIC_VARS_TOPIC, apply_dynamic_vars
 from usan_agent.ids import validate_call_id
 from usan_agent.logging_config import configure_logging
 from usan_agent.metrics_hooks import register_metrics_flush
@@ -138,6 +141,19 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
             custom_vars=dynamic_vars,
             timezone=info.get("timezone") or "",
         )
+        # Register the mid-call dynamic-var receiver BEFORE session.start().
+        _inbound_vars = prompt_vars.build_vars(
+            info.get("resolved_vars") or {},
+            dynamic_vars,
+            timezone=info.get("timezone") or "",
+            now=datetime.now(UTC),
+        )
+        _register_dynamic_vars_receiver(
+            ctx,
+            agent,
+            _inbound_vars,
+            cfg.prompts.inbound_personalization_template + sms_template_instructions(cfg.tools),
+        )
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)
         await session.start(agent=agent, room=ctx.room)
@@ -248,6 +264,19 @@ async def _run_test_session(ctx: JobContext, settings: Settings, meta: CallMetad
         custom_vars=meta.dynamic_vars,
         timezone=meta.timezone,
     )
+    # Register the mid-call dynamic-var receiver BEFORE session.start().
+    _test_vars = prompt_vars.build_vars(
+        meta.resolved_vars or {},
+        meta.dynamic_vars or {},
+        timezone=meta.timezone,
+        now=datetime.now(UTC),
+    )
+    _register_dynamic_vars_receiver(
+        ctx,
+        agent,
+        _test_vars,
+        cfg.prompts.checkin_flow_instructions + sms_template_instructions(cfg.tools),
+    )
     await session.start(agent=agent, room=ctx.room)
     log.info("Test session started; waiting for browser participant")
     # Wait GENERICALLY for the browser WebRTC join — no sip.* attribute reads. Bound the
@@ -317,6 +346,53 @@ def _arm_crisis_safety_net(session: Any, *, call_id: str, settings: Settings) ->
     session.on("user_input_transcribed", _on_transcript)
 
 
+def _register_dynamic_vars_receiver(
+    ctx: JobContext,
+    agent: Any,
+    current_vars: dict[str, str],
+    template: str,
+) -> None:
+    """Register a ``data_received`` handler that applies mid-call dynamic-var updates.
+
+    Must be called AFTER ``ctx.connect()`` and BEFORE ``session.start()`` so the
+    handler is live before the LLM loop begins.  The handler filters on
+    ``DYNAMIC_VARS_TOPIC`` ("usan/vars") and calls ``apply_dynamic_vars`` to merge
+    incoming vars, re-substitute the instruction template, and push the result to
+    the running agent via ``agent.update_instructions``.
+
+    ``apply_dynamic_vars`` is pure (no LiveKit imports) so this thin closure is the
+    only coupling between the wire and the substitution logic.
+
+    Args:
+        ctx: The LiveKit JobContext (provides ``ctx.room.on``).
+        agent: The ``livekit.agents.voice.Agent`` instance for the running session.
+        current_vars: The vars dict currently in use for this call (read-only snapshot
+            taken at registration time; each incoming packet merges its vars over this
+            snapshot — subsequent packets do NOT accumulate into ``current_vars``).
+        template: The FULL (unsubstituted) instruction template string, including any
+            static suffix (e.g. SMS template instructions). ``substitute(template,
+            merged_vars)`` must reproduce the agent's complete instructions exactly.
+    """
+    room_name = ctx.room.name
+
+    def _on_data(data_packet: Any) -> None:
+        if data_packet.topic != DYNAMIC_VARS_TOPIC:
+            return
+
+        async def _apply(new_instructions: str) -> None:
+            await agent.update_instructions(new_instructions)
+            logger.bind(room=room_name).debug("dynamic-vars: instructions updated mid-call")
+
+        apply_dynamic_vars(
+            data_packet.data,
+            current_vars=current_vars,
+            template=template,
+            on_update=lambda new_instructions: asyncio.ensure_future(_apply(new_instructions)),
+        )
+
+    ctx.room.on("data_received", _on_data)
+
+
 async def entrypoint(ctx: JobContext) -> None:
     """Per-room entrypoint. LiveKit calls this once per dispatched job."""
     settings = get_settings()
@@ -363,6 +439,22 @@ async def entrypoint(ctx: JobContext) -> None:
             resolved_vars=meta.resolved_vars,
             custom_vars=meta.dynamic_vars,
             timezone=meta.timezone,
+        )
+        # Register the mid-call dynamic-var receiver BEFORE session.start() so it
+        # is live when the LLM loop begins.  current_vars mirrors what build_check_in_agent
+        # used; the template is the full (unsubstituted) flow instructions including the
+        # static SMS suffix so update reproduces the agent's complete instructions.
+        _outbound_vars = prompt_vars.build_vars(
+            meta.resolved_vars or {},
+            meta.dynamic_vars or {},
+            timezone=meta.timezone,
+            now=datetime.now(UTC),
+        )
+        _register_dynamic_vars_receiver(
+            ctx,
+            agent,
+            _outbound_vars,
+            cfg.prompts.checkin_flow_instructions + sms_template_instructions(cfg.tools),
         )
         register_transcript_flush(ctx, session, call_id, settings)
         register_metrics_flush(ctx, session, call_id, settings)

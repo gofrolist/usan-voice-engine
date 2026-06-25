@@ -2,7 +2,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.models import Transcript
@@ -51,6 +51,11 @@ async def list_for_call(db: AsyncSession, call_id: uuid.UUID) -> list[Transcript
         .limit(MAX_TRANSCRIPT_SEGMENTS)
     )
     return list(result.scalars().all())
+
+
+async def delete_for_call(db: AsyncSession, call_id: uuid.UUID) -> None:
+    """Delete all transcript rows for a call (used during soft-archive / PHI-redact)."""
+    await db.execute(delete(Transcript).where(Transcript.call_id == call_id))
 
 
 def _field(seg: Any, name: str) -> Any:

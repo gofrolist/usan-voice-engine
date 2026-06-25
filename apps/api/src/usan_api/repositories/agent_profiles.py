@@ -212,6 +212,24 @@ async def get_version(
     return result.scalar_one_or_none()
 
 
+async def delete_version(
+    db: AsyncSession, profile_id: uuid.UUID, version: int
+) -> AgentProfileVersion | None:
+    """Hard-delete one historical AgentProfileVersion row for (profile_id, version).
+
+    Returns the row if it existed, or None if no such row was found.
+    AgentProfileVersion has no soft-delete/archived flag — hard delete matches
+    the append-only history posture (published rows are permanent records; callers
+    must guard against deleting the currently-published version).
+    """
+    row = await get_version(db, profile_id, version)
+    if row is None:
+        return None
+    await db.delete(row)
+    await db.flush()
+    return row
+
+
 async def rollback(
     db: AsyncSession,
     profile_id: uuid.UUID,

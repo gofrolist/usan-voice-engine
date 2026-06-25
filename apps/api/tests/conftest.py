@@ -781,3 +781,58 @@ def compat_env(database_url: str, async_database_url: str, monkeypatch):
     asyncio.run(_truncate_and_dispose(create_async_engine(async_database_url, poolclass=NullPool)))
     yield
     get_settings.cache_clear()
+
+
+def _create_and_publish_seed_agent(client: TestClient, headers: dict) -> str:
+    """Create a compat LLM + agent named 'Seed Agent', publish version 1, return agent_id.
+
+    Shared helper for fixtures that need a published default outbound profile.
+    """
+    from usan_api.compat.voice_map import to_retell_voice_id
+    from usan_api.schemas.voice_catalog import VOICE_CATALOG
+
+    retell_voice = to_retell_voice_id(VOICE_CATALOG[0].cartesia_voice_id)
+    llm = client.post(
+        "/create-retell-llm",
+        json={"start_speaker": "agent", "general_prompt": "hi"},
+        headers=headers,
+    ).json()
+    agent = client.post(
+        "/create-agent",
+        json={
+            "response_engine": {"type": "retell-llm", "llm_id": llm["llm_id"]},
+            "voice_id": retell_voice,
+            "agent_name": "Seed Agent",
+        },
+        headers=headers,
+    ).json()
+    agent_id = agent["agent_id"]
+    client.post(f"/publish-agent-version/{agent_id}", json={"version": 1}, headers=headers)
+    return agent_id
+
+
+@pytest.fixture
+def published_default_agent(
+    compat_client: TestClient, compat_headers: dict, async_database_url: str
+) -> str:
+    """Publish a 'Seed Agent' via the compat API and mark it the ACTIVE default OUTBOUND
+    profile via a direct superuser UPDATE. Returns the compat agent_id.
+
+    Used by tests that exercise the no-override create-phone-call path — the guard added in
+    Phase 1b Task 1 requires a published default to exist when no override_agent_id is given.
+    """
+    agent_id = _create_and_publish_seed_agent(compat_client, compat_headers)
+
+    async def _mark_default() -> None:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text("UPDATE agent_profiles SET is_default_outbound = true WHERE name = :name"),
+                    {"name": "Seed Agent"},
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_mark_default())
+    return agent_id

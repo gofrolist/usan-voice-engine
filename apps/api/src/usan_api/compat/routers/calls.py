@@ -19,6 +19,7 @@ from loguru import logger
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from usan_api import livekit_dispatch
 from usan_api.client_ip import client_ip
 from usan_api.compat import call_create, call_serializer, ids, status_map
 from usan_api.compat.auth import get_compat_db
@@ -28,12 +29,16 @@ from usan_api.compat.schemas.calls import (
     CreatePhoneCallRequest,
     ListCallsRequest,
     ListCallsResponse,
+    RegisterPhoneCallRequest,
     UpdateCallRequest,
+    UpdateLiveCallRequest,
+    UpdateLiveCallResponse,
 )
 from usan_api.compat.serialization import pack_dynamic_vars, unpack_dynamic_vars
 from usan_api.db.base import CallStatus
 from usan_api.db.models import Call
 from usan_api.repositories import calls as calls_repo
+from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.settings import Settings, get_settings
 
 router = APIRouter(tags=["compat-calls"])
@@ -52,6 +57,8 @@ def _org_id(request: Request) -> uuid.UUID:
 async def _load_call(db: AsyncSession, call_id: str) -> Call:
     call = await calls_repo.get_call(db, ids.decode_call_id(call_id))
     if call is None:
+        raise CompatError(404, "call not found")
+    if call.archived_at is not None:
         raise CompatError(404, "call not found")
     return call
 
@@ -94,11 +101,14 @@ async def stop_call(
     call_id: str,
     request: Request,
     db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
 ) -> Response:
     call = await _load_call(db, call_id)
     # Best-effort cancel: mark a not-yet-terminal call CANCELLED so the dialer/poller never
-    # (re)dials it. An already-connected room is not force-hung-up in the MVP (noted).
+    # (re)dials it. Force-hang-up any live LiveKit room first (best-effort, never raises).
     if not status_map.is_terminal(call.status):
+        if call.livekit_room:
+            await livekit_dispatch.force_hangup(call.livekit_room, settings)
         await calls_repo.set_status(db, call.id, CallStatus.CANCELLED)
         await db.commit()
     _audit(request, "stop-call", call_id)
@@ -141,7 +151,7 @@ async def _query_calls(db: AsyncSession, body: ListCallsRequest) -> list[Call]:
     """Filter + keyset-paginate the org's calls (RLS-scoped). Filtering is intentionally
     minimal in the MVP (agent_id); unknown filter_criteria keys are silently ignored —
     FROZEN (oracle): pinned by test_list_calls_filter_ignores_unknown_keys."""
-    stmt = select(Call)
+    stmt = select(Call).where(Call.archived_at.is_(None))
     fc = body.filter_criteria or {}
     agent = fc.get("agent_id")
     if isinstance(agent, str) and agent:
@@ -184,7 +194,7 @@ async def _query_calls(db: AsyncSession, body: ListCallsRequest) -> list[Call]:
 
 
 async def _count_calls(db: AsyncSession, body: ListCallsRequest) -> int:
-    stmt = select(func.count()).select_from(Call)
+    stmt = select(func.count()).select_from(Call).where(Call.archived_at.is_(None))
     fc = body.filter_criteria or {}
     agent = fc.get("agent_id")
     if isinstance(agent, str) and agent:
@@ -219,3 +229,76 @@ async def list_calls(
         has_more=len(calls) == body.limit,
         total=await _count_calls(db, body) if body.include_total else None,
     )
+
+
+@router.post(
+    "/v2/register-phone-call",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CompatCall,
+    response_model_exclude_none=True,
+)
+async def register_phone_call(
+    body: RegisterPhoneCallRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> CompatCall:
+    call = await call_create.register_compat_call(db, body, settings)
+    result = await call_serializer.serialize_call(
+        db, call, settings, client_host=client_ip(request)
+    )
+    _audit(request, "register-phone-call", result.call_id)
+    return result
+
+
+@router.delete("/v2/delete-call/{call_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_call(
+    call_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+) -> Response:
+    try:
+        call = await _load_call(db, call_id)  # 404s if missing or already archived
+    except CompatError as exc:
+        # Malformed id (422) is also "not found" from the caller's perspective.
+        raise CompatError(404, "call not found") from exc
+    # PHI-redact: null recording fields + error, delete transcript rows; retain id/cost/timestamps.
+    call.recording_uri = None
+    call.recording_status = None
+    call.error = None
+    await transcripts_repo.delete_for_call(db, call.id)
+    call.archived_at = func.now()
+    await db.commit()
+    _audit(request, "delete-call", call_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/v2/update-live-call/{call_id}", response_model=UpdateLiveCallResponse)
+async def update_live_call(
+    call_id: str,
+    body: UpdateLiveCallRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> UpdateLiveCallResponse:
+    try:
+        call = await _load_call(db, call_id)
+    except CompatError as exc:
+        # Malformed id (422) is also "not found" from the caller's perspective.
+        raise CompatError(404, "call not found") from exc
+    new_vars = (
+        body.fields_to_override.override_dynamic_variables if body.fields_to_override else None
+    )
+    if new_vars:
+        existing, meta = unpack_dynamic_vars(call.dynamic_vars)
+        # MERGES (overrides specific keys only) — intentionally unlike update_call which
+        # replaces the whole dynamic_vars map; mid-call partial override must be non-destructive.
+        merged = {**existing, **new_vars}  # new_vars is dict[str, str] (Pydantic-validated)
+        call.dynamic_vars = pack_dynamic_vars(merged, meta)
+        await db.commit()
+        if call.livekit_room:
+            # Send the DELTA only; the agent merges it into its running variable set.
+            await livekit_dispatch.send_dynamic_vars(call.livekit_room, new_vars, settings)
+    # call_control verbs are accepted but no-op this phase (documented partial parity).
+    _audit(request, "update-live-call", call_id)
+    return UpdateLiveCallResponse(success=True)
