@@ -90,3 +90,25 @@ def test_user_sentiment_default_is_null() -> None:
     from usan_api.compat.schemas.calls import CallAnalysis
 
     assert CallAnalysis().user_sentiment is None
+
+
+# --- Task 14: list-calls filter breadth, idempotency ---
+
+
+def test_list_calls_filter_ignores_unknown_keys(compat_client, compat_headers, seeded_call):
+    """POST /v3/list-calls must accept unknown filter_criteria keys without error."""
+    r = compat_client.post(
+        "/v3/list-calls",
+        json={"filter_criteria": {"unknown": "x"}, "limit": 5},
+        headers=compat_headers,
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_duplicate_create_is_idempotent(
+    compat_client, compat_headers, mock_dispatch, allow_quiet_hours
+):
+    """Two identical create-phone-call requests return the same call_id (sha256 dedupe)."""
+    a = create_call(compat_client, compat_headers).json()["call_id"]
+    b = create_call(compat_client, compat_headers).json()["call_id"]
+    assert a == b  # sha256 dedupe (call_create.py:50/78) — same params → same call

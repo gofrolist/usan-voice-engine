@@ -8,8 +8,9 @@
 
 A Retell-LLM is the response-engine view of an ``AgentProfile``; ``llm_id`` and ``agent_id``
 encode the same row (data-model §5). ``response_model`` is omitted so the ``extra="allow"``
-LlmResponse echo survives serialization. PENDING-FREEZE (oracle): the exact list prefix
-(root vs ``/v2/list-retell-llms``) is pinned against the captured CRM usage.
+LlmResponse echo survives serialization. FROZEN (oracle): list prefix is the unversioned root
+``/list-retell-llms`` returning a bare array — pinned by
+test_list_retell_llms_is_bare_array_at_root.
 """
 
 from __future__ import annotations

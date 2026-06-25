@@ -60,7 +60,9 @@ async def create_agent(
 async def get_agent(
     agent_id: str,
     request: Request,
-    version: int | None = Query(default=None),  # accepted; current is served (PENDING-FREEZE)
+    # FROZEN (oracle): ?version accepted; current config always served.
+    # Pinned by test_get_agent_accepts_version_query_and_serves_current.
+    version: int | None = Query(default=None),
     db: AsyncSession = Depends(get_compat_db),
 ) -> dict[str, Any]:
     profile = await agent_bridge.get_agent_profile(db, agent_id)

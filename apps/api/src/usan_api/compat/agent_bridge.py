@@ -270,8 +270,9 @@ async def update_response_engine(
 async def publish_agent_version(
     db: AsyncSession, agent_id: str, body: PublishAgentVersionRequest
 ) -> AgentProfile:
-    """Publish the current draft as a new version. The requested body.version is accepted but
-    native publish auto-assigns the next number (PENDING-FREEZE on exact numbering)."""
+    """Publish the current draft as a new version. The requested body.version is advisory;
+    native publish auto-assigns the next number — FROZEN (oracle): pinned by
+    test_publish_returns_server_authoritative_version."""
     profile = await _load_active(db, ids.decode_agent_id(agent_id), kind="agent")
     note = body.version_title or "compat publish-agent-version"
     version = await agent_profiles_repo.publish(db, profile.id, note=note, actor_email=_ACTOR)

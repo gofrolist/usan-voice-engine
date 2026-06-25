@@ -105,3 +105,31 @@ def test_update_agent_response_conforms_to_oracle(compat_client, compat_headers)
     )
     assert r.status_code == 200, r.text
     assert_conforms(r.json(), "AgentResponse")
+
+
+# --- Task 14: ?version passthrough, retell-llm list shape, publish authority ---
+
+
+def test_get_agent_accepts_version_query_and_serves_current(compat_client, compat_headers):
+    """GET /get-agent/{id}?version=N is accepted; current config is always served."""
+    agent_id = _create_agent(compat_client, compat_headers)
+    r = compat_client.get(f"/get-agent/{agent_id}?version=99", headers=compat_headers)
+    assert r.status_code == 200, r.text
+
+
+def test_list_retell_llms_is_bare_array_at_root(compat_client, compat_headers):
+    """GET /list-retell-llms returns a bare JSON array at the unversioned root path."""
+    r = compat_client.get("/list-retell-llms", headers=compat_headers)
+    assert r.status_code == 200, r.text
+    assert isinstance(r.json(), list)
+
+
+def test_publish_returns_server_authoritative_version(compat_client, compat_headers):
+    """publish-agent-version ignores the requested version number; server assigns it."""
+    agent_id = _create_agent(compat_client, compat_headers)
+    r = compat_client.post(
+        f"/publish-agent-version/{agent_id}", json={"version": 999}, headers=compat_headers
+    )
+    assert r.status_code == 200, r.text
+    assert isinstance(r.json()["version"], int)
+    assert r.json()["version"] != 999

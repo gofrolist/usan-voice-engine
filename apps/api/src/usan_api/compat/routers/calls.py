@@ -139,7 +139,8 @@ async def update_call(
 
 async def _query_calls(db: AsyncSession, body: ListCallsRequest) -> list[Call]:
     """Filter + keyset-paginate the org's calls (RLS-scoped). Filtering is intentionally
-    minimal in the MVP (agent_id); broader filter_criteria is PENDING-FREEZE (oracle)."""
+    minimal in the MVP (agent_id); unknown filter_criteria keys are silently ignored —
+    FROZEN (oracle): pinned by test_list_calls_filter_ignores_unknown_keys."""
     stmt = select(Call)
     fc = body.filter_criteria or {}
     agent = fc.get("agent_id")

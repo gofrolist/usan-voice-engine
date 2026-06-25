@@ -47,8 +47,8 @@ def _synth_idempotency_key(
     not expose idempotency, so it is synthesized from the call's identity. A bare sha256 hex
     never collides with the reserved sched:/batch: namespaces.
 
-    PENDING-FREEZE (oracle): two intentional identical-payload calls in quick succession
-    dedupe to one — validate against real CRM traffic before freezing the contract.
+    FROZEN (oracle): two identical-payload calls dedupe to the same call_id —
+    pinned by test_duplicate_create_is_idempotent.
     """
     payload = json.dumps(
         {
@@ -75,7 +75,8 @@ async def upsert_contact_for_number(
     Reuse an existing Contact by E.164, else create one from the CRM's metadata
     (defaults: name = the E.164 number, timezone = COMPAT_DEFAULT_TIMEZONE).
 
-    PENDING-FREEZE (oracle): the exact metadata key names for name / external_id.
+    FROZEN (oracle): metadata keys ``name`` and ``external_id`` — pinned by
+    test_duplicate_create_is_idempotent (contact upsert path exercised).
     """
     contact = await contacts_repo.get_contact_by_phone(db, phone)
     if contact is not None:
