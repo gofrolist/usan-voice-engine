@@ -82,3 +82,4 @@ def test_metadata_round_trips_on_get(
     assert "agent_override" not in got["metadata"]
     assert "__meta_unhonored__" not in got["retell_llm_dynamic_variables"]
     assert_conforms(got, "V2WebCallResponse")
+    assert_sdk_roundtrip(got, "retell.types:WebCallResponse")
