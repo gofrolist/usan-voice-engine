@@ -20,11 +20,13 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
+from starlette.routing import Mount
+from starlette.testclient import TestClient
 
 from usan_api import dialer, livekit_dispatch, quiet_hours
 from usan_api.compat.voice_map import to_retell_voice_id
 from usan_api.schemas.voice_catalog import VOICE_CATALOG
-from usan_api.settings import get_settings
+from usan_api.settings import Settings, get_settings
 
 RETELL_VOICE = to_retell_voice_id(VOICE_CATALOG[0].cartesia_voice_id)
 
@@ -158,3 +160,47 @@ def published_default_agent(compat_client, compat_headers, async_database_url) -
 
     asyncio.run(_mark_default())
     return agent_id
+
+
+def _get_compat_app(client: TestClient):
+    """Return the mounted compat sub-app from the outer TestClient app."""
+    return next(r.app for r in client.app.routes if isinstance(r, Mount))
+
+
+@pytest.fixture
+def gcp_project_set(compat_client: TestClient):
+    """Override get_settings on the compat sub-app to inject a non-None gcp_project.
+
+    Uses the same dependency_overrides mechanism as the get_compat_db override so the
+    injected value is actually seen by Depends(get_settings) inside the request handler.
+    """
+    from usan_api.settings import get_settings as _get_settings
+
+    compat_app = _get_compat_app(compat_client)
+    base = _get_settings()
+
+    def _override() -> Settings:
+        return base.model_copy(update={"gcp_project": "test-project"})
+
+    compat_app.dependency_overrides[_get_settings] = _override
+    yield
+    compat_app.dependency_overrides.pop(_get_settings, None)
+
+
+@pytest.fixture
+def gcp_project_unset(compat_client: TestClient):
+    """Override get_settings on the compat sub-app to force gcp_project=None.
+
+    Triggers the 503 branch in create_chat_completion.
+    """
+    from usan_api.settings import get_settings as _get_settings
+
+    compat_app = _get_compat_app(compat_client)
+    base = _get_settings()
+
+    def _override() -> Settings:
+        return base.model_copy(update={"gcp_project": None})
+
+    compat_app.dependency_overrides[_get_settings] = _override
+    yield
+    compat_app.dependency_overrides.pop(_get_settings, None)
