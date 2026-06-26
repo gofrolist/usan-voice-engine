@@ -15,7 +15,7 @@ from usan_api.tenant_context import set_tenant_context
 
 
 @pytest.mark.asyncio
-async def test_phone_numbers_rls_isolation_and_grant(app_session, two_orgs) -> None:
+async def test_phone_numbers_rls_isolation_and_grant(two_orgs, app_session) -> None:
     org_a, org_b = two_orgs
 
     await set_tenant_context(app_session, org_a)
