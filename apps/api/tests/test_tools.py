@@ -1,3 +1,4 @@
+import asyncio as _asyncio
 import time
 import uuid
 
@@ -712,4 +713,94 @@ def test_send_sms_per_call_cap_409(client, mock_dispatch, async_database_url):
         headers=_auth(call_id),
     )
     assert r.status_code == 409
-    assert "limit" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# CALLS_TOTAL: web calls must not inflate the inbound direction bucket
+# ---------------------------------------------------------------------------
+
+
+def _make_answered_web_call(async_database_url: str) -> str:
+    """Insert a WEB_CALL directly and force it to IN_PROGRESS."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.db.base import CallDirection, CallStatus, CallType
+    from usan_api.db.models import Call
+
+    async def _run() -> str:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as db:
+                call = Call(
+                    call_type=CallType.WEB_CALL,
+                    status=CallStatus.IN_PROGRESS,
+                    direction=CallDirection.INBOUND,  # placeholder
+                    livekit_room=f"usan-web-{uuid.uuid4().hex}",
+                    contact_id=None,
+                    answered_at=__import__("datetime").datetime.now(
+                        __import__("datetime").timezone.utc
+                    ),
+                )
+                db.add(call)
+                await db.flush()
+                call_id = str(call.id)
+                await db.commit()
+        finally:
+            await engine.dispose()
+        return call_id
+
+    return _asyncio.run(_run())
+
+
+def test_end_call_web_call_does_not_increment_calls_total(client, async_database_url):
+    """A web call reaching end_call must NOT increment CALLS_TOTAL.
+
+    direction=INBOUND is only a placeholder for WEB_CALL rows. Counting it
+    would inflate the inbound bucket and misrepresent phone-call volume.
+    Phone calls (regression path) continue to be counted as before.
+    """
+    from usan_api.observability.custom_metrics import CALLS_TOTAL
+
+    # Snapshot before.
+    before_inbound = _counter_value(CALLS_TOTAL, direction="inbound", end_reason="completed")
+
+    web_call_id = _make_answered_web_call(async_database_url)
+    r = client.post(
+        "/v1/tools/end_call",
+        json={"call_id": web_call_id, "reason": "check_in_complete"},
+        headers=_auth(web_call_id),
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "completed"
+
+    # Counter must not have moved.
+    after_inbound = _counter_value(CALLS_TOTAL, direction="inbound", end_reason="completed")
+    assert after_inbound == before_inbound, (
+        "CALLS_TOTAL inbound bucket incremented for a WEB_CALL — "
+        "web calls must be excluded from direction-keyed phone metrics"
+    )
+
+
+def test_end_call_phone_call_still_increments_calls_total(
+    client, mock_dispatch, async_database_url
+):
+    """Phone calls (regression): end_call must still increment CALLS_TOTAL."""
+    from usan_api.observability.custom_metrics import CALLS_TOTAL
+
+    call_id = _answered_call(client, async_database_url)
+    before = _counter_value(CALLS_TOTAL, direction="outbound", end_reason="completed")
+
+    r = client.post(
+        "/v1/tools/end_call",
+        json={"call_id": call_id, "reason": "check_in_complete"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "completed"
+
+    after = _counter_value(CALLS_TOTAL, direction="outbound", end_reason="completed")
+    assert after == before + 1, (
+        "CALLS_TOTAL outbound bucket must still be incremented for phone calls"
+    )

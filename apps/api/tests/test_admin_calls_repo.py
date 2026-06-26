@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from usan_api.db.base import CallDirection, CallStatus
+from usan_api.db.base import CallDirection, CallStatus, CallType
 from usan_api.db.models import Call
 from usan_api.repositories import admin_calls as admin_calls_repo
 from usan_api.repositories import calls as calls_repo
@@ -233,3 +233,46 @@ async def test_contact_join_and_deleted_contact(session_factory):
         assert call.contact_id is None
         assert name is None
         assert phone_e164 is None
+
+
+async def _create_web_call(factory) -> uuid.UUID:
+    """Insert a WEB_CALL directly (no contact_id, same as call_create.py)."""
+    async with factory() as db:
+        call = Call(
+            call_type=CallType.WEB_CALL,
+            status=CallStatus.REGISTERED,
+            direction=CallDirection.INBOUND,  # placeholder — call_type is authoritative
+            livekit_room=f"usan-web-{uuid.uuid4().hex}",
+            contact_id=None,
+        )
+        db.add(call)
+        await db.flush()
+        call_id = call.id
+        await db.commit()
+    return call_id
+
+
+async def test_web_calls_excluded_from_admin_list(session_factory):
+    """Web calls must never appear in the org-admin call list.
+
+    direction=INBOUND is only a placeholder for WEB_CALL rows; including them
+    would miscount browser sessions as inbound phone calls in the admin plane.
+    Phone calls (INBOUND and OUTBOUND) must still appear as normal.
+    """
+    contact_id = await _seed_contact(session_factory)
+    phone_outbound_id = await _create_call(
+        session_factory, contact_id, direction=CallDirection.OUTBOUND
+    )
+    phone_inbound_id = await _create_call(
+        session_factory, contact_id, direction=CallDirection.INBOUND
+    )
+    web_call_id = await _create_web_call(session_factory)
+
+    async with session_factory() as db:
+        rows = await admin_calls_repo.list_calls(db)
+        returned_ids = {call.id for call, _, _ in rows}
+
+    # Phone calls appear, web call is excluded.
+    assert phone_outbound_id in returned_ids
+    assert phone_inbound_id in returned_ids
+    assert web_call_id not in returned_ids

@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api.db.base import CallDirection, CallStatus
+from usan_api.db.base import CallDirection, CallStatus, CallType
 from usan_api.db.models import Call, Contact
 
 MAX_ADMIN_CALLS_LIMIT = 500
@@ -36,8 +36,15 @@ async def list_calls(
     """
     limit = max(1, min(limit, MAX_ADMIN_CALLS_LIMIT))
     offset = max(0, offset)
-    stmt = select(Call, Contact.name, Contact.phone_e164).outerjoin(
-        Contact, Call.contact_id == Contact.id
+    # Web calls are a different modality (contactless browser sessions) and are
+    # excluded from the contact/phone admin plane. direction is an internal
+    # placeholder for web calls (call_type is authoritative) — excluding by
+    # call_type prevents them from appearing as spurious inbound rows here and
+    # in the direction-keyed CALLS_TOTAL metric (see routers/tools.py end_call).
+    stmt = (
+        select(Call, Contact.name, Contact.phone_e164)
+        .outerjoin(Contact, Call.contact_id == Contact.id)
+        .where(Call.call_type == CallType.PHONE_CALL)
     )
     if contact_id is not None:
         stmt = stmt.where(Call.contact_id == contact_id)

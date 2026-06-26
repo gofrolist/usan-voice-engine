@@ -270,7 +270,10 @@ async def create_web_call(
     call = Call(
         call_type=CallType.WEB_CALL,
         status=CallStatus.REGISTERED,
-        direction=CallDirection.INBOUND,  # internal placeholder; call_type is authoritative
+        direction=CallDirection.INBOUND,  # internal placeholder; call_type is authoritative.
+        # Web calls are excluded from direction-keyed internal analytics:
+        # admin call list (repositories/admin_calls.py) filters to PHONE_CALL,
+        # and end_call CALLS_TOTAL metric skips WEB_CALL (routers/tools.py).
         profile_override=profile_id,
         dynamic_vars=packed,
         livekit_room=room,
