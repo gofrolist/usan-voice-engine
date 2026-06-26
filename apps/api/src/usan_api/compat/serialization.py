@@ -85,3 +85,11 @@ def unpack_dynamic_vars(
     rest.pop(_UNHONORED_KEY, None)
     metadata: dict[str, Any] = json.loads(raw) if isinstance(raw, str) and raw else {}
     return rest, metadata
+
+
+def carry_unhonored(old: dict[str, Any] | None, packed: dict[str, Any]) -> dict[str, Any]:
+    """Carry the reserved un-honored audit blob forward from a prior stored dynamic_vars
+    onto a freshly packed dict, so update endpoints (unpack→modify→pack) don't drop it."""
+    if old and _UNHONORED_KEY in old:
+        return {**packed, _UNHONORED_KEY: old[_UNHONORED_KEY]}
+    return packed
