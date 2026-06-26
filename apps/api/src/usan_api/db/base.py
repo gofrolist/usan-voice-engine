@@ -46,3 +46,9 @@ class InviteStatus(enum.Enum):
     PENDING = "pending"
     ACCEPTED = "accepted"
     REVOKED = "revoked"
+
+
+class ChatStatus(enum.Enum):
+    ONGOING = "ongoing"
+    ENDED = "ended"
+    ERROR = "error"

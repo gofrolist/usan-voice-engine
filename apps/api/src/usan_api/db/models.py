@@ -30,6 +30,7 @@ from usan_api.db.base import (
     CallDirection,
     CallStatus,
     CallType,
+    ChatStatus,
     InviteStatus,
     ProfileStatus,
 )
@@ -1265,5 +1266,61 @@ class Organization(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class ChatSession(Base, TenantScoped):
+    __tablename__ = "chat_sessions"
+    __table_args__ = (Index("ix_chat_sessions_started_at_id", "started_at", "id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    agent_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_profiles.id"), nullable=False
+    )
+    agent_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[ChatStatus] = mapped_column(
+        SAEnum(ChatStatus, name="chat_status", values_callable=_enum_values, create_type=False),
+        nullable=False,
+        server_default=ChatStatus.ONGOING.value,
+    )
+    chat_type: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'api_chat'"))
+    dynamic_vars: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    custom_attributes: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ChatMessage(Base, TenantScoped):
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        UniqueConstraint("chat_session_id", "seq", name="uq_chat_messages_session_seq"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    chat_session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
