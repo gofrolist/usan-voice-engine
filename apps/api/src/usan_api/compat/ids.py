@@ -50,6 +50,15 @@ def decode_batch_id(token: str) -> uuid.UUID:
     return _decode_hex(token, prefix=_BATCH_PREFIX, kind="batch_call_id")
 
 
+def encode_phone_number_cursor(pid: uuid.UUID) -> str:
+    # Opaque cursor over the INTERNAL row id (bare hex) — never the E.164 (PHI).
+    return pid.hex
+
+
+def decode_phone_number_cursor(token: str) -> uuid.UUID:
+    return _decode_hex(token, prefix="", kind="pagination_key")
+
+
 def _decode_hex(token: str, *, prefix: str, kind: str) -> uuid.UUID:
     if not token.startswith(prefix):
         raise CompatError(422, f"invalid {kind}")
