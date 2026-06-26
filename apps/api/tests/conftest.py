@@ -234,7 +234,7 @@ _TRUNCATE_ALL = (
     "activity_history, turn_metrics, call_metrics, "
     "family_contacts, family_tasks, family_reports, "
     "custom_variables, webhook_deliveries, webhook_endpoints, "
-    "compat_webhook_deliveries, compat_webhook_endpoints, "
+    "compat_webhook_deliveries, compat_webhook_endpoints, phone_numbers, "
     "call_batch_targets, call_batches, call_schedules, "
     "agent_profile_versions, agent_profiles, admin_audit_log, compat_api_keys, "
     "invitations, memberships, admin_users, follow_up_flags, callback_requests, sms_messages, "
