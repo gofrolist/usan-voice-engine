@@ -119,7 +119,6 @@ def test_get_concurrency_shape_and_values(compat_client, compat_headers):
         ("post", "/v2/create-web-call"),
         ("post", "/clone-voice"),
         ("get", "/get-mcp-tools/some-agent-id"),
-        ("get", "/v2/list-export-requests"),
         ("post", "/agent-playground-completion/some-agent-id"),
         ("post", "/create-phone-number"),
     ],
@@ -135,7 +134,8 @@ def test_out_of_scope_returns_501_envelope(compat_client, compat_headers, method
 
 
 def test_out_of_scope_with_path_param_returns_501(compat_client, compat_headers):
-    r = compat_client.get("/get-phone-number/pn_123", headers=compat_headers)
+    # get-phone-number is now served (Phase 2); use a still-unsupported path-param stub.
+    r = compat_client.get("/get-mcp-tools/some-agent-id", headers=compat_headers)
     assert r.status_code == 501
     assert r.json()["message"].startswith("not_supported")
 
