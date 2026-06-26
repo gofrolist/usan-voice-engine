@@ -24,9 +24,10 @@ def _check_webhook(v: str) -> str:
 
 
 def _check_transport(v: str) -> str:
-    if v.upper() not in _TRANSPORTS:
+    upper = v.upper()
+    if upper not in _TRANSPORTS:
         raise ValueError("transport must be one of TLS, TCP, UDP")
-    return v
+    return upper
 
 
 # Reusable, shared across models. AfterValidator runs only on the str branch of `… | None`,

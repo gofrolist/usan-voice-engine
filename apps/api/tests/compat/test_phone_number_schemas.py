@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from usan_api.compat.schemas.phone_numbers import (
     AgentWeight,
     ImportPhoneNumberRequest,
+    UpdatePhoneNumberRequest,
     serialize_phone_number,
 )
 from usan_api.db.models import PhoneNumber
@@ -39,6 +40,30 @@ def test_inbound_webhook_url_ssrf_rejected() -> None:
             termination_uri="x",
             inbound_webhook_url="http://169.254.169.254/latest",  # not https + IP literal
         )
+
+
+def test_transport_lowercase_normalized_to_uppercase() -> None:
+    """Finding C: transport='tls' must be normalized to 'TLS' (oracle canonical casing)."""
+    req = ImportPhoneNumberRequest(
+        phone_number="+15550000001",
+        termination_uri="sip.example.com",
+        transport="tls",
+    )
+    assert req.transport == "TLS"
+
+    upd = UpdatePhoneNumberRequest(transport="udp")
+    assert upd.transport == "UDP"
+
+    pn = PhoneNumber(
+        id=uuid.uuid4(),
+        phone_e164="+15550000002",
+        phone_number_type="custom",
+        termination_uri="sip.example.com",
+        transport="tls",
+        updated_at=datetime.now(UTC),
+    )
+    out = serialize_phone_number(pn).model_dump(exclude_none=True)
+    assert out["sip_outbound_trunk_config"]["transport"] == "tls"
 
 
 def test_serializer_omits_password_and_builds_trunk_config() -> None:

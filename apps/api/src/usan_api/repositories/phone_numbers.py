@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Any, cast
 
 from sqlalchemy import and_, delete, or_, select
@@ -105,36 +106,43 @@ async def delete_by_e164(db: AsyncSession, phone_e164: str) -> bool:
 
 
 async def list_phone_numbers(
-    db: AsyncSession, *, limit: int, descending: bool, after_id: uuid.UUID | None
+    db: AsyncSession,
+    *,
+    limit: int,
+    descending: bool,
+    after: tuple[datetime, uuid.UUID] | None,
 ) -> list[PhoneNumber]:
-    """Keyset-paginate the org's numbers over (created_at, id). RLS scopes to the caller's org."""
+    """Keyset-paginate the org's numbers over (created_at, id). RLS scopes to the caller's org.
+
+    Fetches limit+1 rows so the caller can determine has_more without a separate COUNT.
+    The cursor is self-contained — no db.get lookup — so deleted/RLS-hidden rows are safe.
+    """
     stmt = select(PhoneNumber)
-    if after_id is not None:
-        cursor = await db.get(PhoneNumber, after_id)
-        if cursor is not None:
-            if descending:
-                stmt = stmt.where(
-                    or_(
-                        PhoneNumber.created_at < cursor.created_at,
-                        and_(
-                            PhoneNumber.created_at == cursor.created_at,
-                            PhoneNumber.id < cursor.id,
-                        ),
-                    )
+    if after is not None:
+        after_created_at, after_id = after
+        if descending:
+            stmt = stmt.where(
+                or_(
+                    PhoneNumber.created_at < after_created_at,
+                    and_(
+                        PhoneNumber.created_at == after_created_at,
+                        PhoneNumber.id < after_id,
+                    ),
                 )
-            else:
-                stmt = stmt.where(
-                    or_(
-                        PhoneNumber.created_at > cursor.created_at,
-                        and_(
-                            PhoneNumber.created_at == cursor.created_at,
-                            PhoneNumber.id > cursor.id,
-                        ),
-                    )
+            )
+        else:
+            stmt = stmt.where(
+                or_(
+                    PhoneNumber.created_at > after_created_at,
+                    and_(
+                        PhoneNumber.created_at == after_created_at,
+                        PhoneNumber.id > after_id,
+                    ),
                 )
+            )
     if descending:
         stmt = stmt.order_by(PhoneNumber.created_at.desc(), PhoneNumber.id.desc())
     else:
         stmt = stmt.order_by(PhoneNumber.created_at.asc(), PhoneNumber.id.asc())
-    stmt = stmt.limit(limit)
+    stmt = stmt.limit(limit + 1)
     return list((await db.execute(stmt)).scalars().all())

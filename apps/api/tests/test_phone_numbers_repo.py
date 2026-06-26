@@ -31,13 +31,13 @@ async def test_crud_and_keyset_list(two_orgs, app_session) -> None:
     assert updated is not None
     assert updated.nickname == "renamed"
 
-    page = await repo.list_phone_numbers(app_session, limit=10, descending=True, after_id=None)
+    page = await repo.list_phone_numbers(app_session, limit=10, descending=True, after=None)
     assert {p.phone_e164 for p in page} == {"+15550000001", "+15550000002"}
 
-    # keyset: page after the newest row excludes it
+    # keyset: page after the newest row excludes it (cursor carries created_at + id)
     newest = page[0]
     after = await repo.list_phone_numbers(
-        app_session, limit=10, descending=True, after_id=newest.id
+        app_session, limit=10, descending=True, after=(newest.created_at, newest.id)
     )
     assert newest.id not in {p.id for p in after}
 

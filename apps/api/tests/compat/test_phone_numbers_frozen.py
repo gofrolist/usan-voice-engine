@@ -137,3 +137,51 @@ def test_create_phone_number_still_501(compat_client, compat_headers) -> None:
     r = compat_client.post("/create-phone-number", json={"area_code": 415}, headers=compat_headers)
     assert r.status_code == 501
     assert r.json() == {"status": 501, "message": "not_supported: /create-phone-number"}
+
+
+def test_list_exact_multiple_no_trailing_empty_page(compat_client, compat_headers) -> None:
+    """Finding B(1): when row count == limit, has_more must be False (no trailing empty page)."""
+    for n in range(2):
+        compat_client.post(
+            "/import-phone-number",
+            json={"phone_number": f"+1555111200{n}", "termination_uri": "sip.example.com"},
+            headers=compat_headers,
+        )
+    r = compat_client.get("/v2/list-phone-numbers?limit=2", headers=compat_headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["has_more"] is False
+    assert "pagination_key" not in body
+
+
+def test_list_deleted_cursor_row_does_not_loop(compat_client, compat_headers) -> None:
+    """Finding B(2): a cursor whose source row was deleted must still advance (no infinite loop)."""
+    numbers = [f"+1555111210{n}" for n in range(3)]
+    for num in numbers:
+        compat_client.post(
+            "/import-phone-number",
+            json={"phone_number": num, "termination_uri": "sip.example.com"},
+            headers=compat_headers,
+        )
+    # Fetch page 1 (limit=2, ascending so the oldest two come first).
+    r1 = compat_client.get(
+        "/v2/list-phone-numbers?limit=2&sort_order=ascending", headers=compat_headers
+    )
+    assert r1.status_code == 200
+    body1 = r1.json()
+    assert body1["has_more"] is True
+    pagination_key = body1["pagination_key"]
+    # Delete one of the two page-1 numbers.
+    page1_numbers = [item["phone_number"] for item in body1["items"]]
+    compat_client.delete(f"/delete-phone-number/{page1_numbers[0]}", headers=compat_headers)
+    # Page 2 must return the remaining unseen row and terminate.
+    r2 = compat_client.get(
+        f"/v2/list-phone-numbers?limit=2&sort_order=ascending&pagination_key={pagination_key}",
+        headers=compat_headers,
+    )
+    assert r2.status_code == 200
+    body2 = r2.json()
+    assert body2["has_more"] is False
+    # Page 2 must not overlap with page 1 (no infinite loop).
+    page2_numbers = [item["phone_number"] for item in body2["items"]]
+    assert page2_numbers != [item["phone_number"] for item in body1["items"]]

@@ -182,18 +182,20 @@ async def list_phone_numbers(
     pagination_key: str | None = Query(default=None),
     db: AsyncSession = Depends(get_compat_db),
 ) -> dict[str, Any]:
-    after_id = None
-    if pagination_key:
-        import contextlib
+    import contextlib
 
+    after = None
+    if pagination_key:
         with contextlib.suppress(CompatError):  # unparseable cursor -> first page (lenient)
-            after_id = ids.decode_phone_number_cursor(pagination_key)
+            after = ids.decode_phone_number_cursor(pagination_key)
     rows = await phones_repo.list_phone_numbers(
-        db, limit=limit, descending=(sort_order != "ascending"), after_id=after_id
+        db, limit=limit, descending=(sort_order != "ascending"), after=after
     )
     _audit(request, "list-phone-numbers")
-    items = [serialize_phone_number(p).model_dump(exclude_none=True) for p in rows]
-    out: dict[str, Any] = {"items": items, "has_more": len(rows) == limit}
-    if rows and len(rows) == limit:
-        out["pagination_key"] = ids.encode_phone_number_cursor(rows[-1].id)
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    items = [serialize_phone_number(p).model_dump(exclude_none=True) for p in page]
+    out: dict[str, Any] = {"items": items, "has_more": has_more}
+    if has_more:
+        out["pagination_key"] = ids.encode_phone_number_cursor(page[-1].created_at, page[-1].id)
     return out

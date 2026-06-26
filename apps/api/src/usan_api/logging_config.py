@@ -11,10 +11,13 @@ from loguru import logger
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
-# Redact the raw E.164 segment of get/update/delete-phone-number paths from access logs:
-# the oracle forces {phone_number} (literal E.164) as the path param, so it cannot be
-# opaque-encoded like call_id. The audit log already binds ids only.
-_PHONE_PATH_RE = re.compile(r"(/(?:get|update|delete)-phone-number/)\+?[0-9]+")
+# Redact the phone-number segment of get/update/delete-phone-number paths from access logs.
+# The oracle forces {phone_number} as a literal path param (cannot be opaque-encoded like
+# call_id). uvicorn URL-encodes the path via urllib.parse.quote, so a '+' sign becomes
+# '%2B' and punctuated forms like +1-949-555-1234 survive as-is or percent-encoded.
+# Matching everything up to the next delimiter (whitespace / " / ?) handles all variants:
+# literal E.164, %2B-encoded, and punctuated/hyphenated forms.
+_PHONE_PATH_RE = re.compile(r'(/(?:get|update|delete)-phone-number/)[^\s/"?]+')
 
 
 def _mask_phi_path(message: str) -> str:
