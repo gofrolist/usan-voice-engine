@@ -127,7 +127,7 @@ def web_agent_id(compat_client, compat_headers) -> str:
 
 
 @pytest.fixture
-def mock_web_dispatch(monkeypatch):
+def mock_web_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the LiveKit web dispatch so the freeze tests place no real call."""
     from unittest.mock import AsyncMock
 

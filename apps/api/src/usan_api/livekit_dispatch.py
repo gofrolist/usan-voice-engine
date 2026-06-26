@@ -116,6 +116,33 @@ def _test_metadata(
     )
 
 
+async def _create_room_and_dispatch(
+    settings: Settings,
+    *,
+    room: str,
+    metadata: str,
+    no_op_log_msg: str,
+) -> None:
+    """Pre-create ``room`` (idempotent) then dispatch the agent into it.
+
+    Shared skeleton used by both test-session and web-call dispatch paths.
+    ``no_op_log_msg`` is the debug string logged when create_room is a no-op
+    (already exists); each call site supplies its own context-specific message.
+    """
+    async with build_livekit_api(settings) as lkapi:
+        try:
+            await lkapi.room.create_room(api.CreateRoomRequest(name=room))
+        except Exception:  # noqa: BLE001 - room may already exist; dispatch still proceeds
+            logger.bind(room=room).debug(no_op_log_msg)
+        await lkapi.agent_dispatch.create_dispatch(
+            api.CreateAgentDispatchRequest(
+                agent_name=settings.agent_name,
+                room=room,
+                metadata=metadata,
+            )
+        )
+
+
 async def dispatch_test_agent(
     *,
     settings: Settings,
@@ -131,22 +158,14 @@ async def dispatch_test_agent(
     the dispatch metadata so the agent runs the unpublished draft without crossing
     the api↔agent import boundary (Constitution I).
     """
-    async with build_livekit_api(settings) as lkapi:
-        # Pre-create the room so the browser can connect before the worker arrives;
-        # idempotent if the dispatch already created it.
-        try:
-            await lkapi.room.create_room(api.CreateRoomRequest(name=room))
-        except Exception:  # noqa: BLE001 - room may already exist; dispatch still proceeds
-            logger.bind(room=room).debug("create_room for test session was a no-op")
-        await lkapi.agent_dispatch.create_dispatch(
-            api.CreateAgentDispatchRequest(
-                agent_name=settings.agent_name,
-                room=room,
-                metadata=_test_metadata(
-                    test_config=test_config, sample_vars=sample_vars, direction=direction
-                ),
-            )
-        )
+    await _create_room_and_dispatch(
+        settings,
+        room=room,
+        metadata=_test_metadata(
+            test_config=test_config, sample_vars=sample_vars, direction=direction
+        ),
+        no_op_log_msg="create_room for test session was a no-op",
+    )
     logger.bind(room=room).info("Test agent dispatched (session_kind=test)")
 
 
@@ -190,23 +209,17 @@ async def dispatch_web_agent(
     ``room`` over WebRTC with the minted token; the agent answers via its ``_run_web``
     branch. Unlike ``dispatch_agent`` this does NOT require outbound (Telnyx SIP) config —
     a web call places no PSTN leg."""
-    async with build_livekit_api(settings) as lkapi:
-        try:
-            await lkapi.room.create_room(api.CreateRoomRequest(name=room))
-        except Exception:  # noqa: BLE001 - room may already exist; dispatch still proceeds
-            logger.bind(room=room).debug("create_room for web call was a no-op")
-        await lkapi.agent_dispatch.create_dispatch(
-            api.CreateAgentDispatchRequest(
-                agent_name=settings.agent_name,
-                room=room,
-                metadata=_web_metadata(
-                    call_id=call_id,
-                    dynamic_vars=dynamic_vars,
-                    resolved_vars=resolved_vars,
-                    timezone=timezone,
-                ),
-            )
-        )
+    await _create_room_and_dispatch(
+        settings,
+        room=room,
+        metadata=_web_metadata(
+            call_id=call_id,
+            dynamic_vars=dynamic_vars,
+            resolved_vars=resolved_vars,
+            timezone=timezone,
+        ),
+        no_op_log_msg="create_room for web call was a no-op",
+    )
     logger.bind(call_id=call_id, room=room).info("Web agent dispatched (session_kind=call)")
 
 

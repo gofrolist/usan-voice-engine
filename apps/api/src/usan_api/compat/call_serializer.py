@@ -143,25 +143,38 @@ async def serialize_call(
             call, settings, client_host=client_host
         )
 
-    metrics = await metrics_repo.get_call_metrics(db, call.id)
-
-    # OUTBOUND: from = our caller id, to = the contact. INBOUND is reversed — the contact is
-    # the caller and our DID is the callee.
-    contact_phone = contact.phone_e164 if contact is not None else None
-    if call.direction is CallDirection.INBOUND:
-        from_number, to_number = contact_phone, settings.telnyx_caller_id
-    else:
-        from_number, to_number = settings.telnyx_caller_id, contact_phone
+    # Pre-answer statuses (REGISTERED/QUEUED/DIALING/RINGING) definitionally have no
+    # CallMetrics row — create_metrics is only called at call-end (agent tool callback).
+    # Skipping the PK lookup for those statuses is behavior-preserving: db.get returns None
+    # either way, and _build_cost(None)/_token_usage(None) both return None.
+    _pre_answer = {
+        CallStatus.REGISTERED,
+        CallStatus.QUEUED,
+        CallStatus.DIALING,
+        CallStatus.RINGING,
+    }
+    metrics = (
+        None if call.status in _pre_answer else await metrics_repo.get_call_metrics(db, call.id)
+    )
 
     is_web = call.call_type is CallType.WEB_CALL
     access_token: str | None = None
+    from_number: str | None = None
+    to_number: str | None = None
     if is_web:
         # A web call's browser join token: minted on demand, scoped to this room,
         # never persisted, never logged. Phone-only fields are omitted (V2WebCallResponse).
         access_token = mint_browser_token(
             settings, room=call.livekit_room or "", identity=ids.encode_call_id(call.id)
         )
-        from_number = to_number = None
+    else:
+        # OUTBOUND: from = our caller id, to = the contact. INBOUND is reversed — the
+        # contact is the caller and our DID is the callee.
+        contact_phone = contact.phone_e164 if contact is not None else None
+        if call.direction is CallDirection.INBOUND:
+            from_number, to_number = contact_phone, settings.telnyx_caller_id
+        else:
+            from_number, to_number = settings.telnyx_caller_id, contact_phone
 
     return CompatCall(
         call_id=ids.encode_call_id(call.id),
