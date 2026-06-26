@@ -130,3 +130,10 @@ def test_list_is_paginated_envelope(compat_client, compat_headers) -> None:
     for item in body["items"]:
         assert_conforms(item, "PhoneNumberResponse")
     assert_sdk_roundtrip(body, "retell.types:PhoneNumberListResponse")
+
+
+def test_create_phone_number_still_501(compat_client, compat_headers) -> None:
+    # create requires a Telnyx DID purchase the engine cannot perform — documented 501.
+    r = compat_client.post("/create-phone-number", json={"area_code": 415}, headers=compat_headers)
+    assert r.status_code == 501
+    assert r.json() == {"status": 501, "message": "not_supported: /create-phone-number"}
