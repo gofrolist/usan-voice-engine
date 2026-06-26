@@ -295,4 +295,8 @@ async def create_web_call(
         raise CompatError(502, "web call dispatch failed") from None
 
     await db.commit()
+    # No db.refresh: the SET LOCAL tenant context clears at commit, so a post-commit
+    # SELECT would be hidden by RLS. All fields serialize_call reads are already
+    # populated in-memory (set explicitly above, or via flush() RETURNING for id +
+    # organization_id) — there is no server_default field the serializer needs refreshed.
     return call
