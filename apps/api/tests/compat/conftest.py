@@ -121,6 +121,20 @@ def seeded_call(compat_client, compat_headers, mock_dispatch, allow_quiet_hours)
 
 
 @pytest.fixture
+def web_agent_id(compat_client, compat_headers) -> str:
+    """A published agent_id usable as create-web-call's agent_id."""
+    return _published_agent_id(compat_client, compat_headers)
+
+
+@pytest.fixture
+def mock_web_dispatch(monkeypatch):
+    """Stub the LiveKit web dispatch so the freeze tests place no real call."""
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("usan_api.livekit_dispatch.dispatch_web_agent", AsyncMock())
+
+
+@pytest.fixture
 def published_default_agent(compat_client, compat_headers, async_database_url) -> str:
     """Publish an agent (via the compat API) and mark it the ACTIVE default OUTBOUND
     profile via a direct superuser UPDATE, so a no-override create-phone-call resolves it.

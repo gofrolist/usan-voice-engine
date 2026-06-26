@@ -27,6 +27,7 @@ from usan_api.compat.errors import CompatError
 from usan_api.compat.schemas.calls import (
     CompatCall,
     CreatePhoneCallRequest,
+    CreateWebCallRequest,
     ListCallsRequest,
     ListCallsResponse,
     RegisterPhoneCallRequest,
@@ -81,6 +82,23 @@ async def create_phone_call(
     )
     response.status_code = status.HTTP_201_CREATED
     _audit(request, "create-phone-call", ids.encode_call_id(call.id))
+    return await call_serializer.serialize_call(db, call, settings, client_host=client_ip(request))
+
+
+@router.post(
+    "/v2/create-web-call",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CompatCall,
+    response_model_exclude_none=True,
+)
+async def create_web_call(
+    body: CreateWebCallRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> CompatCall:
+    call = await call_create.create_web_call(db, settings, body)
+    _audit(request, "create-web-call", ids.encode_call_id(call.id))
     return await call_serializer.serialize_call(db, call, settings, client_host=client_ip(request))
 
 
