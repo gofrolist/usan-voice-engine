@@ -21,8 +21,9 @@ from usan_api.compat.schemas.calls import (
     TranscriptUtterance,
 )
 from usan_api.compat.serialization import duration_ms, to_ms, unpack_dynamic_vars
-from usan_api.db.base import CallDirection, CallStatus
+from usan_api.db.base import CallDirection, CallStatus, CallType
 from usan_api.db.models import Call, CallMetrics, Transcript
+from usan_api.livekit_dispatch import mint_browser_token
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import conversation_summaries as conversation_summaries_repo
@@ -152,16 +153,32 @@ async def serialize_call(
     else:
         from_number, to_number = settings.telnyx_caller_id, contact_phone
 
+    is_web = call.call_type is CallType.WEB_CALL
+    access_token: str | None = None
+    if is_web:
+        # A web call's browser join token: minted on demand, scoped to this room,
+        # never persisted, never logged. Phone-only fields are omitted (V2WebCallResponse).
+        access_token = mint_browser_token(
+            settings, room=call.livekit_room or "", identity=ids.encode_call_id(call.id)
+        )
+        from_number = to_number = None
+
     return CompatCall(
         call_id=ids.encode_call_id(call.id),
+        call_type="web_call" if is_web else "phone_call",
         agent_id=agent_id,
         agent_name=agent_name,
         agent_version=agent_version,
         call_status=status_map.to_call_status(call.status),
+        access_token=access_token,
         from_number=from_number,
         to_number=to_number,
-        direction=call.direction.value,
-        telephony_identifier=({"twilio_call_sid": call.sip_call_id} if call.sip_call_id else None),
+        direction=None if is_web else call.direction.value,
+        telephony_identifier=(
+            None
+            if is_web
+            else ({"twilio_call_sid": call.sip_call_id} if call.sip_call_id else None)
+        ),
         metadata=metadata,
         retell_llm_dynamic_variables=dynamic_variables,
         start_timestamp=to_ms(call.answered_at),

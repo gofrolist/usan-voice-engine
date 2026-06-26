@@ -129,9 +129,10 @@ class CompatCall(BaseModel):
     agent_name: str | None = None
     agent_version: int | None = None
     call_status: str
+    access_token: str | None = None  # web calls only; minted on serialize, never stored
     from_number: str | None = None
     to_number: str | None = None
-    direction: str
+    direction: str | None = None
     telephony_identifier: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     retell_llm_dynamic_variables: dict[str, Any] = Field(default_factory=dict)
