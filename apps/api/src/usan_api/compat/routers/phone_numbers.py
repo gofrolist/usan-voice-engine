@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,7 @@ from usan_api.compat.errors import CompatError
 from usan_api.compat.schemas.phone_numbers import (
     ImportPhoneNumberRequest,
     PhoneNumberResponse,
+    UpdatePhoneNumberRequest,
     serialize_phone_number,
 )
 from usan_api.db.base import ProfileStatus
@@ -127,3 +128,67 @@ async def delete_phone_number(
     await db.commit()
     _audit(request, "delete-phone-number")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch(
+    "/update-phone-number/{phone_number}",
+    response_model=PhoneNumberResponse,
+    response_model_exclude_none=True,
+)
+async def update_phone_number(
+    phone_number: str,
+    body: UpdatePhoneNumberRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+) -> PhoneNumberResponse:
+    await _resolve_binding_agents(
+        db,
+        body.inbound_agents,
+        body.outbound_agents,
+        body.inbound_sms_agents,
+        body.outbound_sms_agents,
+    )
+    # exclude_unset: only the fields the client sent (an explicit null clears that column).
+    provided = body.model_dump(exclude_unset=True)
+    fields: dict[str, Any] = {}
+    for key, value in provided.items():
+        if key in (
+            "inbound_agents",
+            "outbound_agents",
+            "inbound_sms_agents",
+            "outbound_sms_agents",
+        ):
+            fields[key] = value  # already list[dict] | None from model_dump
+        else:
+            fields[_UPDATE_COLUMN_MAP.get(key, key)] = value  # used by update_phone_number
+    pn = await phones_repo.update_by_e164(db, phone_number, fields)
+    if pn is None:
+        raise CompatError(404, "phone number not found")
+    await db.commit()
+    _audit(request, "update-phone-number")
+    return serialize_phone_number(pn)
+
+
+@router.get("/v2/list-phone-numbers")
+async def list_phone_numbers(
+    request: Request,
+    sort_order: str = Query(default="descending"),
+    limit: int = Query(default=50, ge=1, le=1000),
+    pagination_key: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_compat_db),
+) -> dict[str, Any]:
+    after_id = None
+    if pagination_key:
+        import contextlib
+
+        with contextlib.suppress(CompatError):  # unparseable cursor -> first page (lenient)
+            after_id = ids.decode_phone_number_cursor(pagination_key)
+    rows = await phones_repo.list_phone_numbers(
+        db, limit=limit, descending=(sort_order != "ascending"), after_id=after_id
+    )
+    _audit(request, "list-phone-numbers")
+    items = [serialize_phone_number(p).model_dump(exclude_none=True) for p in rows]
+    out: dict[str, Any] = {"items": items, "has_more": len(rows) == limit}
+    if rows and len(rows) == limit:
+        out["pagination_key"] = ids.encode_phone_number_cursor(rows[-1].id)
+    return out

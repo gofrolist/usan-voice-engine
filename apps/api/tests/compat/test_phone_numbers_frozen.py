@@ -74,3 +74,59 @@ def test_unknown_binding_agent_is_422(compat_client, compat_headers) -> None:
         headers=compat_headers,
     )
     assert r.status_code == 422
+
+
+def test_update_merge_and_traps(compat_client, compat_headers) -> None:
+    compat_client.post(
+        "/import-phone-number",
+        json={
+            "phone_number": "+15550000020",
+            "termination_uri": "sip.example.com",
+            "nickname": "x",
+        },
+        headers=compat_headers,
+    )
+    # update uses auth_* (NOT sip_trunk_auth_*); nickname nullable here; sms fields allowed.
+    u = compat_client.patch(
+        "/update-phone-number/+15550000020",
+        json={
+            "nickname": None,
+            "auth_username": "u2",
+            "auth_password": "p2",
+            "inbound_sms_webhook_url": "https://sms.example.com:443/hook",
+        },
+        headers=compat_headers,
+    )
+    assert u.status_code == 200, u.text
+    body = u.json()
+    assert "nickname" not in body  # cleared -> omitted by exclude_none
+    assert body["sip_outbound_trunk_config"]["auth_username"] == "u2"
+    assert "auth_password" not in body["sip_outbound_trunk_config"]
+    assert "p2" not in u.text
+    assert_conforms(body, "PhoneNumberResponse")
+
+    assert (
+        compat_client.patch(
+            "/update-phone-number/+19999999999", json={"nickname": "z"}, headers=compat_headers
+        ).status_code
+        == 404
+    )
+
+
+def test_list_is_paginated_envelope(compat_client, compat_headers) -> None:
+    for n in range(3):
+        compat_client.post(
+            "/import-phone-number",
+            json={"phone_number": f"+1555000003{n}", "termination_uri": "sip.example.com"},
+            headers=compat_headers,
+        )
+    r = compat_client.get("/v2/list-phone-numbers?limit=2", headers=compat_headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body["items"], list)
+    assert len(body["items"]) == 2
+    assert body["has_more"] is True
+    assert "pagination_key" in body
+    for item in body["items"]:
+        assert_conforms(item, "PhoneNumberResponse")
+    assert_sdk_roundtrip(body, "retell.types:PhoneNumberListResponse")

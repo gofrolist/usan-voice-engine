@@ -80,8 +80,6 @@ _UNSUPPORTED: tuple[tuple[str, str], ...] = (
     ("GET", "/v2/list-test-runs/{test_case_batch_job_id}"),
     # --- Phone-number management (the engine owns its own Telnyx/LiveKit numbers) ---
     ("POST", "/create-phone-number"),
-    ("GET", "/v2/list-phone-numbers"),
-    ("PATCH", "/update-phone-number/{phone_number}"),
     # --- MCP tools / export requests / agent playground ---
     ("GET", "/get-mcp-tools/{agent_id}"),
     ("GET", "/v2/list-export-requests"),
