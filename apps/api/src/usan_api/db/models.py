@@ -1061,6 +1061,41 @@ class CompatWebhookDelivery(Base, TenantScoped):
     )
 
 
+class PhoneNumber(Base, TenantScoped):
+    __tablename__ = "phone_numbers"
+    __table_args__ = (
+        UniqueConstraint("phone_e164", "organization_id", name="uq_phone_numbers_e164_org"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    phone_e164: Mapped[str] = mapped_column(Text, nullable=False)
+    phone_number_type: Mapped[str] = mapped_column(Text, nullable=False)
+    phone_number_pretty: Mapped[str | None] = mapped_column(Text)
+    nickname: Mapped[str | None] = mapped_column(Text)
+    area_code: Mapped[int | None] = mapped_column(Integer)
+    inbound_webhook_url: Mapped[str | None] = mapped_column(Text)
+    inbound_sms_webhook_url: Mapped[str | None] = mapped_column(Text)
+    allowed_inbound_country_list: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    allowed_outbound_country_list: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    fallback_number: Mapped[str | None] = mapped_column(Text)
+    transport: Mapped[str | None] = mapped_column(Text)
+    termination_uri: Mapped[str | None] = mapped_column(Text)
+    sip_auth_username: Mapped[str | None] = mapped_column(Text)
+    sip_auth_password: Mapped[str | None] = mapped_column(Text)
+    inbound_agents: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    outbound_agents: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    inbound_sms_agents: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    outbound_sms_agents: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class CustomVariable(Base, TenantScoped):
     """Operator-declared prompt variable (catalog tier ``custom``, migration 0015).
 
