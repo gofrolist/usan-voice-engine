@@ -149,6 +149,66 @@ async def dispatch_test_agent(
     logger.bind(room=room).info("Test agent dispatched (session_kind=test)")
 
 
+def _web_metadata(
+    *,
+    call_id: str,
+    dynamic_vars: dict[str, Any],
+    resolved_vars: dict[str, str],
+    timezone: str,
+) -> str:
+    """Dispatch metadata for a live web call (session_kind=call, call_type=web_call).
+
+    The worker routes on ``call_type == "web_call"`` to its web branch (no SIP read, no
+    voicemail). ``dynamic_vars`` is the bare operator/CRM var map (the reserved metadata /
+    un-honored blobs are NOT sent to the agent)."""
+    return json.dumps(
+        {
+            "session_kind": "call",
+            "call_type": "web_call",
+            "call_id": call_id,
+            "direction": "inbound",
+            "dynamic_vars": dynamic_vars,
+            "resolved_vars": resolved_vars,
+            "timezone": timezone,
+        }
+    )
+
+
+async def dispatch_web_agent(
+    *,
+    settings: Settings,
+    room: str,
+    call_id: str,
+    dynamic_vars: dict[str, Any],
+    resolved_vars: dict[str, str],
+    timezone: str,
+) -> None:
+    """Create the web-call room and dispatch the agent into it (no SIP, no outbound gate).
+
+    Mirrors ``dispatch_test_agent`` but for a real persisted call: the browser joins
+    ``room`` over WebRTC with the minted token; the agent answers via its ``_run_web``
+    branch. Unlike ``dispatch_agent`` this does NOT require outbound (Telnyx SIP) config —
+    a web call places no PSTN leg."""
+    async with build_livekit_api(settings) as lkapi:
+        try:
+            await lkapi.room.create_room(api.CreateRoomRequest(name=room))
+        except Exception:  # noqa: BLE001 - room may already exist; dispatch still proceeds
+            logger.bind(room=room).debug("create_room for web call was a no-op")
+        await lkapi.agent_dispatch.create_dispatch(
+            api.CreateAgentDispatchRequest(
+                agent_name=settings.agent_name,
+                room=room,
+                metadata=_web_metadata(
+                    call_id=call_id,
+                    dynamic_vars=dynamic_vars,
+                    resolved_vars=resolved_vars,
+                    timezone=timezone,
+                ),
+            )
+        )
+    logger.bind(call_id=call_id, room=room).info("Web agent dispatched (session_kind=call)")
+
+
 # The LiveKit SIP outbound trunk ID (ST_...) is environment-specific — it only
 # exists inside a particular LiveKit instance. Rather than require operators to
 # create the trunk by hand and pin its ID in an env var, we resolve it at first
