@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from loguru import logger
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.compat import ids
@@ -80,21 +81,25 @@ async def import_phone_number(
     await _resolve_binding_agents(db, body.inbound_agents, body.outbound_agents)
     if await phones_repo.get_by_e164(db, body.phone_number) is not None:
         raise CompatError(400, "phone number already imported")
-    pn = await phones_repo.create_phone_number(
-        db,
-        phone_e164=body.phone_number,
-        phone_number_type="custom",  # BYO SIP number
-        nickname=body.nickname,
-        inbound_webhook_url=body.inbound_webhook_url,
-        allowed_inbound_country_list=body.allowed_inbound_country_list,
-        allowed_outbound_country_list=body.allowed_outbound_country_list,
-        transport=body.transport,
-        termination_uri=body.termination_uri,
-        sip_auth_username=body.sip_trunk_auth_username,
-        sip_auth_password=body.sip_trunk_auth_password,
-        inbound_agents=_binding_dicts(body.inbound_agents),
-        outbound_agents=_binding_dicts(body.outbound_agents),
-    )
+    try:
+        pn = await phones_repo.create_phone_number(
+            db,
+            phone_e164=body.phone_number,
+            phone_number_type="custom",  # BYO SIP number
+            nickname=body.nickname,
+            inbound_webhook_url=body.inbound_webhook_url,
+            allowed_inbound_country_list=body.allowed_inbound_country_list,
+            allowed_outbound_country_list=body.allowed_outbound_country_list,
+            transport=body.transport,
+            termination_uri=body.termination_uri,
+            sip_auth_username=body.sip_trunk_auth_username,
+            sip_auth_password=body.sip_trunk_auth_password,
+            inbound_agents=_binding_dicts(body.inbound_agents),
+            outbound_agents=_binding_dicts(body.outbound_agents),
+        )
+    except IntegrityError as exc:
+        await db.rollback()
+        raise CompatError(400, "phone number already imported") from exc
     await db.commit()
     _audit(request, "import-phone-number")
     return serialize_phone_number(pn)
