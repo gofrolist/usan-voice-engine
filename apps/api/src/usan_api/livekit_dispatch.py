@@ -67,7 +67,8 @@ def mint_browser_token(
     can speak to and hear the agent) and NOTHING else (no room admin, no other
     rooms). The secret ``LIVEKIT_API_SECRET`` stays server-side — the browser never
     sees it (research R3: browser must not mint its own token). Used by the Test
-    Audio endpoint; never on the production call path.
+    Audio endpoint and by the compat web-call path (``create-web-call``
+    serialization), which mints a real browser join token for a production web call.
     """
     grants = api.VideoGrants(
         room=room,

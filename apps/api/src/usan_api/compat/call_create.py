@@ -279,6 +279,9 @@ async def create_web_call(
     db.add(call)
     await db.flush()
 
+    # Dispatch before commit (like the native paths): on failure we roll back so no
+    # orphan Call persists. The worker's connect→fetch_agent_config latency dwarfs this
+    # local commit, so the row is visible well before the agent reads it.
     try:
         await livekit_dispatch.dispatch_web_agent(
             settings=settings,
