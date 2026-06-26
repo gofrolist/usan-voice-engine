@@ -2,6 +2,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import sys
 import traceback
 from typing import Any, Literal
@@ -9,6 +10,16 @@ from typing import Any, Literal
 from loguru import logger
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+
+# Redact the raw E.164 segment of get/update/delete-phone-number paths from access logs:
+# the oracle forces {phone_number} (literal E.164) as the path param, so it cannot be
+# opaque-encoded like call_id. The audit log already binds ids only.
+_PHONE_PATH_RE = re.compile(r"(/(?:get|update|delete)-phone-number/)\+?[0-9]+")
+
+
+def _mask_phi_path(message: str) -> str:
+    return _PHONE_PATH_RE.sub(r"\1[redacted]", message)
+
 
 # loguru level name -> Cloud Logging LogSeverity. Lets Cloud Logging colour/filter
 # by severity instead of treating every line as default INFO.
@@ -65,7 +76,8 @@ class _InterceptHandler(logging.Handler):
     """
 
     def emit(self, record: logging.LogRecord) -> None:
-        if record.name == "uvicorn.access" and "/health" in record.getMessage():
+        message = _mask_phi_path(record.getMessage())
+        if record.name == "uvicorn.access" and "/health" in message:
             return
         try:
             level: str | int = logger.level(record.levelname).name
@@ -76,7 +88,7 @@ class _InterceptHandler(logging.Handler):
         while frame is not None and (depth == 0 or frame.f_code.co_filename == logging.__file__):
             frame = frame.f_back
             depth += 1
-        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+        logger.opt(depth=depth, exception=record.exc_info).log(level, message)
 
 
 def _intercept_uvicorn() -> None:
