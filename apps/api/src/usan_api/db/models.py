@@ -24,7 +24,15 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from usan_api.db.base import AdminRole, Base, CallDirection, CallStatus, InviteStatus, ProfileStatus
+from usan_api.db.base import (
+    AdminRole,
+    Base,
+    CallDirection,
+    CallStatus,
+    CallType,
+    InviteStatus,
+    ProfileStatus,
+)
 
 
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
@@ -140,6 +148,16 @@ class Call(Base, TenantScoped):
         ),
         nullable=False,
         server_default=CallStatus.QUEUED.value,
+    )
+    call_type: Mapped[CallType] = mapped_column(
+        SAEnum(
+            CallType,
+            name="call_type",
+            values_callable=_enum_values,
+            create_type=False,
+        ),
+        nullable=False,
+        server_default=CallType.PHONE_CALL.value,
     )
     idempotency_key: Mapped[str | None] = mapped_column(Text)
     livekit_room: Mapped[str | None] = mapped_column(Text)
