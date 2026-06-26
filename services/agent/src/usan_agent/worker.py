@@ -64,6 +64,9 @@ class CallMetadata:
     # Test Audio branch; ``test_config`` then carries the full draft AgentConfig doc.
     session_kind: str = "call"
     test_config: dict[str, Any] | None = None
+    # Transport discriminator. Absent on every phone dispatch → "phone_call". "web_call"
+    # selects the WebRTC branch (_run_web): generic participant, no SIP, no voicemail.
+    call_type: str = "phone_call"
 
 
 def parse_metadata(raw: str | None) -> CallMetadata:
@@ -84,6 +87,7 @@ def parse_metadata(raw: str | None) -> CallMetadata:
         timezone=data.get("timezone") or "",
         session_kind="test" if session_kind == "test" else "call",
         test_config=data.get("test_config"),
+        call_type=data.get("call_type") or "phone_call",
     )
 
 
@@ -299,6 +303,64 @@ async def _run_test_session(ctx: JobContext, settings: Settings, meta: CallMetad
     await session.generate_reply(instructions=cfg.prompts.checkin_flow_instructions)
 
 
+async def _run_web(
+    ctx: JobContext, settings: Settings, cfg: AgentConfig, meta: CallMetadata, log: Any
+) -> None:
+    """Live web (WebRTC) call: a browser participant, full side-effects, no SIP, no voicemail.
+
+    Structurally the outbound block minus the SIP/voicemail pieces. The browser joins the
+    room with the API-minted token; the agent greets and runs the configured check-in.
+    """
+    if not meta.call_id:
+        log.error("Missing call_id in web job metadata; refusing job")
+        ctx.shutdown(reason="invalid_metadata")
+        return
+    try:
+        call_id = validate_call_id(meta.call_id)
+    except ValueError:
+        log.error("Invalid call_id in web job metadata; refusing job")
+        ctx.shutdown(reason="invalid_metadata")
+        return
+    data = CheckInData(
+        call_id=call_id, settings=settings, job_ctx=ctx, goodbye_message=cfg.prompts.goodbye_message
+    )
+    session = build_session(settings, cfg, userdata=data)
+    agent = build_check_in_agent(
+        cfg, resolved_vars=meta.resolved_vars, custom_vars=meta.dynamic_vars, timezone=meta.timezone
+    )
+    _web_vars = prompt_vars.build_vars(
+        meta.resolved_vars or {},
+        meta.dynamic_vars or {},
+        timezone=meta.timezone,
+        now=datetime.now(UTC),
+    )
+    _register_dynamic_vars_receiver(
+        ctx,
+        agent,
+        _web_vars,
+        cfg.prompts.checkin_flow_instructions + sms_template_instructions(cfg.tools),
+    )
+    register_transcript_flush(ctx, session, call_id, settings)
+    register_metrics_flush(ctx, session, call_id, settings)
+    await session.start(agent=agent, room=ctx.room)
+    log.info("Web session started; waiting for browser participant")
+    try:
+        await asyncio.wait_for(ctx.wait_for_participant(), timeout=cfg.timing.answer_timeout_s)
+    except TimeoutError:
+        log.info("No web participant within answer timeout; ending job")
+        ctx.shutdown(reason="no_answer_timeout")
+        return
+    _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
+    _BACKGROUND_TASKS.add(_guard_task)
+    _guard_task.add_done_callback(_BACKGROUND_TASKS.discard)
+    # Consent before capture: speak the disclosure to completion, then start egress.
+    await say_recording_disclosure(session, cfg)
+    await start_call_recording(ctx, call_id, settings)
+    _arm_crisis_safety_net(session, call_id=call_id, settings=settings)
+    # No voicemail detection for a browser participant — greet and run the conversation.
+    await greet(session, cfg, include_disclosure=False)
+
+
 async def _handle_crisis(
     session: Any, call_id: str, settings: Settings, category: CrisisCategory
 ) -> None:
@@ -416,6 +478,13 @@ async def entrypoint(ctx: JobContext) -> None:
         "outbound" if meta.direction == "outbound" else "inbound"
     )
     cfg = await fetch_agent_config(settings, direction=direction, call_id=meta.call_id)
+
+    # Web (WebRTC) call: browser joins over the API-minted token. Route BEFORE the
+    # outbound/inbound split — web uses session_kind="call" so without this guard it
+    # would fall through to the phone outbound block.
+    if meta.call_type == "web_call":
+        await _run_web(ctx, settings, cfg, meta, log)
+        return
 
     if meta.direction == "outbound" and meta.call_id:
         # call_id comes from job-dispatch metadata (a less-trusted boundary) and flows

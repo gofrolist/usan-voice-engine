@@ -59,8 +59,6 @@ _UNSUPPORTED: tuple[tuple[str, str], ...] = (
     ("PATCH", "/update-chat-agent/{agent_id}"),
     ("DELETE", "/delete-chat-agent/{agent_id}"),
     ("POST", "/publish-chat-agent/{agent_id}"),
-    # --- Web call ---
-    ("POST", "/v2/create-web-call"),
     # --- Voice authoring (add / clone / search) — distinct from read-only catalog ---
     ("POST", "/add-community-voice"),
     ("POST", "/clone-voice"),

@@ -62,6 +62,25 @@ class RegisterPhoneCallRequest(BaseModel):
     retell_llm_dynamic_variables: dict[str, str] | None = None
 
 
+class CreateWebCallRequest(BaseModel):
+    """POST /v2/create-web-call. Oracle: agent_id required; the rest optional.
+
+    ``agent_override`` / ``current_node_id`` / ``current_state`` are accepted (zero-change
+    repoint) and persisted for audit (compat.serialization.pack_unhonored), but NOT
+    honored — there is no conformant field to echo them in. See design §2.2.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str = Field(min_length=1)
+    agent_version: int | str | None = None
+    agent_override: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    retell_llm_dynamic_variables: dict[str, str] | None = None
+    current_node_id: str | None = None
+    current_state: str | None = None
+
+
 class UpdateCallRequest(BaseModel):
     """PATCH /v2/update-call/{id}. ``override_dynamic_variables`` is the oracle field name on
     THIS op; ``data_storage_setting`` is enum-validated (no-op behavior); ``custom_attributes``
@@ -129,9 +148,10 @@ class CompatCall(BaseModel):
     agent_name: str | None = None
     agent_version: int | None = None
     call_status: str
+    access_token: str | None = None  # web calls only; minted on serialize, never stored
     from_number: str | None = None
     to_number: str | None = None
-    direction: str
+    direction: str | None = None
     telephony_identifier: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     retell_llm_dynamic_variables: dict[str, Any] = Field(default_factory=dict)

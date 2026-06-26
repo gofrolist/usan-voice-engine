@@ -15,16 +15,21 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import Response
+from loguru import logger
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api import quiet_hours
+from usan_api import livekit_dispatch, quiet_hours
 from usan_api.compat.errors import CompatError
 from usan_api.compat.ids import decode_agent_id
-from usan_api.compat.schemas.calls import CreatePhoneCallRequest, RegisterPhoneCallRequest
-from usan_api.compat.serialization import RESERVED_VAR_PREFIX, pack_dynamic_vars
-from usan_api.db.base import CallDirection, CallStatus
+from usan_api.compat.schemas.calls import (
+    CreatePhoneCallRequest,
+    CreateWebCallRequest,
+    RegisterPhoneCallRequest,
+)
+from usan_api.compat.serialization import RESERVED_VAR_PREFIX, pack_dynamic_vars, pack_unhonored
+from usan_api.db.base import CallDirection, CallStatus, CallType
 from usan_api.db.models import Call, Contact
 from usan_api.phone import to_e164
 from usan_api.repositories import agent_profiles as agent_profiles_repo
@@ -233,4 +238,71 @@ async def register_compat_call(
     await db.flush()
     await db.commit()
     await db.refresh(call)
+    return call
+
+
+async def create_web_call(
+    db: AsyncSession,
+    settings: Settings,
+    body: CreateWebCallRequest,
+) -> Call:
+    """Create + dispatch a live LiveKit web call; returns the REGISTERED web Call row.
+
+    No contact / DNC / quiet-hours (web calls are join-link, not PSTN). The agent is
+    resolved + gated exactly like register-phone-call (agent_id required + published).
+    """
+    profile_id = decode_agent_id(body.agent_id)
+    if not await agent_profiles_repo.is_live_profile(db, profile_id):
+        raise CompatError(422, "agent_id must reference a published agent")
+    if any(
+        str(k).startswith(RESERVED_VAR_PREFIX) for k in (body.retell_llm_dynamic_variables or {})
+    ):
+        raise CompatError(422, "retell_llm_dynamic_variables keys must not start with '__meta'")
+
+    packed = pack_dynamic_vars(body.retell_llm_dynamic_variables, body.metadata)
+    packed = pack_unhonored(
+        packed,
+        agent_override=body.agent_override,
+        current_node_id=body.current_node_id,
+        current_state=body.current_state,
+    )
+    room = f"usan-web-{uuid.uuid4().hex}"
+    call = Call(
+        call_type=CallType.WEB_CALL,
+        status=CallStatus.REGISTERED,
+        direction=CallDirection.INBOUND,  # internal placeholder; call_type is authoritative.
+        # Web calls are excluded from direction-keyed internal analytics:
+        # admin call list (repositories/admin_calls.py) filters to PHONE_CALL,
+        # and end_call CALLS_TOTAL metric skips WEB_CALL (routers/tools.py).
+        profile_override=profile_id,
+        dynamic_vars=packed,
+        livekit_room=room,
+        contact_id=None,
+    )
+    db.add(call)
+    await db.flush()
+
+    # Dispatch before commit (like the native paths): on failure we roll back so no
+    # orphan Call persists. The worker's connect→fetch_agent_config latency dwarfs this
+    # local commit, so the row is visible well before the agent reads it.
+    try:
+        await livekit_dispatch.dispatch_web_agent(
+            settings=settings,
+            room=room,
+            call_id=str(call.id),
+            dynamic_vars=body.retell_llm_dynamic_variables or {},
+            resolved_vars={},
+            timezone=settings.compat_default_timezone,
+        )
+    except Exception as exc:
+        # PHI/secret-safe: type name only — never str(exc), metadata, or any token.
+        await db.rollback()
+        logger.bind(err=type(exc).__name__).error("web call dispatch failed")
+        raise CompatError(502, "web call dispatch failed") from None
+
+    await db.commit()
+    # No db.refresh: the SET LOCAL tenant context clears at commit, so a post-commit
+    # SELECT would be hidden by RLS. All fields serialize_call reads are already
+    # populated in-memory (set explicitly above, or via flush() RETURNING for id +
+    # organization_id) — there is no server_default field the serializer needs refreshed.
     return call

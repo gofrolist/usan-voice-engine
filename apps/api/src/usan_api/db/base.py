@@ -27,6 +27,11 @@ class CallStatus(enum.Enum):
     REGISTERED = "registered"
 
 
+class CallType(enum.Enum):
+    PHONE_CALL = "phone_call"
+    WEB_CALL = "web_call"
+
+
 class ProfileStatus(enum.Enum):
     ACTIVE = "active"
     ARCHIVED = "archived"

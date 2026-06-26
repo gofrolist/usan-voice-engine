@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import activities_catalog, cost, emergency_resources, notifications, sms_render
 from usan_api.auth import require_service_token
+from usan_api.db.base import CallType
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
 from usan_api.observability.custom_metrics import (
@@ -283,7 +284,13 @@ async def end_call(
     if updated is not None:
         # Count only the actual terminal transition, not idempotent end_call replays.
         # Label value is the bounded call_status enum, NOT body.reason (free-text PHI).
-        CALLS_TOTAL.labels(direction=updated.direction.value, end_reason=updated.status.value).inc()
+        # Web calls (call_type=WEB_CALL) are excluded: direction is a placeholder for
+        # them (call_type is authoritative), so incrementing by direction would
+        # miscount them as inbound phone calls.
+        if updated.call_type != CallType.WEB_CALL:
+            CALLS_TOTAL.labels(
+                direction=updated.direction.value, end_reason=updated.status.value
+            ).inc()
         # Deliver any queued SMS after the response (own session); idempotent so the
         # room_finished webhook firing too is safe (design §6.3).
         background_tasks.add_task(flush_pending_sms, call.id)

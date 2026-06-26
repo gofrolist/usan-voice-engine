@@ -27,6 +27,7 @@ from usan_api.compat.errors import CompatError
 from usan_api.compat.schemas.calls import (
     CompatCall,
     CreatePhoneCallRequest,
+    CreateWebCallRequest,
     ListCallsRequest,
     ListCallsResponse,
     RegisterPhoneCallRequest,
@@ -34,7 +35,7 @@ from usan_api.compat.schemas.calls import (
     UpdateLiveCallRequest,
     UpdateLiveCallResponse,
 )
-from usan_api.compat.serialization import pack_dynamic_vars, unpack_dynamic_vars
+from usan_api.compat.serialization import carry_unhonored, pack_dynamic_vars, unpack_dynamic_vars
 from usan_api.db.base import CallStatus
 from usan_api.db.models import Call
 from usan_api.repositories import calls as calls_repo
@@ -81,6 +82,23 @@ async def create_phone_call(
     )
     response.status_code = status.HTTP_201_CREATED
     _audit(request, "create-phone-call", ids.encode_call_id(call.id))
+    return await call_serializer.serialize_call(db, call, settings, client_host=client_ip(request))
+
+
+@router.post(
+    "/v2/create-web-call",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CompatCall,
+    response_model_exclude_none=True,
+)
+async def create_web_call(
+    body: CreateWebCallRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> CompatCall:
+    call = await call_create.create_web_call(db, settings, body)
+    _audit(request, "create-web-call", ids.encode_call_id(call.id))
     return await call_serializer.serialize_call(db, call, settings, client_host=client_ip(request))
 
 
@@ -134,13 +152,14 @@ async def update_call(
     settings: Settings = Depends(get_settings),
 ) -> CompatCall:
     call = await _load_call(db, call_id)
-    dynamic_variables, metadata = unpack_dynamic_vars(call.dynamic_vars)
+    old_dv = call.dynamic_vars
+    dynamic_variables, metadata = unpack_dynamic_vars(old_dv)
     new_vars = body.override_dynamic_variables or body.retell_llm_dynamic_variables
     if new_vars is not None:
         dynamic_variables = new_vars
     if body.metadata is not None:
         metadata = body.metadata
-    call.dynamic_vars = pack_dynamic_vars(dynamic_variables, metadata)
+    call.dynamic_vars = carry_unhonored(old_dv, pack_dynamic_vars(dynamic_variables, metadata))
     await db.commit()
     await db.refresh(call)
     _audit(request, "update-call", call_id)
@@ -290,11 +309,12 @@ async def update_live_call(
         body.fields_to_override.override_dynamic_variables if body.fields_to_override else None
     )
     if new_vars:
-        existing, meta = unpack_dynamic_vars(call.dynamic_vars)
+        old_dv = call.dynamic_vars
+        existing, meta = unpack_dynamic_vars(old_dv)
         # MERGES (overrides specific keys only) — intentionally unlike update_call which
         # replaces the whole dynamic_vars map; mid-call partial override must be non-destructive.
         merged = {**existing, **new_vars}  # new_vars is dict[str, str] (Pydantic-validated)
-        call.dynamic_vars = pack_dynamic_vars(merged, meta)
+        call.dynamic_vars = carry_unhonored(old_dv, pack_dynamic_vars(merged, meta))
         await db.commit()
         if call.livekit_room:
             # Send the DELTA only; the agent merges it into its running variable set.

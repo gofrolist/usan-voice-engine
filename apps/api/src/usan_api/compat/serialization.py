@@ -35,6 +35,32 @@ def duration_ms(seconds: int | None) -> int | None:
 # create (call_create) so they can never collide with the reserved namespace.
 RESERVED_VAR_PREFIX = "__meta"
 _META_KEY = "__meta__"
+_UNHONORED_KEY = "__meta_unhonored__"
+
+
+def pack_unhonored(
+    packed: dict[str, Any],
+    *,
+    agent_override: dict[str, Any] | None,
+    current_node_id: str | None,
+    current_state: str | None,
+) -> dict[str, Any]:
+    """Stash accepted-but-not-honored request fields under a reserved key that
+    ``unpack_dynamic_vars`` strips, so they persist for audit WITHOUT polluting the
+    echoed ``metadata`` / ``retell_llm_dynamic_variables``. Mirrors the ``__meta__``
+    mechanism; shares the ``__meta`` prefix that client keys are already barred from."""
+    extras = {
+        key: value
+        for key, value in (
+            ("agent_override", agent_override),
+            ("current_node_id", current_node_id),
+            ("current_state", current_state),
+        )
+        if value is not None
+    }
+    if not extras:
+        return packed
+    return {**packed, _UNHONORED_KEY: json.dumps(extras)}
 
 
 def pack_dynamic_vars(
@@ -52,8 +78,18 @@ def unpack_dynamic_vars(
     stored: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Inverse of ``pack_dynamic_vars``: split a stored ``dynamic_vars`` dict back into
-    ``(retell_llm_dynamic_variables, metadata)`` with original metadata types preserved."""
+    ``(retell_llm_dynamic_variables, metadata)`` with original metadata types preserved.
+    The reserved un-honored audit blob is dropped (never echoed)."""
     rest = dict(stored or {})
     raw = rest.pop(_META_KEY, None)
+    rest.pop(_UNHONORED_KEY, None)
     metadata: dict[str, Any] = json.loads(raw) if isinstance(raw, str) and raw else {}
     return rest, metadata
+
+
+def carry_unhonored(old: dict[str, Any] | None, packed: dict[str, Any]) -> dict[str, Any]:
+    """Carry the reserved un-honored audit blob forward from a prior stored dynamic_vars
+    onto a freshly packed dict, so update endpoints (unpack→modify→pack) don't drop it."""
+    if old and _UNHONORED_KEY in old:
+        return {**packed, _UNHONORED_KEY: old[_UNHONORED_KEY]}
+    return packed
