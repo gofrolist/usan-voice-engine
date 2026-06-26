@@ -82,7 +82,6 @@ _UNSUPPORTED: tuple[tuple[str, str], ...] = (
     ("POST", "/create-phone-number"),
     # --- MCP tools / export requests / agent playground ---
     ("GET", "/get-mcp-tools/{agent_id}"),
-    ("GET", "/v2/list-export-requests"),
     ("POST", "/agent-playground-completion/{agent_id}"),
     # --- Retell LLM ---
     ("GET", "/v2/list-retell-llms"),
