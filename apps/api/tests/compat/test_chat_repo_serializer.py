@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
 
+from usan_api.compat import ids
 from usan_api.compat.chat_serializer import serialize_chat
+from usan_api.compat.schemas.chats import ListChatsRequest
 from usan_api.compat.serialization import pack_dynamic_vars
 from usan_api.db.base import ChatStatus, ProfileStatus
 from usan_api.db.models import AgentProfile, ChatMessage, ChatSession
@@ -90,3 +92,44 @@ def test_serialize_chat_list_item_omits_transcript_and_messages():
     assert "transcript" not in out
     assert "message_with_tool_calls" not in out
     assert "retell_llm_dynamic_variables" not in out  # empty → omitted
+
+
+@pytest.mark.asyncio
+async def test_archived_cursor_does_not_restart_pagination(app_session) -> None:
+    """A pagination_key pointing at a since-archived chat must still anchor the keyset
+    (plain db.get load) so page 2 advances past it instead of restarting from the top
+    and re-emitting a page-1 row. Regression for the /review #141 archived-cursor finding.
+    """
+    org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
+    await set_tenant_context(app_session, org_id)
+    profile = await _seed_agent_profile(app_session)
+
+    base = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    sessions = []
+    for i in range(4):
+        s = await chats_repo.add_session(
+            app_session, agent_profile_id=profile.id, agent_version=1, dynamic_vars={}
+        )
+        s.started_at = base + timedelta(minutes=i)  # sessions[3] newest, sessions[0] oldest
+        sessions.append(s)
+    await app_session.flush()
+
+    # Page 1 (descending): the two newest = sessions[3], sessions[2]; cursor = sessions[2].
+    page1 = await chats_repo.query_sessions(app_session, ListChatsRequest(limit=2))
+    assert [x.id for x in page1] == [sessions[3].id, sessions[2].id]
+
+    # The cursor chat is deleted (soft-delete) between pages.
+    sessions[2].archived_at = datetime.now(UTC)
+    await app_session.flush()
+
+    # Page 2 with the now-archived cursor must continue past it (sessions[1], sessions[0]),
+    # NOT restart and re-emit sessions[3].
+    page2 = await chats_repo.query_sessions(
+        app_session,
+        ListChatsRequest(limit=2, pagination_key=ids.encode_chat_id(sessions[2].id)),
+    )
+    page2_ids = {x.id for x in page2}
+    assert sessions[3].id not in page2_ids  # no duplicate of page 1
+    assert sessions[2].id not in page2_ids  # archived → excluded from results
+    assert page2_ids == {sessions[1].id, sessions[0].id}
+    await app_session.rollback()

@@ -24,6 +24,7 @@ from usan_api.compat.schemas.chats import (
 )
 from usan_api.compat.serialization import (
     RESERVED_VAR_PREFIX,
+    carry_unhonored,
     pack_dynamic_vars,
     unpack_dynamic_vars,
 )
@@ -142,12 +143,15 @@ async def update_chat(db: AsyncSession, chat_id: str, body: UpdateChatRequest) -
     if session is None:
         raise CompatError(404, "chat not found")
     _reject_reserved(body.override_dynamic_variables)
-    bare_vars, metadata = unpack_dynamic_vars(session.dynamic_vars)
+    old_dv = session.dynamic_vars
+    bare_vars, metadata = unpack_dynamic_vars(old_dv)
     if body.override_dynamic_variables is not None:
         bare_vars = body.override_dynamic_variables
     if body.metadata is not None:
         metadata = body.metadata
-    session.dynamic_vars = pack_dynamic_vars(bare_vars, metadata)
+    # carry_unhonored preserves any reserved __meta_unhonored__ audit blob across the
+    # unpack->repack (mirrors update_call); a no-op in 4a where nothing stashes it.
+    session.dynamic_vars = carry_unhonored(old_dv, pack_dynamic_vars(bare_vars, metadata))
     if body.custom_attributes is not None:
         session.custom_attributes = body.custom_attributes
     # data_storage_setting is accepted-and-ignored (4a).

@@ -92,7 +92,11 @@ async def query_sessions(db: AsyncSession, body: ListChatsRequest) -> list[ChatS
     descending = body.sort_order != "ascending"
     if body.pagination_key:
         try:
-            cursor = await get_session(db, ids.decode_chat_id(body.pagination_key))
+            # Plain load (not get_session, which excludes archived): a since-deleted
+            # cursor row must still anchor the keyset so the page doesn't restart from
+            # the top. Mirrors list-calls' get_call (calls.py). Bad token -> None -> no
+            # keyset filter (same as list-calls convention).
+            cursor = await db.get(ChatSession, ids.decode_chat_id(body.pagination_key))
         except CompatError:
             cursor = None
         if cursor is not None:
