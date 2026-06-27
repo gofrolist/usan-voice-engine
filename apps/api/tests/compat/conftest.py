@@ -111,6 +111,39 @@ def _published_agent_id(client, headers: dict) -> str:
 
 
 @pytest.fixture
+def make_published_agent(compat_client, compat_headers):
+    """Factory: publish an agent whose greeting (begin_message) is the given template, so
+    create-sms-chat renders that greeting. Used to exercise dynamic-var/clock substitution."""
+
+    def _make(begin_message: str) -> str:
+        llm = compat_client.post(
+            "/create-retell-llm",
+            json={
+                "start_speaker": "agent",
+                "general_prompt": "hi",
+                "begin_message": begin_message,
+            },
+            headers=compat_headers,
+        ).json()
+        agent = compat_client.post(
+            "/create-agent",
+            json={
+                "response_engine": {"type": "retell-llm", "llm_id": llm["llm_id"]},
+                "voice_id": RETELL_VOICE,
+                "agent_name": "Greeting Agent",
+            },
+            headers=compat_headers,
+        ).json()
+        agent_id = agent["agent_id"]
+        compat_client.post(
+            f"/publish-agent-version/{agent_id}", json={"version": 1}, headers=compat_headers
+        )
+        return agent_id
+
+    return _make
+
+
+@pytest.fixture
 def seeded_call(compat_client, compat_headers, mock_dispatch, allow_quiet_hours) -> str:
     """Seed one call via the compat API and return its ``call_id``.
 

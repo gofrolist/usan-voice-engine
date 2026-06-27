@@ -185,3 +185,18 @@ def test_completion_rejects_sms_chat(
         headers=compat_headers,
     )
     assert r.status_code == 422, r.text
+
+
+def test_greeting_renders_real_clock_not_blank(
+    compat_client, compat_headers, sms_messaging_enabled, mock_send_sms, make_published_agent
+):
+    # A greeting using {{current_time}} must render a real clock value in the SMS, not a
+    # blank — regression for the /review #142 timezone="" finding. The compat voice path
+    # passes settings.compat_default_timezone to build_vars; the SMS path now matches.
+    agent_id = make_published_agent("The time is {{current_time}} now")
+    r = _create_sms(compat_client, compat_headers, override_agent_id=agent_id)
+    assert r.status_code == 200, r.text
+    body = mock_send_sms[0]["body"]
+    assert body.startswith("The time is "), body  # greeting propagated
+    assert "{{" not in body  # the token was substituted
+    assert any(ch.isdigit() for ch in body), body  # a real clock value, not blank

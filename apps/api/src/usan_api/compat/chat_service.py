@@ -113,8 +113,14 @@ async def create_sms_chat(
     assert profile.published_version is not None  # is_live_profile guaranteed
     # 4) initial message = the agent's configured greeting with dynamic vars substituted
     cfg = await _load_published_config(db, profile_id)
+    # The greeting is recipient-facing outbound text, so render clock vars against the
+    # compat default timezone (matching the compat voice path call_create.py), not "" —
+    # else {{current_time}}/{{current_date}} would render blank in the SMS.
     values = build_vars(
-        {}, body.retell_llm_dynamic_variables or {}, timezone="", now=datetime.now(UTC)
+        {},
+        body.retell_llm_dynamic_variables or {},
+        timezone=settings.compat_default_timezone,
+        now=datetime.now(UTC),
     )
     greeting = substitute(cfg.prompts.greeting, values)
     packed = pack_dynamic_vars(body.retell_llm_dynamic_variables, body.metadata)
