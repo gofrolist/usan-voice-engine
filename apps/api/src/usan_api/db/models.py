@@ -1272,7 +1272,15 @@ class Organization(Base):
 
 class ChatSession(Base, TenantScoped):
     __tablename__ = "chat_sessions"
-    __table_args__ = (Index("ix_chat_sessions_started_at_id", "started_at", "id"),)
+    __table_args__ = (
+        Index("ix_chat_sessions_started_at_id", "started_at", "id"),
+        Index(
+            "ix_chat_sessions_sms_match",
+            "from_number",
+            "to_number",
+            postgresql_where=text("chat_type = 'sms_chat'"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -1312,6 +1320,13 @@ class ChatMessage(Base, TenantScoped):
     __tablename__ = "chat_messages"
     __table_args__ = (
         UniqueConstraint("chat_session_id", "seq", name="uq_chat_messages_session_seq"),
+        Index(
+            "uq_chat_messages_provider_msg",
+            "organization_id",
+            "provider_message_id",
+            unique=True,
+            postgresql_where=text("provider_message_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1323,6 +1338,7 @@ class ChatMessage(Base, TenantScoped):
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_message_id: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
