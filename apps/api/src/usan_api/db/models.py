@@ -1287,6 +1287,8 @@ class ChatSession(Base, TenantScoped):
         server_default=ChatStatus.ONGOING.value,
     )
     chat_type: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'api_chat'"))
+    from_number: Mapped[str | None] = mapped_column(Text)
+    to_number: Mapped[str | None] = mapped_column(Text)
     dynamic_vars: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
     )
