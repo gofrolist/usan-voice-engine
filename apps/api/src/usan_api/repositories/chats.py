@@ -21,13 +21,18 @@ async def add_session(
     agent_profile_id: uuid.UUID,
     agent_version: int,
     dynamic_vars: dict[str, Any],
+    chat_type: str = "api_chat",
+    from_number: str | None = None,
+    to_number: str | None = None,
 ) -> ChatSession:
     session = ChatSession(
         agent_profile_id=agent_profile_id,
         agent_version=agent_version,
         status=ChatStatus.ONGOING,
-        chat_type="api_chat",
+        chat_type=chat_type,
         dynamic_vars=dynamic_vars,
+        from_number=from_number,
+        to_number=to_number,
     )
     db.add(session)
     return session

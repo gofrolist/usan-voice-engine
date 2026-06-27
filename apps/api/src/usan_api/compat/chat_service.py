@@ -14,11 +14,13 @@ from loguru import logger
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from usan_api import telnyx_messaging
 from usan_api.compat import ids
 from usan_api.compat.errors import CompatError
 from usan_api.compat.schemas.chats import (
     CreateChatCompletionRequest,
     CreateChatRequest,
+    CreateSmsChatRequest,
     ListChatsRequest,
     UpdateChatRequest,
 )
@@ -33,6 +35,7 @@ from usan_api.db.models import ChatMessage, ChatSession
 from usan_api.prompt_substitution import build_vars, substitute
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import chats as chats_repo
+from usan_api.repositories import phone_numbers as phone_numbers_repo
 from usan_api.schemas.agent_config import AgentConfig
 from usan_api.settings import Settings
 from usan_api.vertex_test import run_vertex_turn
@@ -41,6 +44,18 @@ from usan_api.vertex_test import run_vertex_turn
 def _reject_reserved(vars_: dict[str, str] | None) -> None:
     if any(str(k).startswith(RESERVED_VAR_PREFIX) for k in (vars_ or {})):
         raise CompatError(422, "retell_llm_dynamic_variables keys must not start with '__meta'")
+
+
+def _sms_send_ready(settings: Settings) -> bool:
+    """True iff outbound SMS can be sent: the feature flag is on and the three Telnyx
+    messaging secrets are present. The 503 gate in create_sms_chat checks this before any
+    write (send_sms itself would otherwise raise after a row was already written)."""
+    return bool(
+        settings.telnyx_messaging_enabled
+        and settings.telnyx_messaging_api_key
+        and settings.telnyx_messaging_profile_id
+        and settings.telnyx_from_number
+    )
 
 
 async def create_chat(db: AsyncSession, body: CreateChatRequest) -> ChatSession:
@@ -59,6 +74,82 @@ async def create_chat(db: AsyncSession, body: CreateChatRequest) -> ChatSession:
         agent_version=profile.published_version,
         dynamic_vars=packed,
     )
+    await db.commit()
+    return session
+
+
+async def _resolve_sms_agent(db: AsyncSession, body: CreateSmsChatRequest) -> uuid.UUID:
+    """override_agent_id wins (one-time override). Otherwise honor the from_number's
+    outbound_sms_agents[0] binding WITHIN the caller's org (RLS-safe, same-org — not the
+    deferred cross-org inbound case). 422 if no live agent resolves."""
+    if body.override_agent_id:
+        profile_id = ids.decode_agent_id(body.override_agent_id)
+    else:
+        pn = await phone_numbers_repo.get_by_e164(db, body.from_number)
+        agents = (pn.outbound_sms_agents if pn is not None else None) or []
+        token = (agents[0] or {}).get("agent_id") if agents else None
+        if not isinstance(token, str) or not token:
+            raise CompatError(422, "no agent bound to from_number")
+        profile_id = ids.decode_agent_id(token)
+    if not await agent_profiles_repo.is_live_profile(db, profile_id):
+        raise CompatError(422, "agent must reference a published agent")
+    return profile_id
+
+
+async def create_sms_chat(
+    db: AsyncSession, settings: Settings, body: CreateSmsChatRequest
+) -> ChatSession:
+    # 1) config gate — BEFORE any write
+    if not _sms_send_ready(settings):
+        raise CompatError(503, "sms messaging is not configured")
+    # 2) from_number must be our single provisioned sender
+    if body.from_number != settings.telnyx_from_number:
+        raise CompatError(422, "from_number is not a provisioned sender")
+    # 3) resolve the agent (override -> same-org binding -> 422), then guard reserved vars
+    profile_id = await _resolve_sms_agent(db, body)
+    _reject_reserved(body.retell_llm_dynamic_variables)
+    profile = await agent_profiles_repo.get_profile(db, profile_id)
+    assert profile is not None  # is_live_profile guaranteed
+    assert profile.published_version is not None  # is_live_profile guaranteed
+    # 4) initial message = the agent's configured greeting with dynamic vars substituted
+    cfg = await _load_published_config(db, profile_id)
+    # The greeting is recipient-facing outbound text, so render clock vars against the
+    # compat default timezone (matching the compat voice path call_create.py), not "" —
+    # else {{current_time}}/{{current_date}} would render blank in the SMS.
+    values = build_vars(
+        {},
+        body.retell_llm_dynamic_variables or {},
+        timezone=settings.compat_default_timezone,
+        now=datetime.now(UTC),
+    )
+    greeting = substitute(cfg.prompts.greeting, values)
+    packed = pack_dynamic_vars(body.retell_llm_dynamic_variables, body.metadata)
+    # 5) persist session + greeting, send via Telnyx; ANY failure rolls back the whole txn
+    try:
+        session = await chats_repo.add_session(
+            db,
+            agent_profile_id=profile_id,
+            agent_version=profile.published_version,
+            dynamic_vars=packed,
+            chat_type="sms_chat",
+            from_number=body.from_number,
+            to_number=body.to_number,
+        )
+        await db.flush()
+        seq = await chats_repo.next_seq(db, session.id)
+        await chats_repo.add_message(
+            db, session_id=session.id, seq=seq, role="agent", content=greeting
+        )
+        await db.flush()
+        await telnyx_messaging.send_sms(settings, to_number=body.to_number, body=greeting)
+    except CompatError:
+        raise
+    except Exception as exc:
+        # PHI/secret-safe: type name only; discard the whole uncommitted txn (no orphan row).
+        await db.rollback()
+        logger.bind(err=type(exc).__name__).error("create sms chat failed")
+        raise CompatError(502, "sms send failed") from None
+    # 6) commit; the router serializes (incl. the sent greeting) via _serialize_full
     await db.commit()
     return session
 
@@ -87,6 +178,10 @@ async def create_chat_completion(
     session = await chats_repo.lock_session(db, ids.decode_chat_id(body.chat_id))
     if session is None:
         raise CompatError(404, "chat not found")
+    # reject api_chat-style synchronous completion on an sms_chat (SMS replies are
+    # webhook-driven; never injected through this endpoint). 4b-2 will drive sms replies.
+    if session.chat_type == "sms_chat":
+        raise CompatError(422, "cannot complete an sms chat")
     # 2) gate on status
     if session.status is not ChatStatus.ONGOING:
         raise CompatError(422, "chat is not ongoing")

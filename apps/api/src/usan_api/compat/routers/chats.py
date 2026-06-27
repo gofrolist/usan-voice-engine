@@ -25,6 +25,7 @@ from usan_api.compat.schemas.chats import (
     CompatChatMessage,
     CreateChatCompletionRequest,
     CreateChatRequest,
+    CreateSmsChatRequest,
     ListChatsRequest,
     ListChatsResponse,
     UpdateChatRequest,
@@ -60,6 +61,23 @@ async def create_chat(
 ) -> CompatChat:
     session = await chat_service.create_chat(db, body)
     _audit(request, "create-chat", ids.encode_chat_id(session.id))
+    return await _serialize_full(db, session)
+
+
+@router.post(
+    "/create-sms-chat",
+    status_code=status.HTTP_200_OK,
+    response_model=CompatChat,
+    response_model_exclude_none=True,
+)
+async def create_sms_chat(
+    body: CreateSmsChatRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> CompatChat:
+    session = await chat_service.create_sms_chat(db, settings, body)
+    _audit(request, "create-sms-chat", ids.encode_chat_id(session.id))
     return await _serialize_full(db, session)
 
 

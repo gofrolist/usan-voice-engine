@@ -25,6 +25,19 @@ class CreateChatRequest(BaseModel):
     retell_llm_dynamic_variables: dict[str, str] | None = None
 
 
+class CreateSmsChatRequest(BaseModel):
+    """POST /create-sms-chat. Oracle: from_number + to_number required; the rest optional."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_number: str = Field(min_length=1)
+    to_number: str = Field(min_length=1)
+    override_agent_id: str | None = Field(default=None, min_length=1)
+    override_agent_version: int | str | None = None
+    metadata: dict[str, Any] | None = None
+    retell_llm_dynamic_variables: dict[str, str] | None = None
+
+
 class CreateChatCompletionRequest(BaseModel):
     """POST /create-chat-completion. chat_id + content required; no vars/metadata."""
 
