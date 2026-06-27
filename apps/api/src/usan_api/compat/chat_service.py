@@ -171,6 +171,32 @@ async def _load_published_config(db: AsyncSession, profile_id: uuid.UUID) -> Age
     return AgentConfig.model_validate(version.config)
 
 
+async def generate_agent_reply(db: AsyncSession, settings: Settings, session: ChatSession) -> str:
+    """Load the published config, build the system prompt + multi-turn contents from the
+    FULL message history, run ONE text-only Vertex turn, return the reply text. The caller
+    must have already persisted+flushed the latest user/sms turn so it appears in history.
+    Raises on Vertex failure (the caller owns rollback). The role map sends "agent" turns as
+    genai "model" and every other role ("user"/"sms") as "user"."""
+    cfg = await _load_published_config(db, session.agent_profile_id)
+    bare_vars, _ = unpack_dynamic_vars(session.dynamic_vars)
+    values = build_vars({}, bare_vars, timezone="", now=datetime.now(UTC))
+    system_instruction = substitute(cfg.prompts.system_prompt, values)
+    history = await chats_repo.list_messages(db, session.id)
+    contents = [
+        {"role": "model" if m.role == "agent" else "user", "parts": [{"text": m.content}]}
+        for m in history
+    ]
+    turn = await run_vertex_turn(
+        model=cfg.llm.model,
+        temperature=cfg.llm.temperature,
+        system_instruction=system_instruction,
+        tools=[],
+        contents=contents,
+        settings=settings,
+    )
+    return turn.text
+
+
 async def create_chat_completion(
     db: AsyncSession, settings: Settings, body: CreateChatCompletionRequest
 ) -> list[ChatMessage]:
@@ -196,26 +222,8 @@ async def create_chat_completion(
             db, session_id=session.id, seq=user_seq, role="user", content=body.content
         )
         await db.flush()
-        # 5) build the system prompt from the published config + bare dynamic vars
-        cfg = await _load_published_config(db, session.agent_profile_id)
-        bare_vars, _ = unpack_dynamic_vars(session.dynamic_vars)
-        values = build_vars({}, bare_vars, timezone="", now=datetime.now(UTC))
-        system_instruction = substitute(cfg.prompts.system_prompt, values)
-        # 6) multi-turn contents (agent → genai "model"; user → "user")
-        history = await chats_repo.list_messages(db, session.id)
-        contents = [
-            {"role": "model" if m.role == "agent" else "user", "parts": [{"text": m.content}]}
-            for m in history
-        ]
-        # 7) one text-only Vertex turn
-        turn = await run_vertex_turn(
-            model=cfg.llm.model,
-            temperature=cfg.llm.temperature,
-            system_instruction=system_instruction,
-            tools=[],
-            contents=contents,
-            settings=settings,
-        )
+        # 5) one text-only Vertex turn over the full history (shared with the 4b-2 sms path)
+        turn_text = await generate_agent_reply(db, settings, session)
     except CompatError:
         raise
     except Exception as exc:
@@ -227,7 +235,7 @@ async def create_chat_completion(
     # 8) persist the agent turn, commit, return ONLY the new agent message(s)
     agent_seq = await chats_repo.next_seq(db, session.id)
     agent_msg = await chats_repo.add_message(
-        db, session_id=session.id, seq=agent_seq, role="agent", content=turn.text
+        db, session_id=session.id, seq=agent_seq, role="agent", content=turn_text
     )
     await db.commit()
     return [agent_msg]
