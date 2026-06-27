@@ -187,6 +187,22 @@ def test_completion_rejects_sms_chat(
     assert r.status_code == 422, r.text
 
 
+def test_to_number_normalized_to_e164_at_create(
+    compat_client, compat_headers, web_agent_id, sms_messaging_enabled, mock_send_sms
+):
+    """to_number with punctuation/spaces is normalized to E.164 before both the Telnyx send
+    and the stored row, so the inbound matcher (find_open_sms_chat) can match by to_e164."""
+    # "1 (555) 123-4567" -> 11 digits starting with 1 -> "+15551234567"
+    non_e164 = "1 (555) 123-4567"
+    expected_e164 = "+15551234567"
+    r = _create_sms(
+        compat_client, compat_headers, override_agent_id=web_agent_id, to_number=non_e164
+    )
+    assert r.status_code == 200, r.text
+    assert len(mock_send_sms) == 1
+    assert mock_send_sms[0]["to_number"] == expected_e164
+
+
 def test_greeting_renders_real_clock_not_blank(
     compat_client, compat_headers, sms_messaging_enabled, mock_send_sms, make_published_agent
 ):
@@ -200,3 +216,61 @@ def test_greeting_renders_real_clock_not_blank(
     assert body.startswith("The time is "), body  # greeting propagated
     assert "{{" not in body  # the token was substituted
     assert any(ch.isdigit() for ch in body), body  # a real clock value, not blank
+
+
+def _stored_from_number(dsn: str, session_id: str) -> str:
+    async def _run() -> str:
+        engine = create_async_engine(dsn, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                return (
+                    await conn.execute(
+                        sa_text("SELECT from_number FROM chat_sessions WHERE id = :i"),
+                        {"i": session_id},
+                    )
+                ).scalar_one()
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
+def test_from_number_normalized_to_e164_at_create(
+    compat_client, compat_headers, web_agent_id, mock_send_sms, async_database_url
+):
+    """from_number is normalized to E.164 in the stored row, so the inbound matcher
+    (find_open_sms_chat, comparing from_number == to_e164(inbound.to_number)) matches even
+    when TELNYX_FROM_NUMBER is configured non-strict-E.164. Symmetric with the to_number fix.
+    Asserted on the stored row (send_sms uses settings.telnyx_from_number, not body)."""
+    from starlette.routing import Mount
+
+    from usan_api.compat import ids
+    from usan_api.settings import Settings
+
+    national = "1 (555) 000-0000"  # 11 digits starting with 1 -> "+15550000000"
+    compat_app = next(r.app for r in compat_client.app.routes if isinstance(r, Mount))
+    base = get_settings()
+
+    def _override() -> Settings:
+        return base.model_copy(
+            update={
+                "telnyx_messaging_enabled": True,
+                "telnyx_messaging_api_key": SecretStr("test-key"),
+                "telnyx_messaging_profile_id": "test-profile",
+                "telnyx_from_number": national,
+            }
+        )
+
+    compat_app.dependency_overrides[get_settings] = _override
+    try:
+        r = _create_sms(
+            compat_client, compat_headers, from_number=national, override_agent_id=web_agent_id
+        )
+        assert r.status_code == 200, r.text
+        chat_id = r.json()["chat_id"]
+    finally:
+        compat_app.dependency_overrides.pop(get_settings, None)
+
+    assert (
+        _stored_from_number(async_database_url, str(ids.decode_chat_id(chat_id))) == "+15550000000"
+    )

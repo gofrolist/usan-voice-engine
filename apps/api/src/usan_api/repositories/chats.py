@@ -53,6 +53,28 @@ async def lock_session(db: AsyncSession, session_id: uuid.UUID) -> ChatSession |
     return session
 
 
+async def find_open_sms_chat(
+    db: AsyncSession, *, our_number: str, recipient: str
+) -> ChatSession | None:
+    """The open sms_chat for an inbound reply: our number is the row's from_number and the
+    sender (recipient of the original outbound) is its to_number. RLS scopes to the default
+    org. FOR UPDATE serializes concurrent inbound turns; newest-started wins on ties."""
+    stmt = (
+        select(ChatSession)
+        .where(
+            ChatSession.chat_type == "sms_chat",
+            ChatSession.from_number == our_number,
+            ChatSession.to_number == recipient,
+            ChatSession.status == ChatStatus.ONGOING,
+            ChatSession.archived_at.is_(None),
+        )
+        .order_by(ChatSession.started_at.desc(), ChatSession.id.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    return (await db.execute(stmt)).scalars().first()
+
+
 async def next_seq(db: AsyncSession, session_id: uuid.UUID) -> int:
     stmt = select(func.coalesce(func.max(ChatMessage.seq), 0) + 1).where(
         ChatMessage.chat_session_id == session_id
@@ -61,9 +83,21 @@ async def next_seq(db: AsyncSession, session_id: uuid.UUID) -> int:
 
 
 async def add_message(
-    db: AsyncSession, *, session_id: uuid.UUID, seq: int, role: str, content: str
+    db: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    seq: int,
+    role: str,
+    content: str,
+    provider_message_id: str | None = None,
 ) -> ChatMessage:
-    message = ChatMessage(chat_session_id=session_id, seq=seq, role=role, content=content)
+    message = ChatMessage(
+        chat_session_id=session_id,
+        seq=seq,
+        role=role,
+        content=content,
+        provider_message_id=provider_message_id,
+    )
     db.add(message)
     return message
 

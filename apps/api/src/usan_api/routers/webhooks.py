@@ -6,6 +6,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import livekit_webhooks, notifications, telnyx_inbound
+from usan_api.compat import sms_reply
 from usan_api.db.session import get_db
 from usan_api.observability.custom_metrics import WEBHOOKS_TOTAL
 from usan_api.phone import to_e164
@@ -138,6 +139,9 @@ async def telnyx_webhook(
     if telnyx_inbound.is_opt_out_keyword(inbound.text):
         await _route_inbound_opt_out(db, inbound)
         WEBHOOKS_TOTAL.labels(type="telnyx_sms", outcome="opt_out").inc()
+        return {"ok": True}
+    if await sms_reply.handle_inbound_sms_reply(db, settings, inbound):
+        # The reply engine owns the message (and increments its own metric).
         return {"ok": True}
     await _route_inbound_family_task(db, inbound)
     WEBHOOKS_TOTAL.labels(type="telnyx_sms", outcome="ok").inc()

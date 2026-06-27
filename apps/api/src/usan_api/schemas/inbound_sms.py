@@ -19,6 +19,7 @@ class InboundSms(BaseModel):
 
     message_id: str  # Telnyx message id — the idempotency key
     from_number: str  # E.164 sender; matched against family_contacts.phone_e164
+    to_number: str = ""  # E.164 recipient (our number); 4b-2 session matching. "" when absent.
     text: str
     event_type: str
 
@@ -39,12 +40,19 @@ def parse_inbound_sms(payload: dict[str, Any]) -> InboundSms | None:
     message_id = inner.get("id") or data.get("id") or ""
     sender = inner.get("from")
     from_number = sender.get("phone_number", "") if isinstance(sender, dict) else ""
+    recipient = inner.get("to")
+    to_number = (
+        recipient[0].get("phone_number", "")
+        if isinstance(recipient, list) and recipient and isinstance(recipient[0], dict)
+        else ""
+    )
     text = inner.get("text") or ""
     if event_type != "message.received" or not message_id or not from_number:
         return None
     return InboundSms(
         message_id=str(message_id),
         from_number=str(from_number),
+        to_number=str(to_number),
         text=str(text)[:_MAX_SMS_TEXT_CHARS],
         event_type=event_type,
     )
