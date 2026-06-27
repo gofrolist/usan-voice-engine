@@ -19,6 +19,8 @@ from usan_api.compat.errors import CompatError
 _AGENT_PREFIX = "agent_"
 _LLM_PREFIX = "llm_"
 _BATCH_PREFIX = "batch_call_"
+_CHAT_PREFIX = "chat_"
+_MESSAGE_PREFIX = "message_"
 
 
 def encode_call_id(call_id: uuid.UUID) -> str:
@@ -51,6 +53,18 @@ def encode_batch_id(batch_id: uuid.UUID) -> str:
 
 def decode_batch_id(token: str) -> uuid.UUID:
     return _decode_hex(token, prefix=_BATCH_PREFIX, kind="batch_call_id")
+
+
+def encode_chat_id(chat_id: uuid.UUID) -> str:
+    return _CHAT_PREFIX + chat_id.hex
+
+
+def decode_chat_id(token: str) -> uuid.UUID:
+    return _decode_hex(token, prefix=_CHAT_PREFIX, kind="chat_id")
+
+
+def encode_message_id(message_id: uuid.UUID) -> str:
+    return _MESSAGE_PREFIX + message_id.hex
 
 
 def encode_phone_number_cursor(created_at: datetime, pid: uuid.UUID) -> str:
