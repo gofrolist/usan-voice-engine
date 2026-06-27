@@ -154,6 +154,11 @@ class Settings(BaseSettings):
     )
     telnyx_from_number: str | None = Field(default=None, alias="TELNYX_FROM_NUMBER")
     telnyx_messaging_enabled: bool = Field(default=False, alias="TELNYX_MESSAGING_ENABLED")
+    # Phase 4b-2: gate the inbound two-way SMS auto-reply engine independently of the
+    # outbound send flag, so it can be staged/rolled-back on its own. Default FALSE.
+    telnyx_inbound_sms_reply_enabled: bool = Field(
+        default=False, alias="TELNYX_INBOUND_SMS_REPLY_ENABLED"
+    )
     telnyx_messaging_api_url: str = Field(
         default="https://api.telnyx.com/v2", alias="TELNYX_MESSAGING_API_URL"
     )
