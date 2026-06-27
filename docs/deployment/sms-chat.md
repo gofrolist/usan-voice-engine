@@ -58,8 +58,9 @@ and records no reply.
 
 - Telnyx delivers inbound SMS as a signed POST to the webhook endpoint.
 - The engine looks up an open `sms_chat` session by `(our_number, recipient)`. If none is
-  found, the message is dropped with outcome `sms_reply_unconfigured` (unknown-recipient
-  auto-create is deferred to Phase 4b-3).
+  found, the engine takes no action and the message falls through to the existing inbound-SMS
+  routing (opt-out keywords / family-task intake) — no SMS reply is generated and no
+  `sms_reply_*` metric is emitted (unknown-recipient auto-create is deferred to Phase 4b-3).
 - Duplicate `provider_message_id` values are ignored (`sms_reply_dedup`).
 - A Vertex reply is generated via the session's agent configuration and sent back via
   `telnyx_messaging.send_sms`. The reply is persisted as a `role='agent'` `chat_messages` row.
@@ -76,12 +77,13 @@ via the `WEBHOOKS_TOTAL` Prometheus counter (`type="telnyx_sms"`):
 |-----------------------|------------------------------------------------------|
 | `sms_reply`           | Inbound message matched a session; reply sent        |
 | `sms_reply_dedup`     | Duplicate `provider_message_id`; message ignored     |
-| `sms_reply_unconfigured` | No open session found for `(our_number, recipient)` |
+| `sms_reply_unconfigured` | Session matched, but messaging/Vertex not configured; no reply sent |
 | `sms_reply_failed`    | Reply generation or send raised an exception         |
 
 ### Caveats / deferred
 
 - **Unknown-recipient auto-create:** if no open session exists for the inbound `(our_number,
-  recipient)` pair, the message is silently dropped. Auto-creating a new session on first
-  inbound is deferred to Phase 4b-3.
+  recipient)` pair, the SMS reply engine takes no action (the message still flows through the
+  existing opt-out / family-task routing). Auto-creating a new session on first inbound is
+  deferred to Phase 4b-3.
 - Multi-tenant inbound routing (matching by org) is deferred.

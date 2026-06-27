@@ -126,8 +126,11 @@ async def create_sms_chat(
     greeting = substitute(cfg.prompts.greeting, values)
     packed = pack_dynamic_vars(body.retell_llm_dynamic_variables, body.metadata)
     # 5) persist session + greeting, send via Telnyx; ANY failure rolls back the whole txn
-    # Normalize once so both the stored row and the send target are consistent E.164,
-    # ensuring the inbound matcher (find_open_sms_chat) can match by to_e164(from_number).
+    # Normalize BOTH numbers to E.164 so the stored row matches what the inbound matcher
+    # (find_open_sms_chat) compares against — it normalizes the inbound from/to via to_e164.
+    # from_number must equal the provisioned sender (validated above); normalizing it too
+    # keeps matching correct even if TELNYX_FROM_NUMBER is configured non-strict-E.164.
+    from_number = to_e164(body.from_number) or body.from_number
     to_number = to_e164(body.to_number) or body.to_number
     try:
         session = await chats_repo.add_session(
@@ -136,7 +139,7 @@ async def create_sms_chat(
             agent_version=profile.published_version,
             dynamic_vars=packed,
             chat_type="sms_chat",
-            from_number=body.from_number,
+            from_number=from_number,
             to_number=to_number,
         )
         await db.flush()
