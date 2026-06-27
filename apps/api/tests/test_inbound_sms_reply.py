@@ -215,3 +215,44 @@ async def test_stop_keyword_still_opts_out_not_replies(
     r = _post(client, signer, _envelope("m5", "STOP", sender=_RECIP, recipient=_OUR))
     assert r.status_code == 200, r.text
     assert recorded_sms == []  # opt-out wins; no chat reply
+
+
+@pytest.fixture
+def unconfigured_signer(monkeypatch):
+    """Like `signer` but without GCP_PROJECT — engine is matched but cannot reply."""
+    priv = Ed25519PrivateKey.generate()
+    pub_b64 = base64.b64encode(
+        priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    ).decode()
+    monkeypatch.setenv("TELNYX_INBOUND_PUBLIC_KEY", pub_b64)
+    monkeypatch.setenv("TELNYX_INBOUND_SMS_REPLY_ENABLED", "true")
+    monkeypatch.setenv("TELNYX_MESSAGING_ENABLED", "true")
+    monkeypatch.setenv("TELNYX_MESSAGING_API_KEY", "test-key")
+    monkeypatch.setenv("TELNYX_MESSAGING_PROFILE_ID", "test-profile")
+    monkeypatch.setenv("TELNYX_FROM_NUMBER", _OUR)
+    monkeypatch.delenv("GCP_PROJECT", raising=False)  # leaves settings.gcp_project = None
+    get_settings.cache_clear()
+
+    def _sign(raw: bytes, ts: str) -> str:
+        return base64.b64encode(priv.sign(f"{ts}|".encode() + raw)).decode()
+
+    return _sign
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_engine_returns_true_before_write(
+    client, unconfigured_signer, recorded_sms, session_factory
+):
+    """Matched session but engine unconfigured (no GCP_PROJECT): must return 200, send nothing,
+    and persist no inbound or agent rows — the early-return branch before any write."""
+    msg_id = "m_uncfg"
+    sid = await _seed_open_sms_chat(session_factory)
+    raw = _envelope(msg_id, "hello", sender=_RECIP, recipient=_OUR)
+    r = _post(client, unconfigured_signer, raw)
+    assert r.status_code == 200, r.text
+    assert recorded_sms == []  # no send occurred
+    msgs = await _messages(session_factory, sid)
+    # no inbound row persisted
+    assert all(m.provider_message_id != msg_id for m in msgs)
+    # no agent reply persisted
+    assert all(m.role != "agent" for m in msgs)

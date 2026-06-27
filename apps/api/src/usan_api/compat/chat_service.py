@@ -32,6 +32,7 @@ from usan_api.compat.serialization import (
 )
 from usan_api.db.base import ChatStatus
 from usan_api.db.models import ChatMessage, ChatSession
+from usan_api.phone import to_e164
 from usan_api.prompt_substitution import build_vars, substitute
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import chats as chats_repo
@@ -125,6 +126,9 @@ async def create_sms_chat(
     greeting = substitute(cfg.prompts.greeting, values)
     packed = pack_dynamic_vars(body.retell_llm_dynamic_variables, body.metadata)
     # 5) persist session + greeting, send via Telnyx; ANY failure rolls back the whole txn
+    # Normalize once so both the stored row and the send target are consistent E.164,
+    # ensuring the inbound matcher (find_open_sms_chat) can match by to_e164(from_number).
+    to_number = to_e164(body.to_number) or body.to_number
     try:
         session = await chats_repo.add_session(
             db,
@@ -133,7 +137,7 @@ async def create_sms_chat(
             dynamic_vars=packed,
             chat_type="sms_chat",
             from_number=body.from_number,
-            to_number=body.to_number,
+            to_number=to_number,
         )
         await db.flush()
         seq = await chats_repo.next_seq(db, session.id)
@@ -141,7 +145,7 @@ async def create_sms_chat(
             db, session_id=session.id, seq=seq, role="agent", content=greeting
         )
         await db.flush()
-        await telnyx_messaging.send_sms(settings, to_number=body.to_number, body=greeting)
+        await telnyx_messaging.send_sms(settings, to_number=to_number, body=greeting)
     except CompatError:
         raise
     except Exception as exc:
@@ -232,7 +236,7 @@ async def create_chat_completion(
         logger.bind(err=type(exc).__name__).error("chat completion failed")
         raise CompatError(502, "chat completion failed") from None
 
-    # 8) persist the agent turn, commit, return ONLY the new agent message(s)
+    # 6) persist the agent turn, commit, return ONLY the new agent message(s)
     agent_seq = await chats_repo.next_seq(db, session.id)
     agent_msg = await chats_repo.add_message(
         db, session_id=session.id, seq=agent_seq, role="agent", content=turn_text

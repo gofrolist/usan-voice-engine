@@ -187,6 +187,22 @@ def test_completion_rejects_sms_chat(
     assert r.status_code == 422, r.text
 
 
+def test_to_number_normalized_to_e164_at_create(
+    compat_client, compat_headers, web_agent_id, sms_messaging_enabled, mock_send_sms
+):
+    """to_number with punctuation/spaces is normalized to E.164 before both the Telnyx send
+    and the stored row, so the inbound matcher (find_open_sms_chat) can match by to_e164."""
+    # "1 (555) 123-4567" -> 11 digits starting with 1 -> "+15551234567"
+    non_e164 = "1 (555) 123-4567"
+    expected_e164 = "+15551234567"
+    r = _create_sms(
+        compat_client, compat_headers, override_agent_id=web_agent_id, to_number=non_e164
+    )
+    assert r.status_code == 200, r.text
+    assert len(mock_send_sms) == 1
+    assert mock_send_sms[0]["to_number"] == expected_e164
+
+
 def test_greeting_renders_real_clock_not_blank(
     compat_client, compat_headers, sms_messaging_enabled, mock_send_sms, make_published_agent
 ):
