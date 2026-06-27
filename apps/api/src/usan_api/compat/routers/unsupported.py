@@ -42,8 +42,6 @@ _UNSUPPORTED: tuple[tuple[str, str], ...] = (
     ("GET", "/list-knowledge-bases"),
     ("POST", "/add-knowledge-base-sources/{knowledge_base_id}"),
     ("DELETE", "/delete-knowledge-base-source/{knowledge_base_id}/source/{source_id}"),
-    # --- Chat ---
-    ("POST", "/create-sms-chat"),
     # --- Chat agent ---
     ("POST", "/create-chat-agent"),
     ("GET", "/list-chat-agents"),

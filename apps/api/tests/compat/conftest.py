@@ -204,3 +204,47 @@ def gcp_project_unset(compat_client: TestClient):
     compat_app.dependency_overrides[_get_settings] = _override
     yield
     compat_app.dependency_overrides.pop(_get_settings, None)
+
+
+_SMS_FROM = "+15550000000"
+
+
+@pytest.fixture
+def sms_messaging_enabled(compat_client):
+    """Override get_settings on the mounted compat sub-app so SMS sending is 'configured'.
+    Yields the provisioned sender number tests must use as from_number."""
+    from pydantic import SecretStr
+
+    from usan_api.settings import get_settings as _get_settings
+
+    compat_app = _get_compat_app(compat_client)
+    base = _get_settings()
+
+    def _override() -> Settings:
+        return base.model_copy(
+            update={
+                "telnyx_messaging_enabled": True,
+                "telnyx_messaging_api_key": SecretStr("test-key"),
+                "telnyx_messaging_profile_id": "test-profile",
+                "telnyx_from_number": _SMS_FROM,
+            }
+        )
+
+    compat_app.dependency_overrides[_get_settings] = _override
+    yield _SMS_FROM
+    compat_app.dependency_overrides.pop(_get_settings, None)
+
+
+@pytest.fixture
+def mock_send_sms(monkeypatch):
+    """Patch telnyx_messaging.send_sms (where create_sms_chat looks it up). Records calls."""
+    from usan_api import telnyx_messaging
+
+    calls: list[dict[str, str]] = []
+
+    async def _fake(settings, *, to_number: str, body: str) -> str:
+        calls.append({"to_number": to_number, "body": body})
+        return "msg-test-123"
+
+    monkeypatch.setattr(telnyx_messaging, "send_sms", _fake)
+    return calls
