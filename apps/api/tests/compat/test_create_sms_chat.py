@@ -170,3 +170,18 @@ def test_502_on_send_failure_rolls_back(
     listed = compat_client.post("/v3/list-chats", json={}, headers=compat_headers)
     assert listed.status_code == 200, listed.text
     assert listed.json()["items"] == []
+
+
+def test_completion_rejects_sms_chat(
+    compat_client, compat_headers, web_agent_id, sms_messaging_enabled, mock_send_sms
+):
+    created = _create_sms(compat_client, compat_headers, override_agent_id=web_agent_id)
+    assert created.status_code == 200, created.text
+    chat_id = created.json()["chat_id"]
+
+    r = compat_client.post(
+        "/create-chat-completion",
+        json={"chat_id": chat_id, "content": "hi"},
+        headers=compat_headers,
+    )
+    assert r.status_code == 422, r.text

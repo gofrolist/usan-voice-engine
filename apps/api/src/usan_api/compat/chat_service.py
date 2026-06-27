@@ -172,6 +172,10 @@ async def create_chat_completion(
     session = await chats_repo.lock_session(db, ids.decode_chat_id(body.chat_id))
     if session is None:
         raise CompatError(404, "chat not found")
+    # reject api_chat-style synchronous completion on an sms_chat (SMS replies are
+    # webhook-driven; never injected through this endpoint). 4b-2 will drive sms replies.
+    if session.chat_type == "sms_chat":
+        raise CompatError(422, "cannot complete an sms chat")
     # 2) gate on status
     if session.status is not ChatStatus.ONGOING:
         raise CompatError(422, "chat is not ongoing")
