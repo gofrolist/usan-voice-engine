@@ -43,6 +43,18 @@ def _reject_reserved(vars_: dict[str, str] | None) -> None:
         raise CompatError(422, "retell_llm_dynamic_variables keys must not start with '__meta'")
 
 
+def _sms_send_ready(settings: Settings) -> bool:
+    """True iff outbound SMS can be sent: the feature flag is on and the three Telnyx
+    messaging secrets are present. The 503 gate in create_sms_chat checks this before any
+    write (send_sms itself would otherwise raise after a row was already written)."""
+    return bool(
+        settings.telnyx_messaging_enabled
+        and settings.telnyx_messaging_api_key
+        and settings.telnyx_messaging_profile_id
+        and settings.telnyx_from_number
+    )
+
+
 async def create_chat(db: AsyncSession, body: CreateChatRequest) -> ChatSession:
     profile_id = ids.decode_agent_id(body.agent_id)
     if not await agent_profiles_repo.is_live_profile(db, profile_id):

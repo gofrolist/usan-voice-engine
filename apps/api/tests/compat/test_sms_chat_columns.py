@@ -62,3 +62,35 @@ def test_migration_0043_revision_header() -> None:
     spec.loader.exec_module(mod)
     assert mod.revision == "0043"
     assert mod.down_revision == "0042"
+
+
+@pytest.mark.asyncio
+async def test_add_session_sets_chat_type_and_numbers(app_session) -> None:
+    from usan_api.repositories import chats as chats_repo
+
+    org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
+    await set_tenant_context(app_session, org_id)
+    profile = await _seed_agent_profile(app_session)
+
+    s = await chats_repo.add_session(
+        app_session,
+        agent_profile_id=profile.id,
+        agent_version=1,
+        dynamic_vars={},
+        chat_type="sms_chat",
+        from_number="+15550001111",
+        to_number="+15550002222",
+    )
+    await app_session.flush()
+    assert s.chat_type == "sms_chat"
+    assert s.from_number == "+15550001111"
+    assert s.to_number == "+15550002222"
+
+    d = await chats_repo.add_session(
+        app_session, agent_profile_id=profile.id, agent_version=1, dynamic_vars={}
+    )
+    await app_session.flush()
+    assert d.chat_type == "api_chat"
+    assert d.from_number is None
+    assert d.to_number is None
+    await app_session.rollback()
