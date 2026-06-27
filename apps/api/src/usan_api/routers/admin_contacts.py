@@ -58,6 +58,12 @@ async def assign_profile(
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ContactSummary:
+    if body.agent_profile_id is not None:
+        target = await profiles_repo.get_profile(db, body.agent_profile_id)
+        if target is not None and target.channel != "voice":
+            raise HTTPException(
+                status_code=422, detail="agent_profile_id must reference a voice agent"
+            )
     try:
         contact = await contacts_repo.assign_profile(db, contact_id, body.agent_profile_id)
         if contact is None:

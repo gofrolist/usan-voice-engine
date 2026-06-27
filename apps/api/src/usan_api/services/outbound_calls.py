@@ -32,7 +32,7 @@ OVERRIDE_ERROR = "profile_override must reference an active profile with a publi
 
 async def require_live_override(db: AsyncSession, profile_id: uuid.UUID) -> None:
     """422 unless the override would actually take effect (ACTIVE + published)."""
-    if not await agent_profiles_repo.is_live_profile(db, profile_id):
+    if not await agent_profiles_repo.is_live_profile(db, profile_id, channel="voice"):
         raise HTTPException(status_code=422, detail=OVERRIDE_ERROR)
 
 

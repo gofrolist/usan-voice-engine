@@ -167,7 +167,7 @@ async def _validate_tasks(db: AsyncSession, body: CreateBatchCallRequest) -> lis
             except CompatError:
                 errors.append(f"task[{index}]: invalid override_agent_id")
                 continue
-            if not await agent_profiles_repo.is_live_profile(db, override_id):
+            if not await agent_profiles_repo.is_live_profile(db, override_id, channel="voice"):
                 errors.append(f"task[{index}]: override_agent_id must reference a published agent")
                 continue
         packed = pack_dynamic_vars(task.retell_llm_dynamic_variables, task.metadata)

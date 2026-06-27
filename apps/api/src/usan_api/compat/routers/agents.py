@@ -82,7 +82,7 @@ async def list_agents(
     """A BARE array (not wrapped) — the single agent inventory (admin-UI + API agents).
     Keyset cursor over agent_id; the params are accepted for contract compatibility and the
     profile list is bounded by ``limit``."""
-    profiles = await agent_bridge.list_agent_profiles(db)
+    profiles = await agent_bridge.list_agent_profiles(db, channel="voice")
     # Deterministic total order (name, id): list_profiles orders by name; the id tiebreaker
     # makes the keyset exact even across equal names. The cursor must walk THIS order —
     # comparing raw UUIDs (p.id > after) slices an order unrelated to the sort, silently
@@ -198,7 +198,7 @@ async def list_agents_v2(
     Keyset pagination is not yet implemented; all non-archived agents are returned in a
     single page (has_more=false, pagination_key omitted via exclude_none).
     """
-    profiles = await agent_bridge.list_agent_profiles(db)
+    profiles = await agent_bridge.list_agent_profiles(db, channel="voice")
 
     # Apply filter_criteria if provided.
     fc = body.filter_criteria

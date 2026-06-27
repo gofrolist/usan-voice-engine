@@ -146,7 +146,7 @@ async def create_compat_call(
     contact = await upsert_contact_for_number(db, settings, phone, body.metadata)
 
     if profile_override is not None and not await agent_profiles_repo.is_live_profile(
-        db, profile_override
+        db, profile_override, channel="voice"
     ):
         raise CompatError(422, "override_agent_id must reference a published agent")
 
@@ -155,7 +155,9 @@ async def create_compat_call(
     # would emit a null-agent (non-conformant) call. Refuse early with 422.
     if profile_override is None:
         default = await agent_profiles_repo.get_default_profile(db, "outbound")
-        if default is None or not await agent_profiles_repo.is_live_profile(db, default.id):
+        if default is None or not await agent_profiles_repo.is_live_profile(
+            db, default.id, channel="voice"
+        ):
             raise CompatError(422, "no published agent profile available to place the call")
 
     # Create-time quiet-hours gate -> EXPLICIT 400 (the native path only checks at dial time).
@@ -210,7 +212,7 @@ async def register_compat_call(
     row is structurally excluded from auto-dial.
     """
     profile_id = decode_agent_id(body.agent_id)
-    if not await agent_profiles_repo.is_live_profile(db, profile_id):
+    if not await agent_profiles_repo.is_live_profile(db, profile_id, channel="voice"):
         raise CompatError(422, "agent_id must reference a published agent")
 
     packed = pack_dynamic_vars(body.retell_llm_dynamic_variables, body.metadata)
@@ -252,7 +254,7 @@ async def create_web_call(
     resolved + gated exactly like register-phone-call (agent_id required + published).
     """
     profile_id = decode_agent_id(body.agent_id)
-    if not await agent_profiles_repo.is_live_profile(db, profile_id):
+    if not await agent_profiles_repo.is_live_profile(db, profile_id, channel="voice"):
         raise CompatError(422, "agent_id must reference a published agent")
     if any(
         str(k).startswith(RESERVED_VAR_PREFIX) for k in (body.retell_llm_dynamic_variables or {})

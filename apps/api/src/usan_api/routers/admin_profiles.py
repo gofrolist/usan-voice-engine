@@ -43,7 +43,7 @@ router = APIRouter(
 
 @router.get("", response_model=list[ProfileSummary])
 async def list_profiles(db: AsyncSession = Depends(get_tenant_db)) -> list[ProfileSummary]:
-    profiles = await repo.list_profiles(db)
+    profiles = await repo.list_profiles(db, channel="voice")
     # Two set-based queries instead of the old 1 + 2N fan-out: one grouped count of
     # assigned contacts, one composite-key batch load of live published versions.
     counts = await repo.count_assigned_contacts_bulk(db, [p.id for p in profiles])

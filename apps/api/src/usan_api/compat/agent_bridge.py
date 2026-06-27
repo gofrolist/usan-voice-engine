@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import copy
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -121,9 +121,16 @@ def _provisional_llm_name() -> str:
 
 
 # --- profile loading -------------------------------------------------------------------
-async def _load_active(db: AsyncSession, profile_id: uuid.UUID, *, kind: str) -> AgentProfile:
+async def _load_active(
+    db: AsyncSession, profile_id: uuid.UUID, *, kind: str, expected_channel: str | None = None
+) -> AgentProfile:
     profile = await agent_profiles_repo.get_profile(db, profile_id)
     if profile is None or profile.status == ProfileStatus.ARCHIVED:
+        raise CompatError(404, f"{kind} not found")
+    # Cross-resource guard: agent_id/llm_id are two views of one UUID, so a chat row's id
+    # re-prefixed as agent_<uuid> would otherwise resolve here. Agent ops pass 'voice'; chat
+    # ops pass 'chat'; retell-llm ops pass None (an LLM is channel-agnostic shared infra).
+    if expected_channel is not None and profile.channel != expected_channel:
         raise CompatError(404, f"{kind} not found")
     return profile
 
@@ -214,6 +221,7 @@ async def bind_agent(
     )
     if updated is None:  # pragma: no cover - loaded active above
         raise CompatError(404, "response engine not found")
+    updated.channel = "voice"  # a bound voice agent is always channel='voice' (re-stamps a re-bind)
     if body.agent_name:
         # The pending rename is flushed (and the uniqueness constraint checked) by publish().
         updated.name = await _unique_name(db, body.agent_name, exclude_id=updated.id)
@@ -225,7 +233,9 @@ async def bind_agent(
 async def update_agent(
     db: AsyncSession, settings: Settings, agent_id: str, body: UpdateAgentRequest
 ) -> tuple[AgentProfile, str | None]:
-    profile = await _load_active(db, ids.decode_agent_id(agent_id), kind="agent")
+    profile = await _load_active(
+        db, ids.decode_agent_id(agent_id), kind="agent", expected_channel="voice"
+    )
     config = _config_dict(profile)
     if body.voice_id is not None:
         _apply_voice_overlay(config, cartesia_voice_id=voice_map.resolve_voice_id(body.voice_id))
@@ -274,7 +284,9 @@ async def publish_agent_version(
     """Publish the current draft as a new version. The requested body.version is advisory;
     native publish auto-assigns the next number — FROZEN (oracle): pinned by
     test_publish_returns_server_authoritative_version."""
-    profile = await _load_active(db, ids.decode_agent_id(agent_id), kind="agent")
+    profile = await _load_active(
+        db, ids.decode_agent_id(agent_id), kind="agent", expected_channel="voice"
+    )
     note = body.version_title or "compat publish-agent-version"
     version = await agent_profiles_repo.publish(db, profile.id, note=note, actor_email=_ACTOR)
     if version is None:  # pragma: no cover
@@ -291,7 +303,9 @@ async def delete_agent_version(db: AsyncSession, agent_id: str, version: int) ->
     AgentProfileVersion rows have no archived flag — hard delete is appropriate for
     historical version rows. The caller must not delete the currently-live version.
     """
-    profile = await _load_active(db, ids.decode_agent_id(agent_id), kind="agent")
+    profile = await _load_active(
+        db, ids.decode_agent_id(agent_id), kind="agent", expected_channel="voice"
+    )
     if profile.published_version == version:
         raise CompatError(409, "cannot delete the currently published version")
     removed = await agent_profiles_repo.delete_version(db, profile.id, version)
@@ -303,7 +317,9 @@ async def delete_agent_version(db: AsyncSession, agent_id: str, version: int) ->
 async def delete_agent(db: AsyncSession, agent_id: str) -> None:
     """RetellAI delete == archive: the agent leaves the API view (get/list 404/omit) while the
     config is retained for audit. Hard delete is intentionally not exposed."""
-    profile = await _load_active(db, ids.decode_agent_id(agent_id), kind="agent")
+    profile = await _load_active(
+        db, ids.decode_agent_id(agent_id), kind="agent", expected_channel="voice"
+    )
     try:
         archived = await agent_profiles_repo.archive_profile(db, profile.id)
     except ProfileInUseError as exc:
@@ -315,16 +331,21 @@ async def delete_agent(db: AsyncSession, agent_id: str) -> None:
 
 # --- reads -----------------------------------------------------------------------------
 async def get_agent_profile(db: AsyncSession, agent_id: str) -> AgentProfile:
-    return await _load_active(db, ids.decode_agent_id(agent_id), kind="agent")
+    return await _load_active(
+        db, ids.decode_agent_id(agent_id), kind="agent", expected_channel="voice"
+    )
 
 
 async def get_llm_profile(db: AsyncSession, llm_id: str) -> AgentProfile:
     return await _load_active(db, ids.decode_llm_id(llm_id), kind="response engine")
 
 
-async def list_agent_profiles(db: AsyncSession) -> list[AgentProfile]:
-    """The single agent inventory (admin-UI + API agents); archived (deleted) are excluded."""
-    profiles = await agent_profiles_repo.list_profiles(db)
+async def list_agent_profiles(
+    db: AsyncSession, *, channel: Literal["voice", "chat"] | None = None
+) -> list[AgentProfile]:
+    """The single agent inventory; archived (deleted) are excluded. ``channel`` filters voice vs
+    chat (None = all, used by the channel-agnostic retell-llm list)."""
+    profiles = await agent_profiles_repo.list_profiles(db, channel=channel)
     return [p for p in profiles if p.status != ProfileStatus.ARCHIVED]
 
 
@@ -332,7 +353,9 @@ async def list_agent_versions(
     db: AsyncSession, agent_id: str
 ) -> tuple[AgentProfile, list[AgentProfileVersion]]:
     """Return (profile, versions) so the router can re-use the profile for serialization."""
-    profile = await _load_active(db, ids.decode_agent_id(agent_id), kind="agent")
+    profile = await _load_active(
+        db, ids.decode_agent_id(agent_id), kind="agent", expected_channel="voice"
+    )
     versions = await agent_profiles_repo.list_versions(db, profile.id)
     return profile, versions
 
