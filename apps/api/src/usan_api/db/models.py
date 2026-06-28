@@ -494,6 +494,10 @@ class AgentProfile(Base, TenantScoped):
         nullable=False,
         server_default=ProfileStatus.ACTIVE.value,
     )
+    # Discriminates voice agents (default) from chat agents (Phase 4c-1). A chat agent is an
+    # agent_profiles row with channel='chat'; voice/admin/call-plane readers filter to 'voice'
+    # so chat rows never leak into the voice surfaces or the call plane.
+    channel: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'voice'"))
     draft_config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     # The live version number (joins agent_profile_versions on (id, version));
     # NULL means the profile has never been published.

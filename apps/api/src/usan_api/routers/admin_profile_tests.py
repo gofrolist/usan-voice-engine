@@ -81,6 +81,8 @@ async def _resolve_draft_config(
     profile = await repo.get_profile(db, profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
+    if profile.channel != "voice":
+        raise HTTPException(status_code=404, detail="profile not found")
     return AgentConfig.model_validate(profile.draft_config)
 
 

@@ -42,14 +42,6 @@ _UNSUPPORTED: tuple[tuple[str, str], ...] = (
     ("GET", "/list-knowledge-bases"),
     ("POST", "/add-knowledge-base-sources/{knowledge_base_id}"),
     ("DELETE", "/delete-knowledge-base-source/{knowledge_base_id}/source/{source_id}"),
-    # --- Chat agent ---
-    ("POST", "/create-chat-agent"),
-    ("GET", "/list-chat-agents"),
-    ("GET", "/get-chat-agent/{agent_id}"),
-    ("GET", "/get-chat-agent-versions/{agent_id}"),
-    ("PATCH", "/update-chat-agent/{agent_id}"),
-    ("DELETE", "/delete-chat-agent/{agent_id}"),
-    ("POST", "/publish-chat-agent/{agent_id}"),
     # --- Voice authoring (add / clone / search) — distinct from read-only catalog ---
     ("POST", "/add-community-voice"),
     ("POST", "/clone-voice"),

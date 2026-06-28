@@ -49,6 +49,8 @@ async def create_profile(
         source = await db.get(AgentProfile, clone_from)
         if source is None:
             raise CloneSourceNotFoundError(str(clone_from))
+        if source.channel != "voice":
+            raise CloneSourceNotFoundError(str(clone_from))
         draft = source.draft_config
     else:
         draft = DEFAULT_AGENT_CONFIG.model_dump()
@@ -69,8 +71,13 @@ async def get_profile(db: AsyncSession, profile_id: uuid.UUID) -> AgentProfile |
     return await db.get(AgentProfile, profile_id)
 
 
-async def list_profiles(db: AsyncSession) -> list[AgentProfile]:
-    result = await db.execute(select(AgentProfile).order_by(AgentProfile.name))
+async def list_profiles(
+    db: AsyncSession, *, channel: Literal["voice", "chat"] | None = None
+) -> list[AgentProfile]:
+    stmt = select(AgentProfile).order_by(AgentProfile.name)
+    if channel is not None:
+        stmt = stmt.where(AgentProfile.channel == channel)
+    result = await db.execute(stmt)
     return list(result.scalars().all())
 
 
@@ -264,6 +271,8 @@ async def set_default(
         return None
     if profile.status == ProfileStatus.ARCHIVED:
         raise ProfileInUseError("cannot set an archived profile as default")
+    if profile.channel != "voice":
+        raise ProfileInUseError("cannot set a chat agent as a call default")
     column = (
         AgentProfile.is_default_inbound
         if direction == "inbound"
@@ -386,7 +395,11 @@ async def get_default_profile(
         else AgentProfile.is_default_outbound
     )
     result = await db.execute(
-        select(AgentProfile).where(column.is_(True), AgentProfile.status == ProfileStatus.ACTIVE)
+        select(AgentProfile).where(
+            column.is_(True),
+            AgentProfile.status == ProfileStatus.ACTIVE,
+            AgentProfile.channel == "voice",
+        )
     )
     return result.scalar_one_or_none()
 
@@ -406,7 +419,9 @@ async def get_default_holder(
         if direction == "inbound"
         else AgentProfile.is_default_outbound
     )
-    result = await db.execute(select(AgentProfile).where(column.is_(True)))
+    result = await db.execute(
+        select(AgentProfile).where(column.is_(True), AgentProfile.channel == "voice")
+    )
     return result.scalar_one_or_none()
 
 
@@ -427,7 +442,7 @@ async def _resolved_from_profile(
     Returns None (so the caller tries the next precedence tier) when the profile is
     missing, archived, unpublished, or its stored JSON fails validation. Never raises.
     """
-    if profile is None or profile.status != ProfileStatus.ACTIVE:
+    if profile is None or profile.status != ProfileStatus.ACTIVE or profile.channel != "voice":
         return None
     version = await get_published_config(db, profile)
     if version is None:
@@ -567,12 +582,16 @@ async def resolve_call_policy(
     )
 
 
-async def is_live_profile(db: AsyncSession, profile_id: uuid.UUID) -> bool:
-    """True iff the profile exists, is ACTIVE, and has a published version —
-    the precondition for profile_override to actually take effect (spec §4)."""
+async def is_live_profile(
+    db: AsyncSession, profile_id: uuid.UUID, *, channel: Literal["voice", "chat"] | None = None
+) -> bool:
+    """True iff the profile exists, is ACTIVE, has a published version (the precondition for
+    profile_override to take effect, spec §4) and — when ``channel`` is given — matches it, so a
+    chat agent passed as a voice override is rejected."""
     profile = await get_profile(db, profile_id)
     return (
         profile is not None
         and profile.status is ProfileStatus.ACTIVE
         and profile.published_version is not None
+        and (channel is None or profile.channel == channel)
     )

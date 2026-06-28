@@ -94,7 +94,9 @@ async def _validate_all_or_nothing(db: AsyncSession, body: CreateBatchRequest) -
 
     async def _is_live(profile_id: uuid.UUID) -> bool:
         if profile_id not in live:
-            live[profile_id] = await agent_profiles_repo.is_live_profile(db, profile_id)
+            live[profile_id] = await agent_profiles_repo.is_live_profile(
+                db, profile_id, channel="voice"
+            )
         return live[profile_id]
 
     if body.profile_override is not None and not await _is_live(body.profile_override):
