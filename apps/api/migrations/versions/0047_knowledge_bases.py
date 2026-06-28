@@ -1,8 +1,17 @@
-"""knowledge bases: 3 TenantScoped + FORCE-RLS tables + pgvector + cross-org claim fn (Phase 5).
+"""knowledge bases: 3 TenantScoped ENABLE-not-FORCE RLS tables + pgvector + cross-org claim fn.
 
-Owner-DDL: CREATE EXTENSION vector + FORCE RLS + GRANT usan_app + a SECURITY DEFINER claim
-function (the only cross-org primitive — the ingestion poller runs as least-priv usan_app and
-cannot SELECT across orgs). Additive + inert until a v* tag.
+Owner-DDL: CREATE EXTENSION vector + ENABLE (NOT FORCE) RLS + GRANT usan_app + a SECURITY DEFINER
+claim function (the only cross-org primitive — the runtime ingestion poller runs as least-priv
+usan_app and cannot SELECT across orgs).
+
+These 3 tables are DELIBERATELY ENABLE-but-NOT-FORCE RLS — unlike every other tenant table, which
+is FORCE. The claim function runs SECURITY DEFINER as the `usan` owner: under plain ENABLE the
+owner is RLS-EXEMPT (Postgres owner-exemption) and can lease KBs across all orgs; under FORCE the
+owner would also be policy-bound and — since prod Cloud SQL `usan` is NON-superuser with NO
+BYPASSRLS (Cloud SQL cannot grant it) — the cross-org claim would silently scope to the poller's
+default-org baseline and never see other orgs' KBs. usan_app (a non-owner) stays RLS-bound either
+way, so dropping FORCE does NOT weaken tenant isolation for the runtime role. Additive + inert
+until a v* tag.
 
 Revision ID: 0047
 Revises: 0046
@@ -23,8 +32,9 @@ _ORG_DEFAULT_EXPR = "COALESCE(current_setting('app.current_org', true)::uuid, de
 
 
 def _enable_rls(table: str) -> None:
+    # ENABLE but DELIBERATELY NOT FORCE: the SECURITY DEFINER claim fn must run owner-RLS-EXEMPT
+    # (see module docstring). usan_app, a non-owner, stays policy-bound regardless.
     op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
-    op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
     op.execute(
         f"CREATE POLICY tenant_isolation ON {table} "
         f"USING (organization_id = current_setting('app.current_org', true)::uuid) "
@@ -65,6 +75,10 @@ def upgrade() -> None:
         ),
         sa.Column("claimed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("error_detail", sa.Text(), nullable=True),
+        # Bounded-attempts auto-retry counter (see kb_ingestion). 0 until the first failure;
+        # a transient embed failure increments + returns the KB to in_progress for re-claim;
+        # at kb_ingestion_max_attempts the KB is set terminal 'error'.
+        sa.Column("ingestion_attempts", sa.Integer(), server_default=sa.text("0"), nullable=False),
         _ts("created_at"),
         _ts("updated_at"),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"]),
@@ -123,8 +137,10 @@ def upgrade() -> None:
         "USING hnsw (embedding vector_cosine_ops)"
     )
 
-    # Cross-org lease-claim. SECURITY DEFINER (owner) bypasses RLS to see all orgs; returns ids
-    # only (no PHI); explicit search_path (definer hygiene). GRANT EXECUTE to usan_app.
+    # Cross-org lease-claim. Runs as the owner (usan); the 3 KB tables are ENABLE-but-NOT-FORCE RLS,
+    # so the owner is RLS-EXEMPT (Postgres owner-exemption — NOT BYPASSRLS, which Cloud SQL cannot
+    # grant and prod usan lacks). usan_app stays RLS-bound (a non-owner is always policy-subject).
+    # Returns ids only (no PHI); explicit search_path (definer hygiene).
     op.execute(
         """
         CREATE FUNCTION claim_pending_knowledge_bases(p_limit int, p_lease_seconds int)

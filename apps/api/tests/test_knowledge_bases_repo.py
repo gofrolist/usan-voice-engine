@@ -79,6 +79,11 @@ async def test_chunk_vector_roundtrip_and_unchunked(two_orgs, app_session) -> No
 
 @pytest.mark.asyncio
 async def test_cross_org_isolation_and_claim(two_orgs, app_session, async_database_url) -> None:
+    # NOTE: CI's `usan` role is a SUPERUSER, so the claim fn would see all orgs even under FORCE
+    # RLS — this behavioral test therefore CANNOT by itself catch the prod FORCE-RLS claim defect
+    # (prod `usan` is non-superuser, NO BYPASSRLS, so FORCE would silently scope the claim to the
+    # poller's default org). The `relforcerowsecurity=False` assertion in
+    # test_knowledge_bases_migration is the prod-condition regression gate.
     org_a, org_b = two_orgs
     # Seed a pending KB in org B directly (superuser bypasses RLS).
     kb_b = await _seed_kb_for_org(async_database_url, org_b, "kb-b")

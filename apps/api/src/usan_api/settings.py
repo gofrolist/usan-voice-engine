@@ -256,6 +256,10 @@ class Settings(BaseSettings):
     kb_ingestion_poll_interval_s: int = Field(default=15, alias="KB_INGESTION_POLL_INTERVAL_S")
     kb_ingestion_batch_size: int = Field(default=10, alias="KB_INGESTION_BATCH_SIZE")
     kb_ingestion_lease_seconds: int = Field(default=300, alias="KB_INGESTION_LEASE_SECONDS")
+    # Bounded-attempts auto-retry for transient embed failures (429/503/timeout). A failure
+    # returns the KB to in_progress + increments ingestion_attempts (the lease provides backoff
+    # before re-claim); at this many failures the KB is set terminal 'error'.
+    kb_ingestion_max_attempts: int = Field(default=3, alias="KB_INGESTION_MAX_ATTEMPTS")
 
     # --- Clara Care Parity (feature 002): three new poller phases + inbound-SMS
     # verification + Spanish callback. All ship-inert: every new poller defaults OFF,

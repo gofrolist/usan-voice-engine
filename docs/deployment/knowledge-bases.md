@@ -97,8 +97,16 @@ width would need updating.
 ## PHI / security
 
 - Source text (`content`) and chunk text are stored in `knowledge_base_chunks` (RLS,
-  FORCE, `tenant_isolation` policy) — PHI-adjacent but never echoed in API responses.
-- The ingestion poller uses a `SECURITY DEFINER` SQL function (`claim_pending_knowledge_bases`)
+  `tenant_isolation` policy) — PHI-adjacent but never echoed in API responses.
+- **RLS is `ENABLE`-but-NOT-`FORCE` on the 3 KB tables** (deliberately, unlike every other
+  tenant table). The cross-org claim runs `SECURITY DEFINER` as the `usan` owner, and only
+  under plain `ENABLE` is the owner RLS-exempt (Postgres owner-exemption) and able to lease
+  KBs across orgs. Prod Cloud SQL `usan` is non-superuser with NO `BYPASSRLS` (Cloud SQL
+  cannot grant it), so under `FORCE` the claim would silently scope to the poller's default
+  org. The runtime role `usan_app` is a non-owner and stays fully RLS-bound either way, so
+  dropping `FORCE` does not weaken tenant isolation for the runtime. This invariant is pinned
+  by `test_knowledge_bases_migration` (`relforcerowsecurity=False`).
+- The ingestion poller uses that `SECURITY DEFINER` SQL function (`claim_pending_knowledge_bases`)
   to atomically lease KBs across all orgs without exposing any source text. Processing is
   always re-scoped per-org under RLS (`set_tenant_context` with `is_local=true`).
 - Vertex calls use ADC (BAA-covered) — never the Gemini Developer API. Chunk text and
@@ -128,15 +136,24 @@ These are intentional v1 limitations of the ingestion pipeline (surfaced by adve
 review). None affect the inert ship or the single-container production topology; they
 matter when the poller is enabled and/or before any horizontal scale-out.
 
-- **Transient embed failure marks a KB terminally `error`.** Any exception during
-  embedding (including a transient Vertex 429 quota / 503 / network blip) sets
-  `status: error`; the poller only re-claims `in_progress` rows, so an errored KB is not
-  auto-retried. Large-document failures (the common case) are addressed — embedding is
-  now **batched** (≤100 chunks and ≤60 000 chars per Vertex request) so a big source no
-  longer overflows the per-request instance/token cap. The remaining gap is the transient
-  edge. **Recovery:** POST `add-knowledge-base-sources` with a new source (re-queues the
-  KB to `in_progress`), or a manual `UPDATE knowledge_bases SET status='in_progress',
-  claimed_at=NULL WHERE id=…` as the owner. A bounded-attempts auto-retry is a follow-up.
+- **Transient embed failures auto-retry (bounded).** A transient Vertex 429 quota / 503 /
+  network blip no longer terminally errors a KB. On failure the KB returns to
+  `status: in_progress` with `ingestion_attempts` incremented and `claimed_at` cleared; the
+  poller re-claims it after the lease (`KB_INGESTION_LEASE_SECONDS`, default 300s) provides the
+  backoff. Only after `KB_INGESTION_MAX_ATTEMPTS` failures (default 3) is the KB set terminal
+  `error` (poison-pill — not re-claimed). Large-document failures are also addressed: embedding
+  is **batched** (≤100 chunks and ≤60 000 chars per Vertex request), and `auto_truncate=True` on
+  the embed config truncates any single over-token (dense/CJK) chunk rather than rejecting the
+  batch. **Recovery from a terminal `error`:** POST `add-knowledge-base-sources` with a new
+  source (re-queues to `in_progress` and resets `ingestion_attempts` to 0), or a manual
+  `UPDATE knowledge_bases SET status='in_progress', claimed_at=NULL, ingestion_attempts=0
+  WHERE id=…` as the owner. **Per-chunk note:** `auto_truncate` causes tail loss on an
+  extreme single chunk; a tokenizer-aware splitter for pure-CJK at the size cap is a documented
+  Phase 5b follow-up.
+- **Multi-org ingestion works on prod.** The cross-org claim is RLS-correct on prod Cloud SQL
+  (non-superuser `usan` owner) because the 3 KB tables are `ENABLE`-but-NOT-`FORCE` RLS — the
+  owner-exemption (not `BYPASSRLS`) lets the `SECURITY DEFINER` claim lease across orgs. See the
+  PHI / security section.
 - **Multi-replica ingestion is not yet concurrency-safe.** The lease + `SKIP LOCKED`
   claim is correct for crash-recovery, but two pollers (multiple api replicas) could
   re-claim the same KB mid-ingest and race on its chunks. A `UNIQUE(source_id,

@@ -58,7 +58,12 @@ async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> bool:
 
 
 async def set_status(
-    db: AsyncSession, kb_id: uuid.UUID, status: str, *, error_detail: str | None = None
+    db: AsyncSession,
+    kb_id: uuid.UUID,
+    status: str,
+    *,
+    error_detail: str | None = None,
+    attempts: int | None = None,
 ) -> None:
     kb = await get_kb(db, kb_id)
     if kb is None:
@@ -66,6 +71,21 @@ async def set_status(
     kb.status = status
     kb.error_detail = error_detail
     kb.claimed_at = None
+    if attempts is not None:
+        kb.ingestion_attempts = attempts
+    await db.flush()
+
+
+async def mark_retry(db: AsyncSession, kb_id: uuid.UUID, *, attempts: int) -> None:
+    """Transient-failure path: return the KB to in_progress (so the claim re-selects it) with
+    the incremented attempt counter and the lease cleared (the lease provides backoff before
+    the next claim). error_detail is left as-is (informational); status is NOT terminal."""
+    kb = await get_kb(db, kb_id)
+    if kb is None:
+        return
+    kb.status = "in_progress"
+    kb.claimed_at = None
+    kb.ingestion_attempts = attempts
     await db.flush()
 
 
@@ -75,6 +95,9 @@ async def mark_in_progress(db: AsyncSession, kb_id: uuid.UUID) -> None:
         return
     kb.status = "in_progress"
     kb.claimed_at = None
+    # A client adding new sources starts a genuine new attempt cycle — reset the retry counter
+    # so prior transient failures don't prematurely exhaust the budget.
+    kb.ingestion_attempts = 0
     await db.flush()
 
 

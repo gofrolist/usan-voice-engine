@@ -38,9 +38,21 @@ async def ingest_one_kb(db: AsyncSession, kb_id: uuid.UUID, settings: Settings) 
                 chunks=list(zip(range(len(pieces)), pieces, vectors, strict=True)),
             )
         await repo.set_status(db, kb_id, "complete")
-    except Exception as exc:  # PHI-safe: type name only
-        logger.bind(kb_id=str(kb_id), exc_type=type(exc).__name__).error(
-            "KB ingestion failed kb={kb_id} exc={exc_type}"
-        )
-        await repo.set_status(db, kb_id, "error", error_detail=type(exc).__name__)
+    except Exception as exc:  # PHI-safe: type name + attempts only
+        attempts = kb.ingestion_attempts + 1
+        terminal = attempts >= settings.kb_ingestion_max_attempts
+        logger.bind(
+            kb_id=str(kb_id),
+            exc_type=type(exc).__name__,
+            attempts=attempts,
+            terminal=terminal,
+        ).error("KB ingestion failed kb={kb_id} exc={exc_type} attempts={attempts}")
+        if terminal:
+            # Poison-pill: max attempts reached — terminal 'error', not re-claimed.
+            await repo.set_status(
+                db, kb_id, "error", error_detail=type(exc).__name__, attempts=attempts
+            )
+        else:
+            # Transient: back to in_progress for re-claim after the lease (backoff); bump attempts.
+            await repo.mark_retry(db, kb_id, attempts=attempts)
     await db.flush()

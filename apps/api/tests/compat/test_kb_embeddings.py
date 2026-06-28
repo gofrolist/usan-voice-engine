@@ -30,6 +30,36 @@ async def test_embed_empty() -> None:
     assert await kb_embeddings.embed_texts([], _settings()) == []
 
 
+def test_embed_sync_sets_auto_truncate(monkeypatch) -> None:
+    """A single over-token (dense/CJK) chunk must NOT brick the KB: we ask Vertex to truncate
+    the input rather than reject the batch. Pin auto_truncate=True on the embed config."""
+    captured: dict = {}
+
+    class _FakeEmbedding:
+        values = [0.0] * 768
+
+    class _FakeResp:
+        embeddings = [_FakeEmbedding()]
+
+    class _FakeModels:
+        def embed_content(self, *, model, contents, config):
+            captured["config"] = config
+            return _FakeResp()
+
+    class _FakeClient:
+        models = _FakeModels()
+
+        def __init__(self, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(kb_embeddings.genai, "Client", _FakeClient)
+    kb_embeddings._embed_sync(["x"], _settings())
+    assert captured["config"].auto_truncate is True
+
+
 def test_batches_split_by_count_and_chars() -> None:
     # 250 short texts -> 3 batches of <=100 (ceil(250/100)=3)
     short = ["x"] * 250

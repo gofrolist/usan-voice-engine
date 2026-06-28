@@ -352,6 +352,7 @@ services:
       KB_INGESTION_POLL_INTERVAL_S: ${KB_INGESTION_POLL_INTERVAL_S:-15}
       KB_INGESTION_BATCH_SIZE: ${KB_INGESTION_BATCH_SIZE:-10}
       KB_INGESTION_LEASE_SECONDS: ${KB_INGESTION_LEASE_SECONDS:-300}
+      KB_INGESTION_MAX_ATTEMPTS: ${KB_INGESTION_MAX_ATTEMPTS:-3}
     # The API is stateless: no on-disk writes outside /tmp, so run the root
     # filesystem read-only and block privilege escalation. /tmp is a tmpfs for
     # any transient scratch (e.g. signed-URL staging).

@@ -35,7 +35,12 @@ def _embed_sync(texts: list[str], settings: Settings) -> list[list[float]]:
     client = genai.Client(
         vertexai=True, project=settings.gcp_project, location=settings.kb_embedding_location
     )
-    config = types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT", output_dimensionality=_DIM)
+    # auto_truncate=True: a single dense/CJK chunk can exceed text-embedding-005's ~2048-token
+    # per-input limit even within the char-bounded chunk size. Let Vertex truncate the input
+    # (graceful tail loss) rather than reject the whole batch and brick the KB.
+    config = types.EmbedContentConfig(
+        task_type="RETRIEVAL_DOCUMENT", output_dimensionality=_DIM, auto_truncate=True
+    )
     vectors: list[list[float]] = []
     try:
         for batch in _batches(texts):

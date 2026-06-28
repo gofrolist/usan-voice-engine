@@ -82,7 +82,10 @@ async def add_sources(
     if parsed.texts:
         await repo.mark_in_progress(db, kb_id)  # new sources are un-chunked -> re-claimed
     await db.commit()
-    # is_local set_config is cleared on commit; re-apply so the post-commit SELECT is RLS-scoped.
+    # In prod the get_compat_db after_begin listener already re-applies app.current_org on the
+    # new post-commit transaction, so the SELECT below is RLS-scoped. This explicit re-apply is
+    # for the app_session-based service tests (which have no such listener) and is harmless
+    # defense-in-depth in prod.
     await set_tenant_context(db, org_id)
     kb2 = await repo.get_kb(db, kb_id)
     assert kb2 is not None
@@ -115,7 +118,10 @@ async def delete_source(db: AsyncSession, kb_id_token: str, source_id_token: str
     org_id = kb.organization_id
     await repo.delete_source(db, source_id)
     await db.commit()
-    # is_local set_config is cleared on commit; re-apply so the post-commit SELECT is RLS-scoped.
+    # In prod the get_compat_db after_begin listener already re-applies app.current_org on the
+    # new post-commit transaction, so the SELECT below is RLS-scoped. This explicit re-apply is
+    # for the app_session-based service tests (which have no such listener) and is harmless
+    # defense-in-depth in prod.
     await set_tenant_context(db, org_id)
     kb2 = await repo.get_kb(db, kb_id)
     assert kb2 is not None

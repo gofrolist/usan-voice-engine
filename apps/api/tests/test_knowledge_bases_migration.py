@@ -22,8 +22,13 @@ def test_kb_tables_and_extension_and_rls(async_database_url: str) -> None:
                             {"t": t},
                         )
                     ).one()
+                    # Pins the ENABLE-not-FORCE invariant the PROD cross-org claim depends on:
+                    # the SECURITY DEFINER claim fn must run owner-RLS-EXEMPT (Postgres
+                    # owner-exemption), which only holds under plain ENABLE. Prod Cloud SQL `usan`
+                    # is non-superuser with NO BYPASSRLS, so FORCE would silently scope the claim
+                    # to the poller's default org. A future "FORCE everywhere" sweep must fail here.
                     assert relrowsecurity is True, t
-                    assert relforcerowsecurity is True, t
+                    assert relforcerowsecurity is False, t
                 hnsw = await conn.scalar(
                     text(
                         "SELECT 1 FROM pg_indexes "

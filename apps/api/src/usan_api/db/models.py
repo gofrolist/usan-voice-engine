@@ -1400,6 +1400,10 @@ class KnowledgeBase(Base, TenantScoped):
     )
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_detail: Mapped[str | None] = mapped_column(Text)
+    # Bounded-attempts auto-retry counter (INTERNAL, never serialized). See kb_ingestion.
+    ingestion_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
