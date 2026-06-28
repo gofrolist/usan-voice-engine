@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import update
 
+from usan_api.db.models import AgentProfile
 from usan_api.repositories import agent_profiles as repo
 from usan_api.repositories.agent_profiles import ProfileInUseError
 from usan_api.tenant_context import set_tenant_context
@@ -62,6 +64,16 @@ async def test_set_default_rejects_chat(app_session):
 async def test_get_default_profile_ignores_chat(app_session):
     await _org(app_session)
     chat = await _make_published(app_session, channel="chat", name="c4")
+    # Clear any pre-existing default-outbound holder first (a neighboring test may have committed
+    # one under -n0; app_session rolls this back after the test). Without it, forcing the chat
+    # flag could collide with the partial-unique index OR a leftover voice default could be
+    # returned — both isolation artifacts unrelated to the channel filter under test.
+    await app_session.execute(
+        update(AgentProfile)
+        .where(AgentProfile.is_default_outbound.is_(True))
+        .values(is_default_outbound=False)
+    )
+    await app_session.flush()
     # Force the chat row to hold the default flag (bypassing set_default's guard) to prove the
     # READ filter also excludes it.
     chat.is_default_outbound = True
