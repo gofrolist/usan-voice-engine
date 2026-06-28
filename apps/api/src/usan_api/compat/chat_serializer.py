@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from usan_api.compat import ids
-from usan_api.compat.schemas.chats import CompatChat, CompatChatMessage
+from usan_api.compat.schemas.chats import ChatAnalysis, CompatChat, CompatChatMessage
 from usan_api.compat.serialization import to_ms, unpack_dynamic_vars
-from usan_api.db.models import ChatMessage, ChatSession
+from usan_api.db.models import ChatAnalysisRecord, ChatMessage, ChatSession
 
 
 def _line(message: ChatMessage) -> str:
@@ -17,9 +17,11 @@ def serialize_chat(
     messages: list[ChatMessage],
     *,
     include_transcript: bool,
+    analysis: ChatAnalysisRecord | None = None,
 ) -> CompatChat:
     """Build the RetellAI ChatResponse. include_transcript=False on the list path so
-    transcript + message_with_tool_calls are omitted (V3ChatResponse forbids those keys)."""
+    transcript + message_with_tool_calls are omitted (V3ChatResponse forbids those keys).
+    chat_analysis is a straight pass-through of the (already enum-coerced) stored record."""
     bare_vars, metadata = unpack_dynamic_vars(session.dynamic_vars)
 
     transcript: str | None = None
@@ -36,6 +38,15 @@ def serialize_chat(
             for m in messages
         ]
 
+    chat_analysis: ChatAnalysis | None = None
+    if analysis is not None:
+        chat_analysis = ChatAnalysis(
+            chat_summary=analysis.chat_summary,
+            user_sentiment=analysis.user_sentiment,
+            chat_successful=analysis.chat_successful,
+            custom_analysis_data=analysis.custom_analysis_data,
+        )
+
     return CompatChat(
         chat_id=ids.encode_chat_id(session.id),
         agent_id=ids.encode_agent_id(session.agent_profile_id),
@@ -48,4 +59,5 @@ def serialize_chat(
         end_timestamp=to_ms(session.ended_at),
         transcript=transcript,
         message_with_tool_calls=message_with_tool_calls,
+        chat_analysis=chat_analysis,
     )

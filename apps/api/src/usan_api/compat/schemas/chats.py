@@ -84,6 +84,15 @@ class CompatChatMessage(BaseModel):
     created_timestamp: int
 
 
+class ChatAnalysis(BaseModel):
+    """Oracle ChatAnalysis sub-object. All optional; the serializer omits None via exclude_none."""
+
+    chat_summary: str | None = None
+    user_sentiment: str | None = None
+    chat_successful: bool | None = None
+    custom_analysis_data: dict[str, Any] | None = None
+
+
 class CompatChat(BaseModel):
     chat_id: str
     agent_id: str
@@ -96,6 +105,7 @@ class CompatChat(BaseModel):
     end_timestamp: int | None = None
     transcript: str | None = None
     message_with_tool_calls: list[CompatChatMessage] | None = None
+    chat_analysis: ChatAnalysis | None = None
 
 
 class CompatChatCompletion(BaseModel):
