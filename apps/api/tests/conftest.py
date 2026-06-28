@@ -238,6 +238,7 @@ _TRUNCATE_ALL = (
     "call_batch_targets, call_batches, call_schedules, "
     "agent_profile_versions, agent_profiles, admin_audit_log, compat_api_keys, "
     "invitations, memberships, admin_users, follow_up_flags, callback_requests, sms_messages, "
+    "knowledge_base_chunks, knowledge_base_sources, knowledge_bases, "
     "calls, dnc_list, contacts "
     "RESTART IDENTITY CASCADE"
 )

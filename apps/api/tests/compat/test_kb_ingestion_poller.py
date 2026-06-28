@@ -67,7 +67,12 @@ async def test_poll_processes_two_orgs(
         create_async_engine(app_async_database_url, poolclass=NullPool), expire_on_commit=False
     )
     processed = await kb_ingestion_poller.poll_once(factory, _on())
-    assert processed == 2
+    # The cross-org claim is GLOBAL (SECURITY DEFINER bypasses RLS), so on the shared per-worker
+    # DB it may also pick up other tests' leftover pending KBs -> >= 2, not exactly 2. The real
+    # cross-org proof is kb_b (a NON-default org) reaching 'complete' below: only the SECURITY
+    # DEFINER claim + per-org set_tenant_context can take a non-default-org KB to complete under
+    # the non-superuser usan_app role.
+    assert processed >= 2
 
     # Both KBs reached complete (verify via the superuser engine).
     eng = create_async_engine(async_database_url, poolclass=NullPool)
