@@ -125,6 +125,14 @@ async def analyze_chat_with(
             settings=settings,
         )
         parsed = _parse_analysis(turn.text)
+        if (
+            parsed.chat_summary is None
+            and parsed.user_sentiment is None
+            and parsed.chat_successful is None
+        ):
+            # Degenerate/empty model output — don't persist a contentless row (it would also
+            # "stick" as an all-None record and block a future force=False re-analysis).
+            return existing
         return await chat_analyses_repo.upsert(
             db,
             session_id,

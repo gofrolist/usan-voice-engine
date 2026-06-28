@@ -209,6 +209,40 @@ async def test_zero_messages_noop(app_session, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_vertex_output_persists_no_row(app_session, monkeypatch) -> None:
+    org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
+    await set_tenant_context(app_session, org_id)
+    sid = await _seed_session_with_message(app_session)
+    _patch_vertex(monkeypatch, "{}")  # well-formed but empty → all-None parse
+    rec = await chat_analysis.analyze_chat_with(app_session, sid, _settings(), force=True)
+    assert rec is None  # no prior record + nothing to persist
+    assert await analyses_repo.get_for_session(app_session, sid) is None  # no phantom row
+    await app_session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_empty_vertex_output_keeps_prior_record(app_session, monkeypatch) -> None:
+    org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
+    await set_tenant_context(app_session, org_id)
+    sid = await _seed_session_with_message(app_session)
+    prior = await analyses_repo.upsert(
+        app_session,
+        sid,
+        chat_summary="good prior",
+        user_sentiment="Positive",
+        chat_successful=True,
+        custom_analysis_data=None,
+        model_version="m",
+    )
+    _patch_vertex(monkeypatch, "{}")  # degenerate re-analysis must NOT wipe the good prior
+    rec = await chat_analysis.analyze_chat_with(app_session, sid, _settings(), force=True)
+    assert rec is not None
+    assert rec.id == prior.id
+    assert rec.chat_summary == "good prior"
+    await app_session.rollback()
+
+
+@pytest.mark.asyncio
 async def test_vertex_error_swallowed_returns_prior(app_session, monkeypatch) -> None:
     org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
     await set_tenant_context(app_session, org_id)
