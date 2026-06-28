@@ -70,7 +70,6 @@ _UNSUPPORTED: tuple[tuple[str, str], ...] = (
     ("POST", "/create-agent-version/{agent_id}"),
     # --- Analysis re-run ---
     ("PUT", "/rerun-call-analysis/{call_id}"),
-    ("PUT", "/rerun-chat-analysis/{chat_id}"),
 )
 
 

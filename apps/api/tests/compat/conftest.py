@@ -221,6 +221,25 @@ def gcp_project_set(compat_client: TestClient):
 
 
 @pytest.fixture
+def chat_analysis_on(compat_client: TestClient):
+    """Override get_settings on the compat sub-app so the chat-analysis pipeline runs
+    (flag on + gcp_project set). Mirrors gcp_project_set."""
+    from usan_api.settings import get_settings as _get_settings
+
+    compat_app = _get_compat_app(compat_client)
+    base = _get_settings()
+
+    def _override() -> Settings:
+        return base.model_copy(
+            update={"chat_analysis_enabled": True, "gcp_project": "test-project"}
+        )
+
+    compat_app.dependency_overrides[_get_settings] = _override
+    yield
+    compat_app.dependency_overrides.pop(_get_settings, None)
+
+
+@pytest.fixture
 def gcp_project_unset(compat_client: TestClient):
     """Override get_settings on the compat sub-app to force gcp_project=None.
 

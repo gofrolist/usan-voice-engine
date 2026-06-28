@@ -32,6 +32,7 @@ from usan_api.compat.schemas.chats import (
 )
 from usan_api.compat.serialization import to_ms
 from usan_api.db.models import ChatSession
+from usan_api.repositories import chat_analyses as chat_analyses_repo
 from usan_api.repositories import chats as chats_repo
 from usan_api.settings import Settings, get_settings
 
@@ -45,7 +46,10 @@ def _audit(request: Request, op: str, chat_id: str | None = None) -> None:
 
 async def _serialize_full(db: AsyncSession, session: ChatSession) -> CompatChat:
     messages = await chats_repo.list_messages(db, session.id)
-    return chat_serializer.serialize_chat(session, messages, include_transcript=True)
+    analysis = await chat_analyses_repo.get_for_session(db, session.id)
+    return chat_serializer.serialize_chat(
+        session, messages, include_transcript=True, analysis=analysis
+    )
 
 
 @router.post(
@@ -119,6 +123,23 @@ async def get_chat(
     return await _serialize_full(db, session)
 
 
+@router.put(
+    "/rerun-chat-analysis/{chat_id}",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CompatChat,
+    response_model_exclude_none=True,
+)
+async def rerun_chat_analysis(
+    chat_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> CompatChat:
+    session = await chat_service.rerun_chat_analysis(db, settings, chat_id)
+    _audit(request, "rerun-chat-analysis", chat_id)
+    return await _serialize_full(db, session)
+
+
 @router.post("/v3/list-chats", response_model=ListChatsResponse, response_model_exclude_none=True)
 async def list_chats(
     body: ListChatsRequest,
@@ -127,7 +148,11 @@ async def list_chats(
 ) -> ListChatsResponse:
     sessions, pagination_key, has_more, total = await chat_service.list_chats(db, body)
     _audit(request, "list-chats")
-    items = [chat_serializer.serialize_chat(s, [], include_transcript=False) for s in sessions]
+    analyses = await chat_analyses_repo.get_for_sessions(db, [s.id for s in sessions])
+    items = [
+        chat_serializer.serialize_chat(s, [], include_transcript=False, analysis=analyses.get(s.id))
+        for s in sessions
+    ]
     return ListChatsResponse(
         items=items, pagination_key=pagination_key, has_more=has_more, total=total
     )
