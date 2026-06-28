@@ -12,23 +12,43 @@ from loguru import logger
 from usan_api.settings import Settings
 
 _DIM = 768
+_MAX_BATCH_TEXTS = 100
+_MAX_BATCH_CHARS = 60_000
+
+
+def _batches(texts: list[str]) -> list[list[str]]:
+    out: list[list[str]] = []
+    cur: list[str] = []
+    chars = 0
+    for t in texts:
+        if cur and (len(cur) >= _MAX_BATCH_TEXTS or chars + len(t) > _MAX_BATCH_CHARS):
+            out.append(cur)
+            cur, chars = [], 0
+        cur.append(t)
+        chars += len(t)
+    if cur:
+        out.append(cur)
+    return out
 
 
 def _embed_sync(texts: list[str], settings: Settings) -> list[list[float]]:
     client = genai.Client(
         vertexai=True, project=settings.gcp_project, location=settings.kb_embedding_location
     )
+    config = types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT", output_dimensionality=_DIM)
+    vectors: list[list[float]] = []
     try:
-        resp = client.models.embed_content(
-            model=settings.kb_embedding_model,
-            contents=list(texts),
-            config=types.EmbedContentConfig(
-                task_type="RETRIEVAL_DOCUMENT", output_dimensionality=_DIM
-            ),
-        )
+        for batch in _batches(texts):
+            resp = client.models.embed_content(
+                model=settings.kb_embedding_model,
+                contents=list(batch),
+                config=config,
+            )
+            for e in resp.embeddings or []:
+                vectors.append(list(e.values or []))
     finally:
         client.close()
-    return [list(e.values or []) for e in (resp.embeddings or [])]
+    return vectors
 
 
 async def embed_texts(texts: list[str], settings: Settings) -> list[list[float]]:

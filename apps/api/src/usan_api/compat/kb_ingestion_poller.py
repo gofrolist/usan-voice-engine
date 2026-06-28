@@ -1,7 +1,9 @@
 """KB ingestion poller (Phase 5). Cross-org: a SECURITY DEFINER claim returns (kb_id, org_id)
 across all orgs (the shared usan_app session is otherwise default-org-pinned); each KB is then
-processed in its OWN short transaction under set_tenant_context(org_id). The embed call holds
-no DB connection. Mirrors retry_orchestrator's loop discipline."""
+processed in its OWN short transaction under set_tenant_context(org_id). Each KB is processed in
+its own short transaction; that session holds a pooled connection across the embed call —
+acceptable for the single-replica, flag-gated deployment (a connection-release refactor is a
+documented follow-up). Mirrors retry_orchestrator's loop discipline."""
 
 from __future__ import annotations
 
@@ -28,11 +30,18 @@ async def poll_once(factory: async_sessionmaker[AsyncSession], settings: Setting
         await db.commit()
     processed = 0
     for kb_id, org_id in claimed:
-        async with factory() as db:
-            await set_tenant_context(db, org_id)
-            await kb_ingestion.ingest_one_kb(db, kb_id, settings)
-            await db.commit()
-        processed += 1
+        try:
+            async with factory() as db:
+                await set_tenant_context(db, org_id)
+                await kb_ingestion.ingest_one_kb(db, kb_id, settings)
+                await db.commit()
+            processed += 1
+        except Exception as exc:
+            logger.bind(
+                component="kb_ingestion_poller",
+                kb_id=str(kb_id),
+                exc_type=type(exc).__name__,
+            ).error("KB ingestion failed for kb_id={kb_id} exc_type={exc_type}")
     return processed
 
 

@@ -21,6 +21,19 @@ def _on():
 async def test_poll_processes_two_orgs(
     app_session, app_async_database_url, async_database_url, app_role_password, mock_embed
 ) -> None:
+    # Truncate all 3 KB tables so leftover in_progress rows from other tests don't skew the count.
+    eng0 = create_async_engine(async_database_url, poolclass=NullPool)
+    try:
+        async with eng0.begin() as conn:
+            await conn.execute(
+                text(
+                    "TRUNCATE knowledge_base_chunks, knowledge_base_sources,"
+                    " knowledge_bases CASCADE"
+                )
+            )
+    finally:
+        await eng0.dispose()
+
     # Org A pending KB (default org), seeded under RLS via app_session.
     org_a = await resolve_default_org_id(app_session)
     await set_tenant_context(app_session, org_a)
@@ -66,22 +79,33 @@ async def test_poll_processes_two_orgs(
     factory = async_sessionmaker(
         create_async_engine(app_async_database_url, poolclass=NullPool), expire_on_commit=False
     )
-    processed = await kb_ingestion_poller.poll_once(factory, _on())
-    # The cross-org claim is GLOBAL (SECURITY DEFINER bypasses RLS), so on the shared per-worker
-    # DB it may also pick up other tests' leftover pending KBs -> >= 2, not exactly 2. The real
-    # cross-org proof is kb_b (a NON-default org) reaching 'complete' below: only the SECURITY
-    # DEFINER claim + per-org set_tenant_context can take a non-default-org KB to complete under
-    # the non-superuser usan_app role.
-    assert processed >= 2
-
-    # Both KBs reached complete (verify via the superuser engine).
-    eng = create_async_engine(async_database_url, poolclass=NullPool)
     try:
-        async with eng.connect() as conn:
-            for kid in (kb_a.id, kb_b):
-                st = await conn.scalar(
-                    text("SELECT status FROM knowledge_bases WHERE id = :id"), {"id": str(kid)}
-                )
-                assert st == "complete", kid
+        processed = await kb_ingestion_poller.poll_once(factory, _on())
+        # Now exactly 2: only the 2 seeded KBs exist (table was truncated above).
+        assert processed == 2
+
+        # Both KBs reached complete (verify via the superuser engine).
+        eng = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            async with eng.connect() as conn:
+                for kid in (kb_a.id, kb_b):
+                    st = await conn.scalar(
+                        text("SELECT status FROM knowledge_bases WHERE id = :id"), {"id": str(kid)}
+                    )
+                    assert st == "complete", kid
+        finally:
+            await eng.dispose()
     finally:
-        await eng.dispose()
+        # Clean up org_b rows so the leaked org doesn't affect other tests.
+        eng_cleanup = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            async with eng_cleanup.begin() as conn:
+                await conn.execute(
+                    text("DELETE FROM knowledge_bases WHERE organization_id = :o"),
+                    {"o": str(org_b)},
+                )
+                await conn.execute(
+                    text("DELETE FROM organizations WHERE id = :o"), {"o": str(org_b)}
+                )
+        finally:
+            await eng_cleanup.dispose()

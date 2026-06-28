@@ -110,6 +110,9 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["knowledge_base_id"], ["knowledge_bases.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["source_id"], ["knowledge_base_sources.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "source_id", "chunk_index", name="uq_knowledge_base_chunks_source_chunk"
+        ),
     )
     op.create_index(
         "ix_knowledge_base_chunks_organization_id", "knowledge_base_chunks", ["organization_id"]

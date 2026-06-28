@@ -79,7 +79,8 @@ async def add_sources(
         raise CompatError(404, "knowledge base not found")
     org_id = kb.organization_id
     await _persist_texts(db, kb_id, parsed.texts)
-    await repo.mark_in_progress(db, kb_id)  # new sources are un-chunked -> re-claimed
+    if parsed.texts:
+        await repo.mark_in_progress(db, kb_id)  # new sources are un-chunked -> re-claimed
     await db.commit()
     # is_local set_config is cleared on commit; re-apply so the post-commit SELECT is RLS-scoped.
     await set_tenant_context(db, org_id)

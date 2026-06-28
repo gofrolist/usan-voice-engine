@@ -1435,6 +1435,9 @@ class KnowledgeBaseChunk(Base, TenantScoped):
     """A chunk + its Vertex embedding (Phase 5). content is PHI-adjacent, never echoed."""
 
     __tablename__ = "knowledge_base_chunks"
+    __table_args__ = (
+        UniqueConstraint("source_id", "chunk_index", name="uq_knowledge_base_chunks_source_chunk"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
