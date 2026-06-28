@@ -300,3 +300,14 @@ def mock_send_sms(monkeypatch):
 
     monkeypatch.setattr(telnyx_messaging, "send_sms", _fake)
     return calls
+
+
+@pytest.fixture
+def mock_embed(monkeypatch):
+    """Stub the Vertex embed so ingestion tests place no real call: returns a 768-vec per text."""
+
+    async def _fake(texts, settings):
+        return [[0.1] * 768 for _ in texts]
+
+    # Patch the name bound inside the ingestion module (where it is called).
+    monkeypatch.setattr("usan_api.compat.kb_ingestion.embed_texts", _fake)
