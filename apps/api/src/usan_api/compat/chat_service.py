@@ -14,7 +14,7 @@ from loguru import logger
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api import telnyx_messaging
+from usan_api import chat_analysis, telnyx_messaging
 from usan_api.compat import ids
 from usan_api.compat.errors import CompatError
 from usan_api.compat.schemas.chats import (
@@ -165,6 +165,18 @@ async def get_chat(db: AsyncSession, chat_id: str) -> ChatSession:
     session = await chats_repo.get_session(db, ids.decode_chat_id(chat_id))
     if session is None:
         raise CompatError(404, "chat not found")
+    return session
+
+
+async def rerun_chat_analysis(db: AsyncSession, settings: Settings, chat_id: str) -> ChatSession:
+    """Recompute the chat's post-chat analysis inline and return the session (the router
+    serializes the fresh analysis). 404 if the chat is missing or archived (RLS scopes the
+    lookup to the caller's org, so a cross-org chat_id is a clean 404)."""
+    session = await chats_repo.get_session(db, ids.decode_chat_id(chat_id))
+    if session is None:
+        raise CompatError(404, "chat not found")
+    await chat_analysis.analyze_chat_with(db, session.id, settings, force=True)
+    await db.commit()
     return session
 
 

@@ -1346,3 +1346,36 @@ class ChatMessage(Base, TenantScoped):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class ChatAnalysisRecord(Base, TenantScoped):
+    """Post-chat analysis for one chat session (Phase 4c-2).
+
+    One row per chat (``chat_session_id`` is UNIQUE → the rerun-chat-analysis op upserts in
+    place). Mirrors ``ConversationSummary`` for the chat channel. Vertex-generated; the
+    summary text is PHI and stays on BAA Postgres. ``model_version`` records the analyzing
+    model for audit.
+    """
+
+    __tablename__ = "chat_analyses"
+    __table_args__ = (UniqueConstraint("chat_session_id", name="uq_chat_analyses_session"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    chat_session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    chat_summary: Mapped[str | None] = mapped_column(Text)
+    user_sentiment: Mapped[str | None] = mapped_column(Text)
+    chat_successful: Mapped[bool | None] = mapped_column(Boolean)
+    custom_analysis_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    model_version: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

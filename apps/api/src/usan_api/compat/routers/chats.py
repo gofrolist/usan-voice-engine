@@ -7,6 +7,7 @@
   PATCH  /update-chat/{chat_id}
   PATCH  /end-chat/{chat_id}        (204)
   DELETE /delete-chat/{chat_id}     (204)
+  PUT    /rerun-chat-analysis/{chat_id}
 
 Auth + org-scoped RLS via get_compat_db. Each op emits a PHI-free audit line.
 """
@@ -31,7 +32,8 @@ from usan_api.compat.schemas.chats import (
     UpdateChatRequest,
 )
 from usan_api.compat.serialization import to_ms
-from usan_api.db.models import ChatSession
+from usan_api.db.models import ChatAnalysisRecord, ChatSession
+from usan_api.repositories import chat_analyses as chat_analyses_repo
 from usan_api.repositories import chats as chats_repo
 from usan_api.settings import Settings, get_settings
 
@@ -43,9 +45,13 @@ def _audit(request: Request, op: str, chat_id: str | None = None) -> None:
     logger.bind(compat_org_id=org, op=op, chat_id=chat_id).info("compat chat op={op}")
 
 
-async def _serialize_full(db: AsyncSession, session: ChatSession) -> CompatChat:
+async def _serialize_full(
+    db: AsyncSession, session: ChatSession, analysis: ChatAnalysisRecord | None
+) -> CompatChat:
     messages = await chats_repo.list_messages(db, session.id)
-    return chat_serializer.serialize_chat(session, messages, include_transcript=True)
+    return chat_serializer.serialize_chat(
+        session, messages, include_transcript=True, analysis=analysis
+    )
 
 
 @router.post(
@@ -61,7 +67,7 @@ async def create_chat(
 ) -> CompatChat:
     session = await chat_service.create_chat(db, body)
     _audit(request, "create-chat", ids.encode_chat_id(session.id))
-    return await _serialize_full(db, session)
+    return await _serialize_full(db, session, None)
 
 
 @router.post(
@@ -78,7 +84,7 @@ async def create_sms_chat(
 ) -> CompatChat:
     session = await chat_service.create_sms_chat(db, settings, body)
     _audit(request, "create-sms-chat", ids.encode_chat_id(session.id))
-    return await _serialize_full(db, session)
+    return await _serialize_full(db, session, None)
 
 
 @router.post(
@@ -116,7 +122,26 @@ async def get_chat(
 ) -> CompatChat:
     session = await chat_service.get_chat(db, chat_id)
     _audit(request, "get-chat", chat_id)
-    return await _serialize_full(db, session)
+    analysis = await chat_analyses_repo.get_for_session(db, session.id)
+    return await _serialize_full(db, session, analysis)
+
+
+@router.put(
+    "/rerun-chat-analysis/{chat_id}",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CompatChat,
+    response_model_exclude_none=True,
+)
+async def rerun_chat_analysis(
+    chat_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> CompatChat:
+    session = await chat_service.rerun_chat_analysis(db, settings, chat_id)
+    _audit(request, "rerun-chat-analysis", chat_id)
+    analysis = await chat_analyses_repo.get_for_session(db, session.id)
+    return await _serialize_full(db, session, analysis)
 
 
 @router.post("/v3/list-chats", response_model=ListChatsResponse, response_model_exclude_none=True)
@@ -127,7 +152,11 @@ async def list_chats(
 ) -> ListChatsResponse:
     sessions, pagination_key, has_more, total = await chat_service.list_chats(db, body)
     _audit(request, "list-chats")
-    items = [chat_serializer.serialize_chat(s, [], include_transcript=False) for s in sessions]
+    analyses = await chat_analyses_repo.get_for_sessions(db, [s.id for s in sessions])
+    items = [
+        chat_serializer.serialize_chat(s, [], include_transcript=False, analysis=analyses.get(s.id))
+        for s in sessions
+    ]
     return ListChatsResponse(
         items=items, pagination_key=pagination_key, has_more=has_more, total=total
     )
@@ -142,7 +171,8 @@ async def update_chat(
 ) -> CompatChat:
     session = await chat_service.update_chat(db, chat_id, body)
     _audit(request, "update-chat", chat_id)
-    return await _serialize_full(db, session)
+    analysis = await chat_analyses_repo.get_for_session(db, session.id)
+    return await _serialize_full(db, session, analysis)
 
 
 @router.patch("/end-chat/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)

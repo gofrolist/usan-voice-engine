@@ -239,6 +239,11 @@ class Settings(BaseSettings):
     # the Gemini Developer API. The model is a Vertex Gemini id (model_catalog provider).
     summarization_enabled: bool = Field(default=False, alias="SUMMARIZATION_ENABLED")
     summarization_model: str = Field(default="gemini-2.5-flash", alias="SUMMARIZATION_MODEL")
+    # Post-chat analysis (Phase 4c-2 / rerun-chat-analysis). Ship-inert: default OFF, so no
+    # Vertex call (spend or PHI egress) until a deploy enables it AND gcp_project is set.
+    # Reuses the Vertex ADC path (Constitution II) — never the Gemini Developer API.
+    chat_analysis_enabled: bool = Field(default=False, alias="CHAT_ANALYSIS_ENABLED")
+    chat_analysis_model: str = Field(default="gemini-2.5-flash", alias="CHAT_ANALYSIS_MODEL")
 
     # --- Clara Care Parity (feature 002): three new poller phases + inbound-SMS
     # verification + Spanish callback. All ship-inert: every new poller defaults OFF,
