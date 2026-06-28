@@ -35,13 +35,6 @@ _UNSUPPORTED: tuple[tuple[str, str], ...] = (
     ("GET", "/get-conversation-flow-component/{conversation_flow_component_id}"),
     ("PATCH", "/update-conversation-flow-component/{conversation_flow_component_id}"),
     ("DELETE", "/delete-conversation-flow-component/{conversation_flow_component_id}"),
-    # --- Knowledge base ---
-    ("POST", "/create-knowledge-base"),
-    ("GET", "/get-knowledge-base/{knowledge_base_id}"),
-    ("DELETE", "/delete-knowledge-base/{knowledge_base_id}"),
-    ("GET", "/list-knowledge-bases"),
-    ("POST", "/add-knowledge-base-sources/{knowledge_base_id}"),
-    ("DELETE", "/delete-knowledge-base-source/{knowledge_base_id}/source/{source_id}"),
     # --- Voice authoring (add / clone / search) — distinct from read-only catalog ---
     ("POST", "/add-community-voice"),
     ("POST", "/clone-voice"),
