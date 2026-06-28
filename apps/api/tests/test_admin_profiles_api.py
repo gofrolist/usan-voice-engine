@@ -295,3 +295,30 @@ def test_voice_admin_get_voice_profile_still_returns_200(client, super_admin_act
     pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
     r = client.get(f"/v1/admin/profiles/{pid}")
     assert r.status_code == 200
+
+
+# --- clone_from channel guard: cloning a chat profile into voice must 404 ---------------
+
+
+def test_clone_from_chat_profile_returns_404(
+    client, super_admin_acting_session, async_database_url
+):
+    """POST /v1/admin/profiles with clone_from pointing at a chat-channel profile must 404."""
+    chat_id = asyncio.run(_seed_chat_profile(async_database_url))
+    r = client.post(
+        "/v1/admin/profiles",
+        json={"name": _name(), "clone_from": str(chat_id)},
+    )
+    assert r.status_code == 404
+
+
+def test_clone_from_voice_profile_succeeds(client, super_admin_acting_session):
+    """POST /v1/admin/profiles with clone_from pointing at a voice profile must succeed."""
+    source_pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
+    r = client.post(
+        "/v1/admin/profiles",
+        json={"name": _name(), "clone_from": source_pid},
+    )
+    assert r.status_code in (200, 201)
+    body = r.json()
+    assert body["id"] != source_pid

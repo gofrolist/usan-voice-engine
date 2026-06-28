@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.compat.conftest import RETELL_VOICE
+
 
 def _create_chat_agent(compat_client, compat_headers) -> dict:
     llm = compat_client.post(
@@ -54,3 +56,65 @@ def test_publish_chat_agent_200(compat_client, compat_headers):
     agent_id = _create_chat_agent(compat_client, compat_headers)["agent_id"]
     r = compat_client.post(f"/publish-chat-agent/{agent_id}", headers=compat_headers)
     assert r.status_code == 200, r.text
+
+
+def test_create_chat_agent_rejects_published_voice_llm_id(compat_client, compat_headers):
+    """Bind-hijack guard (a): a published VOICE agent's llm_id must 409 on create-chat-agent."""
+    # Step 1: create-retell-llm -> create-agent (publishes a voice agent)
+    llm = compat_client.post(
+        "/create-retell-llm",
+        json={"general_prompt": "voice prompt"},
+        headers=compat_headers,
+    ).json()
+    voice_r = compat_client.post(
+        "/create-agent",
+        json={
+            "response_engine": {"type": "retell-llm", "llm_id": llm["llm_id"]},
+            "voice_id": RETELL_VOICE,
+            "agent_name": "Voice Agent For Chat Hijack Test",
+        },
+        headers=compat_headers,
+    )
+    assert voice_r.status_code == 201, voice_r.text
+    # The voice agent is now published (published_version is not None, channel='voice').
+    # Step 2: attempt to bind the same llm_id to a chat agent — must 409
+    chat_r = compat_client.post(
+        "/create-chat-agent",
+        json={
+            "response_engine": {"type": "retell-llm", "llm_id": llm["llm_id"]},
+            "agent_name": "Hijack Attempt",
+        },
+        headers=compat_headers,
+    )
+    assert chat_r.status_code == 409, chat_r.text
+
+
+def test_create_agent_rejects_published_chat_llm_id(compat_client, compat_headers):
+    """Bind-hijack guard (b): a published CHAT agent's llm_id must 409 on create-agent."""
+    # Step 1: create-retell-llm -> create-chat-agent (publishes a chat agent)
+    llm = compat_client.post(
+        "/create-retell-llm",
+        json={"general_prompt": "chat prompt"},
+        headers=compat_headers,
+    ).json()
+    chat_r = compat_client.post(
+        "/create-chat-agent",
+        json={
+            "response_engine": {"type": "retell-llm", "llm_id": llm["llm_id"]},
+            "agent_name": "Chat Agent For Voice Hijack Test",
+        },
+        headers=compat_headers,
+    )
+    assert chat_r.status_code == 201, chat_r.text
+    # The chat agent is now published (published_version is not None, channel='chat').
+    # Step 2: attempt to bind the same llm_id to a voice agent — must 409
+    voice_r = compat_client.post(
+        "/create-agent",
+        json={
+            "response_engine": {"type": "retell-llm", "llm_id": llm["llm_id"]},
+            "voice_id": RETELL_VOICE,
+            "agent_name": "Voice Hijack Attempt",
+        },
+        headers=compat_headers,
+    )
+    assert voice_r.status_code == 409, voice_r.text

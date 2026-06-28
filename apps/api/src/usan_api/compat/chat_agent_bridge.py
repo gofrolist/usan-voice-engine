@@ -45,6 +45,8 @@ async def create_chat_agent(
     """create-chat-agent: bind the chat config onto the response-engine's profile, mark it
     channel='chat', publish. Never sets the call-plane default flags."""
     profile = await agent_bridge._load_active(db, _require_retell_llm(body), kind="response engine")
+    if profile.published_version is not None and profile.channel != _CHANNEL:
+        raise CompatError(409, "llm_id is already bound to a voice agent")
     config = agent_bridge._config_dict(profile)
     agent_bridge._merge_extras(config, _EXTRAS_HALF, body.model_dump())
     agent_bridge._validate_config(config)

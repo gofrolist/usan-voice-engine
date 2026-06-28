@@ -203,6 +203,8 @@ async def bind_agent(
     if not llm_id:
         raise CompatError(422, "response_engine.llm_id is required")
     profile = await _load_active(db, ids.decode_llm_id(llm_id), kind="response engine")
+    if profile.published_version is not None and profile.channel != "voice":
+        raise CompatError(409, "llm_id is already bound to a chat agent")
     cartesia = voice_map.resolve_voice_id(body.voice_id)
 
     config = _config_dict(profile)

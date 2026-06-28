@@ -49,6 +49,8 @@ async def create_profile(
         source = await db.get(AgentProfile, clone_from)
         if source is None:
             raise CloneSourceNotFoundError(str(clone_from))
+        if source.channel != "voice":
+            raise CloneSourceNotFoundError(str(clone_from))
         draft = source.draft_config
     else:
         draft = DEFAULT_AGENT_CONFIG.model_dump()

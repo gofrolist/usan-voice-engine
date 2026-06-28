@@ -9,13 +9,19 @@ audit entry (actor + profile + kind), never the sample-var values (C1 / FR-029).
 """
 
 import asyncio
+import json
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 from usan_api.db.base import AdminRole
+from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG
 
 
 def _name() -> str:
@@ -317,6 +323,58 @@ def test_audio_emits_single_phi_free_audit_entry(
     entries = asyncio.run(_audit_for(async_database_url, "profile.test_audio"))
     assert len(entries) == 1
     assert "Margaret" not in str(entries[0])
+
+
+# --- channel guard: test surface must 404 on chat-channel profiles --------
+
+
+async def _seed_chat_profile(async_database_url: str) -> uuid.UUID:
+    """Insert an agent_profiles row with channel='chat' via the superuser connection."""
+    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            org_id = (
+                await conn.execute(text("SELECT id FROM organizations WHERE slug = 'usan'"))
+            ).scalar_one()
+            row = await conn.execute(
+                text(
+                    "INSERT INTO agent_profiles (organization_id, name, draft_config, channel) "
+                    "VALUES (:org, :name, CAST(:cfg AS jsonb), 'chat') RETURNING id"
+                ),
+                {
+                    "org": org_id,
+                    "name": f"chat-agent-{uuid.uuid4().hex}",
+                    "cfg": json.dumps(DEFAULT_AGENT_CONFIG.model_dump()),
+                },
+            )
+            return row.scalar_one()
+    finally:
+        await engine.dispose()
+
+
+def test_llm_test_on_chat_profile_returns_404(
+    client, super_admin_acting_session, async_database_url, vertex_admin
+):
+    """The test/llm endpoint must 404 for a chat-channel profile so a chat config
+    cannot be exercised on the voice test surface (channel guard parity)."""
+    chat_id = asyncio.run(_seed_chat_profile(async_database_url))
+    r = client.post(
+        f"/v1/admin/profiles/{chat_id}/test/llm",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_audio_test_on_chat_profile_returns_404(
+    client, super_admin_acting_session, async_database_url, mock_livekit
+):
+    """The test/audio endpoint must 404 for a chat-channel profile (channel guard parity)."""
+    chat_id = asyncio.run(_seed_chat_profile(async_database_url))
+    r = client.post(
+        f"/v1/admin/profiles/{chat_id}/test/audio",
+        json={"sample_vars": {}},
+    )
+    assert r.status_code == 404, r.text
 
 
 # --- helpers --------------------------------------------------------------
