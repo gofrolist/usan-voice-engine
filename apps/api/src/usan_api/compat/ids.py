@@ -21,6 +21,8 @@ _LLM_PREFIX = "llm_"
 _BATCH_PREFIX = "batch_call_"
 _CHAT_PREFIX = "chat_"
 _MESSAGE_PREFIX = "message_"
+_KB_PREFIX = "knowledge_base_"
+_KB_SOURCE_PREFIX = "source_"
 
 
 def encode_call_id(call_id: uuid.UUID) -> str:
@@ -61,6 +63,22 @@ def encode_chat_id(chat_id: uuid.UUID) -> str:
 
 def decode_chat_id(token: str) -> uuid.UUID:
     return _decode_hex(token, prefix=_CHAT_PREFIX, kind="chat_id")
+
+
+def encode_kb_id(kb_id: uuid.UUID) -> str:
+    return _KB_PREFIX + kb_id.hex
+
+
+def decode_kb_id(token: str) -> uuid.UUID:
+    return _decode_hex(token, prefix=_KB_PREFIX, kind="knowledge_base_id")
+
+
+def encode_kb_source_id(source_id: uuid.UUID) -> str:
+    return _KB_SOURCE_PREFIX + source_id.hex
+
+
+def decode_kb_source_id(token: str) -> uuid.UUID:
+    return _decode_hex(token, prefix=_KB_SOURCE_PREFIX, kind="source_id")
 
 
 def encode_message_id(message_id: uuid.UUID) -> str:
