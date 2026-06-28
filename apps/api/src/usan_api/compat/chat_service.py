@@ -176,7 +176,7 @@ async def rerun_chat_analysis(db: AsyncSession, settings: Settings, chat_id: str
     if session is None:
         raise CompatError(404, "chat not found")
     await chat_analysis.analyze_chat_with(db, session.id, settings, force=True)
-    await db.flush()
+    await db.commit()
     return session
 
 

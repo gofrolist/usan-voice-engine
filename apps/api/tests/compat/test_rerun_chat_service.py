@@ -66,7 +66,12 @@ async def test_rerun_upserts_analysis(app_session, monkeypatch) -> None:
     session = await chat_service.rerun_chat_analysis(
         app_session, _settings(), ids.encode_chat_id(sid)
     )
+    # The service committed; the SET LOCAL app.current_org context reset on commit, so
+    # re-apply it before reading back (mirrors every committing service test).
+    await set_tenant_context(app_session, org_id)
     assert session.id == sid
     rec = await analyses_repo.get_for_session(app_session, sid)
-    assert rec is not None and rec.chat_summary == "ok" and rec.user_sentiment == "Neutral"  # noqa: PT018
+    assert rec is not None
+    assert rec.chat_summary == "ok"
+    assert rec.user_sentiment == "Neutral"
     await app_session.rollback()
