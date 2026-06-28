@@ -95,6 +95,7 @@ async def update_chat_agent(
     )
     if updated is None:  # pragma: no cover
         raise CompatError(404, "chat agent not found")
+    updated.channel = _CHANNEL
     if body.agent_name:
         updated.name = await agent_bridge._unique_name(db, body.agent_name, exclude_id=updated.id)
     await agent_bridge._publish_and_commit(db, profile.id, note="compat update-chat-agent")

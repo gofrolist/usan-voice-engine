@@ -7,7 +7,7 @@ from sqlalchemy import event, text
 
 from usan_api.compat import agent_bridge, chat_agent_bridge, ids
 from usan_api.compat.errors import CompatError
-from usan_api.compat.schemas.chat_agents import ChatAgentCreateRequest
+from usan_api.compat.schemas.chat_agents import ChatAgentCreateRequest, ChatAgentUpdateRequest
 from usan_api.compat.schemas.retell_llm import CreateRetellLlmRequest
 from usan_api.settings import Settings
 from usan_api.tenant_context import set_tenant_context
@@ -62,6 +62,27 @@ async def test_create_chat_agent_stamps_channel_and_serializes(app_session):
     assert payload["agent_id"] == ids.encode_agent_id(profile.id)
     assert payload["response_engine"]["type"] == "retell-llm"
     assert payload["is_published"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_chat_agent_restamps_channel(app_session):
+    await _org(app_session)
+    settings = _settings()
+    llm = await agent_bridge.create_response_engine(
+        app_session, settings, CreateRetellLlmRequest(general_prompt="hi")
+    )
+    body = ChatAgentCreateRequest(
+        response_engine={"type": "retell-llm", "llm_id": ids.encode_llm_id(llm.id)},
+        agent_name="Chat Bot",
+    )
+    profile = await chat_agent_bridge.create_chat_agent(app_session, settings, body)
+    assert profile.channel == "chat"
+
+    update_body = ChatAgentUpdateRequest(agent_name="Renamed Bot")
+    updated = await chat_agent_bridge.update_chat_agent(
+        app_session, settings, ids.encode_agent_id(profile.id), update_body
+    )
+    assert updated.channel == "chat"
 
 
 @pytest.mark.asyncio
