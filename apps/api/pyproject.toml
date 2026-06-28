@@ -20,6 +20,7 @@ dependencies = [
     "limits>=5.8.0",
     "prometheus-fastapi-instrumentator>=8.0.0,<9",
     "prometheus-client>=0.21.1,<0.26",
+    "pgvector>=0.3.6",
 ]
 
 [dependency-groups]
