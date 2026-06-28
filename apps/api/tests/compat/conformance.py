@@ -9,6 +9,7 @@ Discovered oracle component / SDK model names (Tasks 4-15 reference):
   Chat:        oracle='ChatResponse'            sdk='retell.types:ChatResponse'
   ChatList:    oracle='V3ChatResponse' (items)  sdk='retell.types:ChatListResponse'
   Completion:  oracle='Message' (per messages[]) sdk='retell.types:ChatCreateChatCompletionResponse'
+  ChatAgent:   oracle='ChatAgentResponse'      sdk='retell.types:ChatAgentResponse'
 
 Validator choice: openapi-schema-validator (OAS30Validator)
   - Understands OpenAPI 3.0's `nullable: true` (not JSON Schema's type: [..., "null"])
