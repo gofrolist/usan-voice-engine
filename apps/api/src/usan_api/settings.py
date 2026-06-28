@@ -245,6 +245,18 @@ class Settings(BaseSettings):
     chat_analysis_enabled: bool = Field(default=False, alias="CHAT_ANALYSIS_ENABLED")
     chat_analysis_model: str = Field(default="gemini-2.5-flash", alias="CHAT_ANALYSIS_MODEL")
 
+    # Knowledge-base ingestion (Phase 5). All ship-inert: default OFF, so no Vertex embed
+    # (spend or PHI egress) and no poller until a deploy enables them AND gcp_project is set.
+    # Vertex text-embedding-005 is REGIONAL — kb_embedding_location must be a region, not
+    # "global". Dimension 768 is baked into the Vector(768) column (model change -> migration).
+    kb_embedding_enabled: bool = Field(default=False, alias="KB_EMBEDDING_ENABLED")
+    kb_embedding_model: str = Field(default="text-embedding-005", alias="KB_EMBEDDING_MODEL")
+    kb_embedding_location: str = Field(default="us-central1", alias="KB_EMBEDDING_LOCATION")
+    kb_ingestion_poller_enabled: bool = Field(default=False, alias="KB_INGESTION_POLLER_ENABLED")
+    kb_ingestion_poll_interval_s: int = Field(default=15, alias="KB_INGESTION_POLL_INTERVAL_S")
+    kb_ingestion_batch_size: int = Field(default=10, alias="KB_INGESTION_BATCH_SIZE")
+    kb_ingestion_lease_seconds: int = Field(default=300, alias="KB_INGESTION_LEASE_SECONDS")
+
     # --- Clara Care Parity (feature 002): three new poller phases + inbound-SMS
     # verification + Spanish callback. All ship-inert: every new poller defaults OFF,
     # so merging changes NO runtime behavior until a deploy explicitly enables them
