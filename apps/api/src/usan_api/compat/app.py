@@ -19,6 +19,7 @@ from usan_api.compat.routers import agents as compat_agents
 from usan_api.compat.routers import batches as compat_batches
 from usan_api.compat.routers import calls as compat_calls
 from usan_api.compat.routers import catalog as compat_catalog
+from usan_api.compat.routers import chat_agents as compat_chat_agents
 from usan_api.compat.routers import chats as compat_chats
 from usan_api.compat.routers import export_requests as compat_export_requests
 from usan_api.compat.routers import phone_numbers as compat_phone_numbers
@@ -54,6 +55,7 @@ def build_compat_app(settings: Settings) -> FastAPI:
     register_exception_handlers(app)
     app.include_router(compat_calls.router)
     app.include_router(compat_chats.router)
+    app.include_router(compat_chat_agents.router)
     app.include_router(compat_agents.router)
     app.include_router(compat_retell_llm.router)
     app.include_router(compat_batches.router)
