@@ -64,7 +64,12 @@ async def upsert(
     )
     await db.execute(stmt)
     await db.flush()
-    await db.run_sync(lambda s: s.expire_all())
-    record = await get_for_session(db, session_id)
-    assert record is not None  # just upserted
-    return record
+    # Re-select with populate_existing so the identity-map row (if a caller already loaded
+    # it) is refreshed to the just-written values — a surgical refresh, NOT a session-wide
+    # expire_all (which would also expire the caller's other loaded objects, e.g. ChatSession).
+    result = await db.execute(
+        select(ChatAnalysisRecord)
+        .where(ChatAnalysisRecord.chat_session_id == session_id)
+        .execution_options(populate_existing=True)
+    )
+    return result.scalar_one()
