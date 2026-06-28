@@ -122,6 +122,33 @@ width would need updating.
 - **Status lifecycle:** `in_progress → complete | error` only. `refreshing_in_progress`
   is never emitted.
 
+## Known limitations (deferred hardening)
+
+These are intentional v1 limitations of the ingestion pipeline (surfaced by adversarial
+review). None affect the inert ship or the single-container production topology; they
+matter when the poller is enabled and/or before any horizontal scale-out.
+
+- **Transient embed failure marks a KB terminally `error`.** Any exception during
+  embedding (including a transient Vertex 429 quota / 503 / network blip) sets
+  `status: error`; the poller only re-claims `in_progress` rows, so an errored KB is not
+  auto-retried. Large-document failures (the common case) are addressed — embedding is
+  now **batched** (≤100 chunks and ≤60 000 chars per Vertex request) so a big source no
+  longer overflows the per-request instance/token cap. The remaining gap is the transient
+  edge. **Recovery:** POST `add-knowledge-base-sources` with a new source (re-queues the
+  KB to `in_progress`), or a manual `UPDATE knowledge_bases SET status='in_progress',
+  claimed_at=NULL WHERE id=…` as the owner. A bounded-attempts auto-retry is a follow-up.
+- **Multi-replica ingestion is not yet concurrency-safe.** The lease + `SKIP LOCKED`
+  claim is correct for crash-recovery, but two pollers (multiple api replicas) could
+  re-claim the same KB mid-ingest and race on its chunks. A `UNIQUE(source_id,
+  chunk_index)` constraint on `knowledge_base_chunks` makes any such double-insert
+  **fail loud** (the second processor errors the KB rather than silently duplicating
+  chunks). Before scaling the api beyond one replica, add a mid-processing lease refresh
+  (and/or re-lock on `add-sources`). Single-container deployment is unaffected.
+- **The embed call holds a pooled DB connection.** Each KB is ingested in one short
+  transaction whose connection stays checked out across the (multi-second) Vertex embed
+  call. Acceptable for the single-replica, flag-gated deployment; a connection-release
+  refactor (load → release → embed → reopen) is a follow-up if the pool is contended.
+
 Migration `0047` (tables `knowledge_bases`, `knowledge_base_sources`, `knowledge_base_chunks`,
 `CREATE EXTENSION vector`, HNSW index, SECURITY DEFINER claim function) is applied as the
 `usan` owner before `compose up` — same owner-DDL convention as migrations `0036`+ (see
