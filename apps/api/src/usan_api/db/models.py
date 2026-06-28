@@ -1358,6 +1358,7 @@ class ChatAnalysisRecord(Base, TenantScoped):
     """
 
     __tablename__ = "chat_analyses"
+    __table_args__ = (UniqueConstraint("chat_session_id", name="uq_chat_analyses_session"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -1366,7 +1367,6 @@ class ChatAnalysisRecord(Base, TenantScoped):
         UUID(as_uuid=True),
         ForeignKey("chat_sessions.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
     )
     chat_summary: Mapped[str | None] = mapped_column(Text)
     user_sentiment: Mapped[str | None] = mapped_column(Text)

@@ -39,7 +39,15 @@ def serialize_chat(
         ]
 
     chat_analysis: ChatAnalysis | None = None
-    if analysis is not None:
+    if analysis is not None and any(
+        v is not None
+        for v in (
+            analysis.chat_summary,
+            analysis.user_sentiment,
+            analysis.chat_successful,
+            analysis.custom_analysis_data,
+        )
+    ):
         chat_analysis = ChatAnalysis(
             chat_summary=analysis.chat_summary,
             user_sentiment=analysis.user_sentiment,

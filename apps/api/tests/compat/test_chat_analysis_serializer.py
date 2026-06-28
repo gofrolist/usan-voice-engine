@@ -44,3 +44,17 @@ def test_analysis_passed_through():
     assert out["chat_analysis"]["user_sentiment"] == "Positive"
     assert out["chat_analysis"]["chat_successful"] is True
     assert "custom_analysis_data" not in out["chat_analysis"]  # None -> omitted
+
+
+def test_all_none_analysis_omits_field():
+    rec = ChatAnalysisRecord(
+        chat_session_id=uuid.uuid4(),
+        chat_summary=None,
+        user_sentiment=None,
+        chat_successful=None,
+        custom_analysis_data=None,
+    )
+    out = serialize_chat(_session(), [], include_transcript=False, analysis=rec).model_dump(
+        exclude_none=True
+    )
+    assert "chat_analysis" not in out

@@ -7,6 +7,7 @@
   PATCH  /update-chat/{chat_id}
   PATCH  /end-chat/{chat_id}        (204)
   DELETE /delete-chat/{chat_id}     (204)
+  PUT    /rerun-chat-analysis/{chat_id}
 
 Auth + org-scoped RLS via get_compat_db. Each op emits a PHI-free audit line.
 """
