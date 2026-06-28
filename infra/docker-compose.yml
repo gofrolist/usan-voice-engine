@@ -341,6 +341,18 @@ services:
       COMPAT_DEFAULT_TIMEZONE: ${COMPAT_DEFAULT_TIMEZONE:-America/New_York}
       COMPAT_KEY_RATE_LIMIT: ${COMPAT_KEY_RATE_LIMIT:-600/minute}
       COMPAT_WEBHOOK_DELIVERY_ENABLED: ${COMPAT_WEBHOOK_DELIVERY_ENABLED:-false}
+      # Phase 5 knowledge-bases (pgvector + Vertex text-embedding-005). SHIP-INERT: both
+      # poller and embedding default OFF. To activate: set KB_EMBEDDING_ENABLED=true,
+      # GCP_PROJECT, and KB_INGESTION_POLLER_ENABLED=true in Secret Manager usan-prod-env
+      # AND the VM infra/.env BEFORE cutting the v* tag (deploy does not re-fetch the secret).
+      KB_EMBEDDING_ENABLED: ${KB_EMBEDDING_ENABLED:-false}
+      KB_EMBEDDING_MODEL: ${KB_EMBEDDING_MODEL:-text-embedding-005}
+      KB_EMBEDDING_LOCATION: ${KB_EMBEDDING_LOCATION:-us-central1}
+      KB_INGESTION_POLLER_ENABLED: ${KB_INGESTION_POLLER_ENABLED:-false}
+      KB_INGESTION_POLL_INTERVAL_S: ${KB_INGESTION_POLL_INTERVAL_S:-15}
+      KB_INGESTION_BATCH_SIZE: ${KB_INGESTION_BATCH_SIZE:-10}
+      KB_INGESTION_LEASE_SECONDS: ${KB_INGESTION_LEASE_SECONDS:-300}
+      KB_INGESTION_MAX_ATTEMPTS: ${KB_INGESTION_MAX_ATTEMPTS:-3}
     # The API is stateless: no on-disk writes outside /tmp, so run the root
     # filesystem read-only and block privilege escalation. /tmp is a tmpfs for
     # any transient scratch (e.g. signed-URL staging).

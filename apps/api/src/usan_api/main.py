@@ -18,6 +18,7 @@ from usan_api import (
     schedule_orchestrator,
     webhook_delivery,
 )
+from usan_api.compat import kb_ingestion_poller
 from usan_api.compat import webhook_delivery as compat_webhook_delivery
 from usan_api.compat.app import build_compat_app
 from usan_api.db.session import dispose_engine, get_session_factory
@@ -138,6 +139,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         poller_tasks.append(asyncio.create_task(retention.run_poller(settings, stop)))
     if settings.scheduler_poller_enabled:
         poller_tasks.append(asyncio.create_task(schedule_orchestrator.run_poller(settings, stop)))
+    if settings.kb_ingestion_poller_enabled:
+        poller_tasks.append(asyncio.create_task(kb_ingestion_poller.run_poller(settings, stop)))
     # Notification outbox (Clara Care Parity 002): delivers family alerts / reports /
     # opt-out acks (sms_messages with call_id IS NULL). Ship-inert — off by default.
     if settings.notification_outbox_enabled:
