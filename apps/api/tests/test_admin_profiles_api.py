@@ -1,11 +1,13 @@
 import asyncio
+import json
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from usan_api.db.models import AdminAuditLog
+from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG
 
 
 def _name() -> str:
@@ -241,3 +243,55 @@ def test_draft_save_returns_both_unknown_token_and_phi_warnings(client, super_ad
     unknown_idx = next(i for i, w in enumerate(warnings) if w == "unknownvar")
     phi_idx = next(i for i, w in enumerate(warnings) if "{{last_check_in}}" in w)
     assert unknown_idx < phi_idx
+
+
+# --- channel guard: voice admin surface must 404 on chat-channel profiles ---------------
+
+
+async def _seed_chat_profile(async_database_url: str) -> uuid.UUID:
+    """Insert an agent_profiles row with channel='chat' via the superuser connection,
+    bypassing the native create_profile helper (which defaults to 'voice').
+    Returns the new profile id."""
+    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            org_id = (
+                await conn.execute(text("SELECT id FROM organizations WHERE slug = 'usan'"))
+            ).scalar_one()
+            row = await conn.execute(
+                text(
+                    "INSERT INTO agent_profiles (organization_id, name, draft_config, channel) "
+                    "VALUES (:org, :name, CAST(:cfg AS jsonb), 'chat') RETURNING id"
+                ),
+                {
+                    "org": org_id,
+                    "name": f"chat-agent-{uuid.uuid4().hex}",
+                    "cfg": json.dumps(DEFAULT_AGENT_CONFIG.model_dump()),
+                },
+            )
+            return row.scalar_one()
+    finally:
+        await engine.dispose()
+
+
+def test_voice_admin_get_chat_profile_returns_404(
+    client, super_admin_acting_session, async_database_url
+):
+    chat_id = asyncio.run(_seed_chat_profile(async_database_url))
+    r = client.get(f"/v1/admin/profiles/{chat_id}")
+    assert r.status_code == 404
+
+
+def test_voice_admin_archive_chat_profile_returns_404(
+    client, super_admin_acting_session, async_database_url
+):
+    chat_id = asyncio.run(_seed_chat_profile(async_database_url))
+    r = client.post(f"/v1/admin/profiles/{chat_id}/archive", json={})
+    assert r.status_code == 404
+
+
+def test_voice_admin_get_voice_profile_still_returns_200(client, super_admin_acting_session):
+    # Positive control: a normally-created (voice) profile is still readable.
+    pid = client.post("/v1/admin/profiles", json={"name": _name()}).json()["id"]
+    r = client.get(f"/v1/admin/profiles/{pid}")
+    assert r.status_code == 200

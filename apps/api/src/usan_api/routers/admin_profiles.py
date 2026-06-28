@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from usan_api.admin_actor import get_actor_email
 from usan_api.auth import get_tenant_db, require_admin_role
 from usan_api.db.base import AdminRole
+from usan_api.db.models import AgentProfile
 from usan_api.repositories import admin_audit
 from usan_api.repositories import agent_profiles as repo
 from usan_api.repositories import custom_variables as custom_variables_repo
@@ -39,6 +40,16 @@ router = APIRouter(
     tags=["admin-profiles"],
     dependencies=[Depends(require_admin_role(AdminRole.VIEWER))],
 )
+
+
+async def _load_voice_profile(db: AsyncSession, profile_id: uuid.UUID) -> AgentProfile:
+    """Load a profile by id for the VOICE admin surface, 404ing on a missing row OR a chat-channel
+    row (a chat agent is managed via the compat chat-agent ops, never the voice admin endpoints —
+    symmetric with the compat get-agent 404-on-chat guard)."""
+    profile = await repo.get_profile(db, profile_id)
+    if profile is None or profile.channel != "voice":
+        raise HTTPException(status_code=404, detail="profile not found")
+    return profile
 
 
 @router.get("", response_model=list[ProfileSummary])
@@ -96,9 +107,7 @@ async def create_profile(
 async def get_profile(
     profile_id: uuid.UUID, db: AsyncSession = Depends(get_tenant_db)
 ) -> ProfileDetail:
-    profile = await repo.get_profile(db, profile_id)
-    if profile is None:
-        raise HTTPException(status_code=404, detail="profile not found")
+    profile = await _load_voice_profile(db, profile_id)
     return ProfileDetail.from_model(profile)
 
 
@@ -110,6 +119,7 @@ async def update_draft(
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ProfileDetail:
+    await _load_voice_profile(db, profile_id)
     custom_names = await custom_variables_repo.names(db)
     custom_phi = await custom_variables_repo.phi_names(db)
     # AUTHORITATIVE 422 (spec §3.2.1): a phi=true custom in any SMS body blocks the
@@ -200,9 +210,7 @@ async def publish(
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> VersionSummary:
-    profile = await repo.get_profile(db, profile_id)
-    if profile is None:
-        raise HTTPException(status_code=404, detail="profile not found")
+    profile = await _load_voice_profile(db, profile_id)
     # AUTHORITATIVE 422 (spec §3.2.1): re-check the draft at publish time — a
     # variable may have been flipped to phi=true after the draft was saved.
     custom_phi = await custom_variables_repo.phi_names(db)
@@ -234,8 +242,7 @@ async def publish(
 async def list_versions(
     profile_id: uuid.UUID, db: AsyncSession = Depends(get_tenant_db)
 ) -> list[VersionSummary]:
-    if await repo.get_profile(db, profile_id) is None:
-        raise HTTPException(status_code=404, detail="profile not found")
+    await _load_voice_profile(db, profile_id)
     versions = await repo.list_versions(db, profile_id)
     return [VersionSummary.from_model(v) for v in versions]
 
@@ -244,6 +251,7 @@ async def list_versions(
 async def get_version(
     profile_id: uuid.UUID, version: int, db: AsyncSession = Depends(get_tenant_db)
 ) -> VersionDetail:
+    await _load_voice_profile(db, profile_id)
     row = await repo.get_version(db, profile_id, version)
     if row is None:
         raise HTTPException(status_code=404, detail="version not found")
@@ -262,6 +270,7 @@ async def rollback(
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> VersionSummary:
+    await _load_voice_profile(db, profile_id)
     target = await repo.get_version(db, profile_id, version)
     if target is None:
         raise HTTPException(status_code=404, detail="profile or version not found")
@@ -331,6 +340,7 @@ async def archive(
     actor: str = Depends(get_actor_email),
     _: object = Depends(require_admin_role(AdminRole.ADMIN)),
 ) -> ProfileDetail:
+    await _load_voice_profile(db, profile_id)
     try:
         profile = await repo.archive_profile(db, profile_id)
     except ProfileInUseError as exc:
