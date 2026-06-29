@@ -4,6 +4,7 @@ caller commits. claim_pending calls the SECURITY DEFINER fn (the only cross-org 
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from typing import Any, cast
 
 from sqlalchemy import delete, select, text
@@ -38,6 +39,19 @@ async def get_kb(db: AsyncSession, kb_id: uuid.UUID) -> KnowledgeBase | None:
     return (
         await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
     ).scalar_one_or_none()
+
+
+async def get_existing_kb_ids(db: AsyncSession, kb_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+    """Return the subset of `kb_ids` that exist within the caller's org (RLS-scoped).
+    Cross-org ids are simply absent from the result. Empty input -> empty set (no query)."""
+    if not kb_ids:
+        return set()
+    rows = (
+        (await db.execute(select(KnowledgeBase.id).where(KnowledgeBase.id.in_(kb_ids))))
+        .scalars()
+        .all()
+    )
+    return set(rows)
 
 
 async def list_kbs(db: AsyncSession) -> list[KnowledgeBase]:
@@ -238,3 +252,43 @@ async def claim_pending(
         )
     ).all()
     return [(r[0], r[1]) for r in rows]
+
+
+@dataclass(frozen=True)
+class ChunkHit:
+    knowledge_base_id: uuid.UUID
+    content: str
+    distance: float
+
+
+async def search_chunks(
+    db: AsyncSession,
+    *,
+    kb_ids: list[uuid.UUID],
+    query_embedding: list[float],
+    limit: int,
+    max_distance: float,
+) -> list[ChunkHit]:
+    """RLS-scoped cosine-distance search over the bound KBs' chunks. Returns hits ordered by
+    ascending distance, capped at `limit`, with hits above `max_distance` dropped (the relevance
+    floor). Empty `kb_ids` -> [] (no query). The embedding binds as a pgvector parameter."""
+    if not kb_ids:
+        return []
+    distance = KnowledgeBaseChunk.embedding.cosine_distance(query_embedding).label("distance")
+    rows = (
+        await db.execute(
+            select(
+                KnowledgeBaseChunk.knowledge_base_id,
+                KnowledgeBaseChunk.content,
+                distance,
+            )
+            .where(KnowledgeBaseChunk.knowledge_base_id.in_(kb_ids))
+            .order_by(distance)
+            .limit(limit)
+        )
+    ).all()
+    return [
+        ChunkHit(knowledge_base_id=r[0], content=r[1], distance=float(r[2]))
+        for r in rows
+        if float(r[2]) <= max_distance
+    ]

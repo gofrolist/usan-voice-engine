@@ -60,6 +60,41 @@ def test_embed_sync_sets_auto_truncate(monkeypatch) -> None:
     assert captured["config"].auto_truncate is True
 
 
+def test_embed_query_sync_uses_retrieval_query_task_type(monkeypatch) -> None:
+    """Query embedding MUST use the asymmetric RETRIEVAL_QUERY task type (vs ingestion's
+    RETRIEVAL_DOCUMENT) and request 768 dims."""
+    captured: dict = {}
+
+    class _FakeEmbedding:
+        values = [0.0] * 768
+
+    class _FakeResp:
+        embeddings = [_FakeEmbedding()]
+
+    class _FakeModels:
+        def embed_content(self, *, model, contents, config):
+            captured["config"] = config
+            captured["contents"] = contents
+            return _FakeResp()
+
+    class _FakeClient:
+        models = _FakeModels()
+
+        def __init__(self, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(kb_embeddings.genai, "Client", _FakeClient)
+    out = kb_embeddings._embed_query_sync("how do I reset my password?", _settings())
+    assert captured["config"].task_type == "RETRIEVAL_QUERY"
+    assert captured["config"].output_dimensionality == 768
+    assert captured["config"].auto_truncate is True
+    assert captured["contents"] == ["how do I reset my password?"]
+    assert len(out) == 768
+
+
 def test_batches_split_by_count_and_chars() -> None:
     # 250 short texts -> 3 batches of <=100 (ceil(250/100)=3)
     short = ["x"] * 250

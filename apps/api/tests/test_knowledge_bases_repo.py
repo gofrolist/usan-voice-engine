@@ -5,41 +5,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.kb_helpers import _delete_kbs_for_org, _seed_kb_for_org
 from usan_api.repositories import knowledge_bases as repo
 from usan_api.tenant_context import set_tenant_context
-
-
-async def _seed_kb_for_org(super_url: str, org_id: uuid.UUID, name: str) -> uuid.UUID:
-    """Insert a KB directly (superuser bypasses RLS) for an arbitrary org; returns its id."""
-    engine = create_async_engine(super_url, poolclass=NullPool)
-    try:
-        async with engine.begin() as conn:
-            row = (
-                await conn.execute(
-                    text(
-                        "INSERT INTO knowledge_bases "
-                        "(organization_id, name, status, max_chunk_size, min_chunk_size) "
-                        "VALUES (:org, :name, 'in_progress', 2000, 400) RETURNING id"
-                    ),
-                    {"org": str(org_id), "name": name},
-                )
-            ).one()
-            return row[0]
-    finally:
-        await engine.dispose()
-
-
-async def _delete_kbs_for_org(super_url: str, org_id: uuid.UUID) -> None:
-    """Delete all KB rows for an org (superuser) so org teardown FK constraint is satisfied."""
-    engine = create_async_engine(super_url, poolclass=NullPool)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(
-                text("DELETE FROM knowledge_bases WHERE organization_id = :org"),
-                {"org": str(org_id)},
-            )
-    finally:
-        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -99,4 +67,121 @@ async def test_cross_org_isolation_and_claim(two_orgs, app_session, async_databa
     finally:
         # Delete KB rows for org B before two_orgs teardown tries to delete the org
         # (knowledge_bases.organization_id FK has no ON DELETE CASCADE).
+        await _delete_kbs_for_org(async_database_url, org_b)
+
+
+# ---------------------------------------------------------------------------
+# search_chunks tests (Phase 5b)
+# ---------------------------------------------------------------------------
+
+
+def _vec_literal(values: list[float]) -> str:
+    return "[" + ",".join(str(v) for v in values) + "]"
+
+
+async def _seed_chunk_for_org(
+    super_url: str, org_id: uuid.UUID, *, embedding: list[float], content: str
+) -> uuid.UUID:
+    """Insert a KB + source + one chunk (superuser bypasses RLS); return the KB id."""
+    engine = create_async_engine(super_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            kb_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO knowledge_bases "
+                        "(organization_id, name, status, max_chunk_size, min_chunk_size) "
+                        "VALUES (:org, 'kb', 'complete', 2000, 400) RETURNING id"
+                    ),
+                    {"org": str(org_id)},
+                )
+            ).scalar_one()
+            src_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO knowledge_base_sources "
+                        "(organization_id, knowledge_base_id, source_type, content, content_url) "
+                        "VALUES (:org, :kb, 'text', :c, 'x') RETURNING id"
+                    ),
+                    {"org": str(org_id), "kb": str(kb_id), "c": content},
+                )
+            ).scalar_one()
+            await conn.execute(
+                text(
+                    "INSERT INTO knowledge_base_chunks "
+                    "(organization_id, knowledge_base_id, source_id, chunk_index,"
+                    " content, embedding)"
+                    " VALUES (:org, :kb, :src, 0, :c, CAST(:emb AS vector))"
+                ),
+                {
+                    "org": str(org_id),
+                    "kb": str(kb_id),
+                    "src": str(src_id),
+                    "c": content,
+                    "emb": _vec_literal(embedding),
+                },
+            )
+            return kb_id
+    finally:
+        await engine.dispose()
+
+
+def _unit(i: int, dim: int = 768) -> list[float]:
+    v = [0.0] * dim
+    v[i] = 1.0
+    return v
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_orders_by_distance_and_applies_floor(
+    two_orgs, app_session, async_database_url
+) -> None:
+    org_a, _org_b = two_orgs
+    near = await _seed_chunk_for_org(async_database_url, org_a, embedding=_unit(0), content="near")
+    far = await _seed_chunk_for_org(async_database_url, org_a, embedding=_unit(1), content="far")
+    try:
+        await set_tenant_context(app_session, org_a)
+        # query == _unit(0): distance 0 to `near`, ~1.0 to `far`.
+        hits = await repo.search_chunks(
+            app_session,
+            kb_ids=[near, far],
+            query_embedding=_unit(0),
+            limit=10,
+            max_distance=2.0,
+        )
+        assert [h.content for h in hits] == ["near", "far"]  # ascending distance
+        assert hits[0].distance < hits[1].distance
+        # floor drops the far chunk
+        floored = await repo.search_chunks(
+            app_session, kb_ids=[near, far], query_embedding=_unit(0), limit=10, max_distance=0.5
+        )
+        assert [h.content for h in floored] == ["near"]
+        # limit caps results
+        limited = await repo.search_chunks(
+            app_session, kb_ids=[near, far], query_embedding=_unit(0), limit=1, max_distance=2.0
+        )
+        assert len(limited) == 1
+        # empty kb_ids -> no query
+        assert (
+            await repo.search_chunks(
+                app_session, kb_ids=[], query_embedding=_unit(0), limit=10, max_distance=2.0
+            )
+            == []
+        )
+    finally:
+        await _delete_kbs_for_org(async_database_url, org_a)
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_cross_org_isolation(two_orgs, app_session, async_database_url) -> None:
+    org_a, org_b = two_orgs
+    kb_b = await _seed_chunk_for_org(async_database_url, org_b, embedding=_unit(0), content="b")
+    try:
+        await set_tenant_context(app_session, org_a)
+        # org A passing org B's kb_id sees nothing (RLS: usan_app is always policy-bound).
+        hits = await repo.search_chunks(
+            app_session, kb_ids=[kb_b], query_embedding=_unit(0), limit=10, max_distance=2.0
+        )
+        assert hits == []
+    finally:
         await _delete_kbs_for_org(async_database_url, org_b)

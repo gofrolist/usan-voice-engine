@@ -51,6 +51,7 @@ from usan_api.db.base import ProfileStatus
 from usan_api.db.models import AgentProfile, AgentProfileVersion
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import compat_webhooks as compat_webhooks_repo
+from usan_api.repositories import knowledge_bases as kb_repo
 from usan_api.repositories.agent_profiles import ProfileInUseError
 from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
 from usan_api.settings import Settings
@@ -67,7 +68,11 @@ def _config_dict(profile: AgentProfile) -> dict[str, Any]:
 
 
 def _apply_llm_overlay(
-    config: dict[str, Any], *, general_prompt: str | None, begin_message: str | None
+    config: dict[str, Any],
+    *,
+    general_prompt: str | None,
+    begin_message: str | None,
+    knowledge_base_ids: list[str] | None = None,
 ) -> None:
     # ``model`` / ``model_temperature`` / ``s2s_model`` are intentionally NOT applied — the
     # prompt runs on the engine's own Vertex pipeline with engine-controlled sampling
@@ -78,6 +83,10 @@ def _apply_llm_overlay(
         prompts["system_prompt"] = general_prompt
     if begin_message is not None:
         prompts["greeting"] = begin_message
+    # Phase 5b: knowledge_base_ids ARE honored — written into native config["llm"] so chat
+    # generation reads cfg.llm.knowledge_base_ids. None = PATCH no-op (prior binding survives).
+    if knowledge_base_ids is not None:
+        config["llm"]["knowledge_base_ids"] = knowledge_base_ids
 
 
 def _apply_voice_overlay(config: dict[str, Any], *, cartesia_voice_id: str) -> None:
@@ -100,6 +109,24 @@ def _validate_config(config: dict[str, Any]) -> None:
         AgentConfig.model_validate(config)
     except Exception as exc:  # pydantic ValidationError (and any odd shape) -> documented 422
         raise CompatError(422, "invalid agent configuration") from exc
+
+
+async def _validate_kb_ids(db: AsyncSession, kb_ids: list[str] | None) -> None:
+    """Reject any knowledge_base_id that doesn't resolve within the caller's org (RLS). Cross-org
+    is indistinguishable from absent -> a generic 422 that never acknowledges cross-org
+    existence (the same id under another org simply returns None from the RLS-scoped query)."""
+    if not kb_ids:
+        return
+    decoded: list[uuid.UUID] = []
+    for token in kb_ids:
+        try:
+            decoded.append(ids.decode_kb_id(token))
+        except CompatError as exc:
+            raise CompatError(422, "unknown knowledge_base_id") from exc
+    present = await kb_repo.get_existing_kb_ids(db, decoded)
+    for kb_uuid in decoded:
+        if kb_uuid not in present:
+            raise CompatError(422, "unknown knowledge_base_id")
 
 
 # --- name uniqueness (uq_agent_profiles_name_org) --------------------------------------
@@ -177,8 +204,14 @@ async def create_response_engine(
     """create-retell-llm: a NEW profile (the response-engine half), left as an unpublished
     draft. ``create-agent`` referencing its llm_id binds the agent half and publishes it."""
     name = await _unique_name(db, _provisional_llm_name())
+    await _validate_kb_ids(db, body.knowledge_base_ids)
     config = DEFAULT_AGENT_CONFIG.model_dump()
-    _apply_llm_overlay(config, general_prompt=body.general_prompt, begin_message=body.begin_message)
+    _apply_llm_overlay(
+        config,
+        general_prompt=body.general_prompt,
+        begin_message=body.begin_message,
+        knowledge_base_ids=body.knowledge_base_ids,
+    )
     _merge_extras(config, "llm", body.model_dump())
     _validate_config(config)
     # The provisional name is a uuid8 suffix (deduped), so create_profile's INSERT cannot
@@ -266,8 +299,14 @@ async def update_response_engine(
     db: AsyncSession, settings: Settings, llm_id: str, body: UpdateRetellLlmRequest
 ) -> AgentProfile:
     profile = await _load_active(db, ids.decode_llm_id(llm_id), kind="response engine")
+    await _validate_kb_ids(db, body.knowledge_base_ids)
     config = _config_dict(profile)
-    _apply_llm_overlay(config, general_prompt=body.general_prompt, begin_message=body.begin_message)
+    _apply_llm_overlay(
+        config,
+        general_prompt=body.general_prompt,
+        begin_message=body.begin_message,
+        knowledge_base_ids=body.knowledge_base_ids,
+    )
     _merge_extras(config, "llm", body.model_dump(exclude_none=True))
     _validate_config(config)
     await agent_profiles_repo.update_draft(
