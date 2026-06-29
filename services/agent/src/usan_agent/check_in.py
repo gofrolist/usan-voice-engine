@@ -1002,7 +1002,6 @@ def build_check_in_agent(
         call_id=call_id,
         kb_ids=cfg.llm.knowledge_base_ids,
         settings=settings,
-        enabled=bool(settings and settings.kb_retrieval_voice_enabled),
     )
 
 
@@ -1040,7 +1039,6 @@ def build_inbound_agent(
         call_id=call_id,
         kb_ids=cfg.llm.knowledge_base_ids,
         settings=settings,
-        enabled=bool(settings and settings.kb_retrieval_voice_enabled),
     )
 
 

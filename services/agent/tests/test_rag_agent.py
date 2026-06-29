@@ -6,9 +6,8 @@ from usan_agent import api_client
 from usan_agent.rag_agent import RagAgent
 
 
-def _settings():
-    # Reuse the project's settings factory if one exists in conftest/tests; otherwise build a
-    # minimal real Settings. kb_retrieval_voice_enabled / timeout come from defaults or here.
+def _settings(voice_enabled: bool = True):
+    # Build a minimal real Settings. kb_retrieval_voice_enabled controls the RAG flag.
     from usan_agent.settings import Settings
 
     return Settings(
@@ -20,15 +19,15 @@ def _settings():
         DEFAULT_CARTESIA_VOICE_ID="v",
         API_BASE_URL="http://api:8000",
         JWT_SIGNING_KEY="j" * 32,
+        KB_RETRIEVAL_VOICE_ENABLED=voice_enabled,
     )
 
 
-def _agent(*, enabled, call_id="call-1", kb_ids=("knowledge_base_a",)):
+def _agent(*, enabled: bool, call_id: str | None = "call-1", kb_ids: tuple = ("knowledge_base_a",)):
     return RagAgent(
         call_id=call_id,
         kb_ids=list(kb_ids) if kb_ids else [],
-        settings=_settings(),
-        enabled=enabled,
+        settings=_settings(voice_enabled=enabled),
         instructions="be kind",
     )
 

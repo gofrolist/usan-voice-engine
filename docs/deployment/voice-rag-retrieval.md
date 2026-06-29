@@ -102,6 +102,9 @@ retrieval HTTP call); set it under the agent service.
 - **Per-turn embed latency.** Each caller turn triggers a Vertex embed round-trip before the
   agent speaks. Latency is bounded by `KB_RETRIEVAL_TIMEOUT_S` (default 3 s); tune this
   value against observed p95 embed latency in your region.
+- **Rate-ceiling coupling.** Each per-turn retrieval counts as one tool call against the
+  call's shared per-call tool-call rate ceiling (`tool_call_rate`, default 120/minute);
+  this is generous for conversational cadence and also bounds a runaway agent's embed spend.
 - **Shared context-size cap.** Voice reuses `KB_RETRIEVAL_MAX_CONTEXT_CHARS` (default 8000),
   the same cap as chat. A smaller voice-specific cap (voice answers are shorter) is a possible
   follow-up.

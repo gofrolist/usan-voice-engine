@@ -180,7 +180,11 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
 
     # Unknown caller or lookup failed: greet-only, no per-contact state.
     session = build_session(settings, cfg)
-    agent = build_agent(cfg)
+    agent = build_agent(
+        cfg,
+        call_id=(str(info["call_id"]) if info and info.get("call_id") else None),
+        settings=settings,
+    )
     await session.start(agent=agent, room=ctx.room)
     # Arm the max-duration guard on this path too (it backstops the cost/safety cap on
     # every answered call). Hold a reference so the fire-and-forget task is not GC'd.

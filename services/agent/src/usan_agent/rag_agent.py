@@ -7,6 +7,9 @@ turn context for this generation only, not persisted into running history.
 
 Everything is gated and exception-guarded: an exception raised in on_user_turn_completed
 would ABORT the turn, so a retrieval failure must never escape this method.
+
+The enabled flag is derived from ``settings.kb_retrieval_voice_enabled`` — pass ``settings``
+to control it; there is no separate ``enabled`` constructor parameter.
 """
 
 from __future__ import annotations
@@ -31,7 +34,6 @@ class RagAgent(Agent):
         call_id: str | None = None,
         kb_ids: list[str] | None = None,
         settings: Settings | None = None,
-        enabled: bool = False,
         **agent_kwargs: Any,
     ) -> None:
         super().__init__(**agent_kwargs)
@@ -39,7 +41,8 @@ class RagAgent(Agent):
         self._kb_call_id = call_id
         self._kb_ids = kb_ids or []
         self._kb_settings = settings
-        self._kb_enabled = enabled
+        # Derive enabled from settings — no separate enabled param avoids call-site duplication.
+        self._kb_enabled = bool(settings and settings.kb_retrieval_voice_enabled)
 
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
