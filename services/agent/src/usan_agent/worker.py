@@ -144,6 +144,8 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
             resolved_vars=info.get("resolved_vars") or {},
             custom_vars=dynamic_vars,
             timezone=info.get("timezone") or "",
+            call_id=call_id,
+            settings=settings,
         )
         # Register the mid-call dynamic-var receiver BEFORE session.start().
         _inbound_vars = prompt_vars.build_vars(
@@ -508,6 +510,8 @@ async def entrypoint(ctx: JobContext) -> None:
             resolved_vars=meta.resolved_vars,
             custom_vars=meta.dynamic_vars,
             timezone=meta.timezone,
+            call_id=call_id,
+            settings=settings,
         )
         # Register the mid-call dynamic-var receiver BEFORE session.start() so it
         # is live when the LLM loop begins.  current_vars mirrors what build_check_in_agent

@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from livekit.agents.voice import Agent
+
 from usan_agent import pipeline as pipeline_mod
 from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
 from usan_agent.pipeline import (
@@ -46,7 +48,7 @@ def _capture(monkeypatch) -> dict:
 
 def test_build_agent_uses_default_system_prompt():
     agent = build_agent()
-    assert type(agent).__name__ == "Agent"
+    assert isinstance(agent, Agent)
     assert agent.instructions == SYSTEM_PROMPT
 
 

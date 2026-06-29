@@ -24,6 +24,7 @@ from usan_agent.api_client import (
     FlagSeverity,
 )
 from usan_agent.prompt_vars import build_vars, substitute
+from usan_agent.rag_agent import RagAgent
 from usan_agent.sanitize import sanitize_prompt_value
 from usan_agent.settings import Settings
 
@@ -978,6 +979,8 @@ def build_check_in_agent(
     custom_vars: dict[str, Any] | None = None,
     timezone: str = "",
     now: datetime | None = None,
+    call_id: str | None = None,
+    settings: Settings | None = None,
 ) -> Agent:
     """The outbound check-in Agent with substituted instructions + enabled tools.
 
@@ -992,10 +995,14 @@ def build_check_in_agent(
         timezone=timezone,
         now=now or datetime.now(UTC),
     )
-    return Agent(
+    return RagAgent(
         instructions=substitute(cfg.prompts.checkin_flow_instructions, values)
         + _sms_template_instructions(cfg.tools),
         tools=_select_tools(cfg.tools),
+        call_id=call_id,
+        kb_ids=cfg.llm.knowledge_base_ids,
+        settings=settings,
+        enabled=bool(settings and settings.kb_retrieval_voice_enabled),
     )
 
 
@@ -1006,6 +1013,8 @@ def build_inbound_agent(
     custom_vars: dict[str, Any] | None = None,
     timezone: str = "",
     now: datetime | None = None,
+    call_id: str | None = None,
+    settings: Settings | None = None,
 ) -> Agent:
     """The inbound check-in Agent: configured tools + personalized instructions.
 
@@ -1024,10 +1033,14 @@ def build_inbound_agent(
         timezone=timezone,
         now=now or datetime.now(UTC),
     )
-    return Agent(
+    return RagAgent(
         instructions=substitute(cfg.prompts.inbound_personalization_template, values)
         + _sms_template_instructions(cfg.tools),
         tools=_select_tools(cfg.tools),
+        call_id=call_id,
+        kb_ids=cfg.llm.knowledge_base_ids,
+        settings=settings,
+        enabled=bool(settings and settings.kb_retrieval_voice_enabled),
     )
 
 
