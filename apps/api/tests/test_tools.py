@@ -4,6 +4,9 @@ import uuid
 
 import jwt
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from tests.conftest import counter_value as _counter_value
 from usan_api import livekit_dispatch
@@ -804,3 +807,319 @@ def test_end_call_phone_call_still_increments_calls_total(
     assert after == before + 1, (
         "CALLS_TOTAL outbound bucket must still be incremented for phone calls"
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/tools/retrieve_kb_context  (Phase 5c voice-RAG)
+# ---------------------------------------------------------------------------
+
+
+def _vec_literal(values: list[float]) -> str:
+    return "[" + ",".join(str(v) for v in values) + "]"
+
+
+def _seed_kb_with_chunk(async_database_url: str, org_id: uuid.UUID) -> str:
+    """Insert a KB + source + one chunk for the given org (superuser bypasses RLS).
+
+    Returns the opaque KB token (encode_kb_id) so it can be stored in a profile config.
+    """
+    from usan_api.compat.ids import encode_kb_id
+
+    embedding = [1.0] + [0.0] * 767  # unit vector along dim-0
+
+    async def _run() -> str:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                kb_id = (
+                    await conn.execute(
+                        text(
+                            "INSERT INTO knowledge_bases "
+                            "(organization_id, name, status, max_chunk_size, min_chunk_size) "
+                            "VALUES (:org, 'voice-rag-kb', 'complete', 2000, 400) RETURNING id"
+                        ),
+                        {"org": str(org_id)},
+                    )
+                ).scalar_one()
+                src_id = (
+                    await conn.execute(
+                        text(
+                            "INSERT INTO knowledge_base_sources "
+                            "(organization_id, knowledge_base_id, source_type,"
+                            " content, content_url)"
+                            " VALUES (:org, :kb, 'text', 'hello world', 'x') RETURNING id"
+                        ),
+                        {"org": str(org_id), "kb": str(kb_id)},
+                    )
+                ).scalar_one()
+                await conn.execute(
+                    text(
+                        "INSERT INTO knowledge_base_chunks "
+                        "(organization_id, knowledge_base_id, source_id, chunk_index,"
+                        " content, embedding)"
+                        " VALUES (:org, :kb, :src, 0, 'hello world', CAST(:emb AS vector))"
+                    ),
+                    {
+                        "org": str(org_id),
+                        "kb": str(kb_id),
+                        "src": str(src_id),
+                        "emb": _vec_literal(embedding),
+                    },
+                )
+                return encode_kb_id(kb_id)
+        finally:
+            await engine.dispose()
+
+    return _asyncio.run(_run())
+
+
+def _resolve_usan_org_id(async_database_url: str) -> uuid.UUID:
+    """Read the seeded default (usan) org id via superuser engine."""
+
+    async def _run() -> uuid.UUID:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                return (
+                    await conn.execute(text("SELECT id FROM organizations WHERE slug = 'usan'"))
+                ).scalar_one()
+        finally:
+            await engine.dispose()
+
+    return _asyncio.run(_run())
+
+
+def _publish_kb_profile(async_database_url: str, kb_token: str) -> None:
+    """Publish a default-outbound profile that binds kb_token in llm.knowledge_base_ids."""
+    import asyncio
+
+    from usan_api.repositories import agent_profiles as profiles_repo
+    from usan_api.schemas.agent_config import AgentConfig
+
+    async def _do() -> None:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as db:
+                profile = await profiles_repo.create_profile(
+                    db,
+                    name=f"voice-rag-{uuid.uuid4()}",
+                    description=None,
+                    actor_email="op@x.io",
+                )
+                base = AgentConfig.model_validate(profile.draft_config)
+                llm = base.llm.model_copy(update={"knowledge_base_ids": [kb_token]})
+                draft = base.model_copy(update={"llm": llm}).model_dump()
+                await profiles_repo.update_draft(
+                    db, profile.id, config=draft, description=None, actor_email="op@x.io"
+                )
+                await profiles_repo.publish(db, profile.id, note=None, actor_email="op@x.io")
+                await profiles_repo.set_default(db, profile.id, direction="outbound")
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_do())
+
+
+def _override_settings(app, monkeypatch, *, voice_enabled: bool = True) -> None:
+    """Override get_settings on the routed app to flip kb_retrieval_voice_enabled + gcp_project."""
+    from usan_api.settings import get_settings
+
+    base = get_settings().model_copy(
+        update={
+            "kb_retrieval_voice_enabled": voice_enabled,
+            "gcp_project": "test-project",
+        }
+    )
+    app.dependency_overrides[get_settings] = lambda: base
+
+
+def test_retrieve_kb_context_returns_context_when_enabled(
+    client, mock_dispatch, async_database_url, monkeypatch
+):
+    """Flag ON + kb bound + embed monkeypatched -> hit_count >= 1 and non-empty context."""
+    import usan_api.compat.kb_retrieval as kb_mod
+    from tests.conftest import _routed_app
+    from usan_api.settings import get_settings
+
+    org_id = _resolve_usan_org_id(async_database_url)
+    kb_token = _seed_kb_with_chunk(async_database_url, org_id)
+    _publish_kb_profile(async_database_url, kb_token)
+
+    # monkeypatch embed_query to return a unit vector aligned with the chunk (dim-0 = 1)
+    async def _fake_embed(query, settings):
+        return [1.0] + [0.0] * 767
+
+    monkeypatch.setattr(kb_mod, "embed_query", _fake_embed)
+
+    app = _routed_app()
+    _override_settings(app, monkeypatch, voice_enabled=True)
+    try:
+        contact_id = _create_contact(client)
+        call_id = _enqueue(client, contact_id)
+        r = client.post(
+            "/v1/tools/retrieve_kb_context",
+            json={"call_id": call_id, "query": "hello"},
+            headers=_auth(call_id),
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["hit_count"] >= 1
+        assert body["context"]
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_retrieve_kb_context_empty_when_flag_off(
+    client, mock_dispatch, async_database_url, monkeypatch
+):
+    """Flag OFF -> empty result, embed must not be called."""
+    import usan_api.compat.kb_retrieval as kb_mod
+    from tests.conftest import _routed_app
+    from usan_api.settings import get_settings
+
+    org_id = _resolve_usan_org_id(async_database_url)
+    kb_token = _seed_kb_with_chunk(async_database_url, org_id)
+    _publish_kb_profile(async_database_url, kb_token)
+
+    async def _boom(*a, **k):
+        raise AssertionError("embed_query called while voice flag is OFF")
+
+    monkeypatch.setattr(kb_mod, "embed_query", _boom)
+
+    app = _routed_app()
+    _override_settings(app, monkeypatch, voice_enabled=False)
+    try:
+        contact_id = _create_contact(client)
+        call_id = _enqueue(client, contact_id)
+        r = client.post(
+            "/v1/tools/retrieve_kb_context",
+            json={"call_id": call_id, "query": "hello"},
+            headers=_auth(call_id),
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == {"context": "", "hit_count": 0}
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_retrieve_kb_context_empty_when_no_kb_bound(client, mock_dispatch, monkeypatch):
+    """No kb_ids in profile -> empty result (no embed)."""
+    import usan_api.compat.kb_retrieval as kb_mod
+    from tests.conftest import _routed_app
+    from usan_api.settings import get_settings
+
+    async def _boom(*a, **k):
+        raise AssertionError("embed_query called with no kb_ids bound")
+
+    monkeypatch.setattr(kb_mod, "embed_query", _boom)
+
+    app = _routed_app()
+    _override_settings(app, monkeypatch, voice_enabled=True)
+    try:
+        contact_id = _create_contact(client)
+        call_id = _enqueue(client, contact_id)
+        r = client.post(
+            "/v1/tools/retrieve_kb_context",
+            json={"call_id": call_id, "query": "hello"},
+            headers=_auth(call_id),
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == {"context": "", "hit_count": 0}
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_retrieve_kb_context_empty_on_blank_query(
+    client, mock_dispatch, async_database_url, monkeypatch
+):
+    """Flag ON, kb bound, blank query -> empty (no embed)."""
+    import usan_api.compat.kb_retrieval as kb_mod
+    from tests.conftest import _routed_app
+    from usan_api.settings import get_settings
+
+    org_id = _resolve_usan_org_id(async_database_url)
+    kb_token = _seed_kb_with_chunk(async_database_url, org_id)
+    _publish_kb_profile(async_database_url, kb_token)
+
+    async def _boom(*a, **k):
+        raise AssertionError("embed_query called for blank query")
+
+    monkeypatch.setattr(kb_mod, "embed_query", _boom)
+
+    app = _routed_app()
+    _override_settings(app, monkeypatch, voice_enabled=True)
+    try:
+        contact_id = _create_contact(client)
+        call_id = _enqueue(client, contact_id)
+        r = client.post(
+            "/v1/tools/retrieve_kb_context",
+            json={"call_id": call_id, "query": ""},
+            headers=_auth(call_id),
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == {"context": "", "hit_count": 0}
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_retrieve_kb_context_rejects_token_not_for_call(client, mock_dispatch):
+    """Token scoped to a different call_id -> 403."""
+    contact_id = _create_contact(client)
+    call_id = _enqueue(client, contact_id)
+    other = str(uuid.uuid4())
+    r = client.post(
+        "/v1/tools/retrieve_kb_context",
+        json={"call_id": other, "query": "x"},
+        headers=_auth(call_id),
+    )
+    assert r.status_code == 403
+
+
+def test_retrieve_kb_context_unknown_call_404(client, mock_dispatch):
+    """Token scoped to an unknown call_id -> 404.
+
+    Cross-org chunk isolation is proven by 5b's test_search_chunks_cross_org_isolation;
+    using an unknown call_id here is sufficient to exercise _authorize_call's 404 path.
+    """
+    cid = str(uuid.uuid4())
+    r = client.post(
+        "/v1/tools/retrieve_kb_context",
+        json={"call_id": cid, "query": "x"},
+        headers=_auth(cid),
+    )
+    assert r.status_code == 404
+
+
+def test_retrieve_kb_context_degrades_on_retrieval_error(
+    client, mock_dispatch, async_database_url, monkeypatch
+):
+    """retrieve_context raising -> endpoint returns empty 200, never 500."""
+    import usan_api.routers.tools as tools_mod
+    from tests.conftest import _routed_app
+    from usan_api.settings import get_settings
+
+    org_id = _resolve_usan_org_id(async_database_url)
+    kb_token = _seed_kb_with_chunk(async_database_url, org_id)
+    _publish_kb_profile(async_database_url, kb_token)
+
+    async def _boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(tools_mod, "retrieve_context", _boom)
+
+    app = _routed_app()
+    _override_settings(app, monkeypatch, voice_enabled=True)
+    try:
+        contact_id = _create_contact(client)
+        call_id = _enqueue(client, contact_id)
+        r = client.post(
+            "/v1/tools/retrieve_kb_context",
+            json={"call_id": call_id, "query": "x"},
+            headers=_auth(call_id),
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == {"context": "", "hit_count": 0}
+    finally:
+        app.dependency_overrides.pop(get_settings, None)

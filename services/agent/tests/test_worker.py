@@ -128,7 +128,7 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
     built = {}
 
     def _fake_build_check_in_agent(
-        cfg=None, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+        cfg=None, *, resolved_vars=None, custom_vars=None, timezone="", now=None, **kwargs
     ):
         agent = MagicMock(name="check_in_agent")
         built["agent"] = agent
@@ -252,7 +252,7 @@ async def test_inbound_known_contact_runs_check_in(monkeypatch):
     built = {}
 
     def _fake_build_inbound_agent(
-        cfg, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+        cfg, *, resolved_vars=None, custom_vars=None, timezone="", now=None, **kwargs
     ):
         built["custom_vars"] = custom_vars
         agent = MagicMock(name="inbound_agent")
@@ -610,7 +610,7 @@ async def test_outbound_threads_resolved_vars_into_builder(monkeypatch):
     built = {}
 
     def _fake_build_check_in_agent(
-        cfg=None, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+        cfg=None, *, resolved_vars=None, custom_vars=None, timezone="", now=None, **kwargs
     ):
         built["resolved_vars"] = resolved_vars
         built["custom_vars"] = custom_vars
@@ -665,7 +665,7 @@ async def test_inbound_threads_resolved_vars_into_builder(monkeypatch):
     built = {}
 
     def _fake_build_inbound_agent(
-        cfg, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+        cfg, *, resolved_vars=None, custom_vars=None, timezone="", now=None, **kwargs
     ):
         built["resolved_vars"] = resolved_vars
         built["custom_vars"] = custom_vars
@@ -699,3 +699,87 @@ async def test_inbound_threads_resolved_vars_into_builder(monkeypatch):
     assert built["resolved_vars"] == {"first_name": "Ada"}
     assert built["custom_vars"] == {"company": "USAN"}
     assert built["timezone"] == "US/Eastern"
+
+
+async def test_outbound_passes_call_id_and_settings_to_builder(monkeypatch):
+    # Regression guard: if call_id= or settings= is dropped from the outbound
+    # build_check_in_agent call site, this test FAILS.
+    _settings(monkeypatch)
+
+    captured_kwargs: dict = {}
+
+    def _fake_build_check_in_agent(
+        cfg=None, *, resolved_vars=None, custom_vars=None, timezone="", now=None, **kwargs
+    ):
+        captured_kwargs.update(kwargs)
+        return MagicMock()
+
+    def _fake_build_session(settings, cfg=None, userdata=None):
+        session = MagicMock()
+        session.start = AsyncMock()
+        session.say = AsyncMock()
+        session.on = MagicMock()
+        return session
+
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "build_check_in_agent", _fake_build_check_in_agent)
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
+    monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "_run_detection_window", AsyncMock())
+    monkeypatch.setattr(worker, "start_call_recording", AsyncMock())
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock()
+    ctx.room.name = "usan-outbound-x"
+    ctx.job.metadata = '{"call_id": "call-99", "direction": "outbound", "dynamic_vars": {}}'
+
+    await worker.entrypoint(ctx)
+
+    assert captured_kwargs.get("call_id") == "call-99", "call_id must reach build_check_in_agent"
+    assert captured_kwargs.get("settings") is not None, "settings must reach build_check_in_agent"
+
+
+async def test_inbound_greet_only_passes_settings_to_build_agent(monkeypatch):
+    # Regression guard: if settings= is dropped from the greet-only build_agent call site,
+    # this test FAILS — settings is needed so RAG activates for known configs.
+    _settings(monkeypatch)
+
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+        return None  # unknown caller / lookup failed
+
+    monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
+
+    captured_build_agent_kwargs: dict = {}
+
+    def _fake_build_agent(cfg=None, *, call_id=None, settings=None, **kwargs):
+        captured_build_agent_kwargs["call_id"] = call_id
+        captured_build_agent_kwargs["settings"] = settings
+        return MagicMock()
+
+    def _fake_build_session(settings, cfg=None, userdata=None):
+        session = MagicMock()
+        session.start = AsyncMock()
+        return session
+
+    monkeypatch.setattr(worker, "build_agent", _fake_build_agent)
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "greet", AsyncMock())
+    monkeypatch.setattr(worker, "fetch_agent_config", _fake_fetch)
+
+    participant = MagicMock()
+    participant.attributes = {}
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock(return_value=participant)
+    ctx.room.name = "usan-inbound-x"
+    ctx.job.metadata = None
+
+    await worker.entrypoint(ctx)
+
+    # settings must always reach build_agent (enables RAG when kb_retrieval_voice_enabled=true)
+    assert captured_build_agent_kwargs.get("settings") is not None, (
+        "settings must reach build_agent on greet-only path"
+    )

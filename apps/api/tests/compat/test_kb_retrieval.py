@@ -30,17 +30,19 @@ async def test_gating_returns_empty(monkeypatch) -> None:
 
     monkeypatch.setattr(kb_retrieval, "embed_query", _boom)
 
-    # flag off
-    r = await retrieve_context(None, _settings(kb_retrieval_enabled=False), kb_ids=[_KB], query="q")
+    # enabled=False gate (channel disables retrieval)
+    r = await retrieve_context(None, _settings(), kb_ids=[_KB], query="q", enabled=False)
     assert r == RetrievedContext("", 0)
     # no gcp_project
-    r = await retrieve_context(None, _settings(gcp_project=None), kb_ids=[_KB], query="q")
+    r = await retrieve_context(
+        None, _settings(gcp_project=None), kb_ids=[_KB], query="q", enabled=True
+    )
     assert r == RetrievedContext("", 0)
     # no kb_ids
-    r = await retrieve_context(None, _settings(), kb_ids=[], query="q")
+    r = await retrieve_context(None, _settings(), kb_ids=[], query="q", enabled=True)
     assert r == RetrievedContext("", 0)
     # blank query
-    r = await retrieve_context(None, _settings(), kb_ids=[_KB], query="   ")
+    r = await retrieve_context(None, _settings(), kb_ids=[_KB], query="   ", enabled=True)
     assert r == RetrievedContext("", 0)
 
 
@@ -57,7 +59,7 @@ async def test_assembles_block_and_counts(monkeypatch) -> None:
 
     monkeypatch.setattr(kb_retrieval, "embed_query", _embed)
     monkeypatch.setattr(kb_retrieval, "search_chunks", _search)
-    r = await retrieve_context(None, _settings(), kb_ids=[_KB], query="q")
+    r = await retrieve_context(None, _settings(), kb_ids=[_KB], query="q", enabled=True)
     assert r.hit_count == 2
     assert "alpha" in r.text
     assert "beta" in r.text
@@ -77,7 +79,7 @@ async def test_char_cap_stops_before_exceeding(monkeypatch) -> None:
     monkeypatch.setattr(kb_retrieval, "embed_query", _embed)
     monkeypatch.setattr(kb_retrieval, "search_chunks", _search)
     r = await retrieve_context(
-        None, _settings(kb_retrieval_max_context_chars=60), kb_ids=[_KB], query="q"
+        None, _settings(kb_retrieval_max_context_chars=60), kb_ids=[_KB], query="q", enabled=True
     )
     assert "A" * 50 in r.text  # first chunk fits
     assert "B" * 50 not in r.text  # second would exceed 60 -> dropped
@@ -100,7 +102,9 @@ async def test_logs_are_phi_safe(monkeypatch) -> None:
     buf = io.StringIO()
     handler_id = logger.add(buf, level="DEBUG")
     try:
-        await retrieve_context(None, _settings(), kb_ids=[_KB], query="SECRET_QUERY_TEXT")
+        await retrieve_context(
+            None, _settings(), kb_ids=[_KB], query="SECRET_QUERY_TEXT", enabled=True
+        )
     finally:
         logger.remove(handler_id)
 

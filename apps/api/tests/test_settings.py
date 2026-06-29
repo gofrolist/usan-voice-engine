@@ -577,3 +577,16 @@ def test_kb_retrieval_defaults_ship_inert(monkeypatch) -> None:
     assert s.kb_retrieval_top_k == 5
     assert s.kb_retrieval_max_distance == 0.7
     assert s.kb_retrieval_max_context_chars == 8000
+
+
+def test_kb_retrieval_voice_enabled_defaults_false(monkeypatch) -> None:
+    _base_env(monkeypatch)
+    s = Settings()
+    assert s.kb_retrieval_voice_enabled is False
+
+
+def test_kb_retrieval_voice_enabled_reads_alias(monkeypatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("KB_RETRIEVAL_VOICE_ENABLED", "true")
+    s = Settings()
+    assert s.kb_retrieval_voice_enabled is True

@@ -176,7 +176,7 @@ async def test_generate_agent_reply_injects_kb_context(app_session, monkeypatch)
         captured["system_instruction"] = kwargs["system_instruction"]
         return VertexTurn(text="answer")
 
-    async def fake_retrieve(db, settings, *, kb_ids, query):
+    async def fake_retrieve(db, settings, *, kb_ids, query, enabled):
         captured["query"] = query
         return RetrievedContext(text="DOC_CONTEXT", hit_count=1)
 
@@ -212,7 +212,7 @@ async def test_generate_agent_reply_no_kb_context_when_no_match(app_session, mon
         captured["system_instruction"] = kwargs["system_instruction"]
         return VertexTurn(text="answer")
 
-    async def fake_retrieve(db, settings, *, kb_ids, query):
+    async def fake_retrieve(db, settings, *, kb_ids, query, enabled):
         return RetrievedContext(text="", hit_count=0)
 
     monkeypatch.setattr("usan_api.compat.chat_service.run_vertex_turn", fake_turn)
@@ -241,7 +241,7 @@ async def test_generate_agent_reply_degrades_on_retrieval_error(app_session, mon
         captured["system_instruction"] = kwargs["system_instruction"]
         return VertexTurn(text="answer")
 
-    async def boom_retrieve(db, settings, *, kb_ids, query):
+    async def boom_retrieve(db, settings, *, kb_ids, query, enabled):
         raise RuntimeError("vertex 429")
 
     monkeypatch.setattr("usan_api.compat.chat_service.run_vertex_turn", fake_turn)
@@ -271,7 +271,7 @@ async def test_create_chat_completion_survives_db_abort_in_retrieval(
     from usan_api.compat.kb_retrieval import RetrievedContext
     from usan_api.vertex_test import VertexTurn
 
-    async def poison_retrieve(db, settings, *, kb_ids, query):
+    async def poison_retrieve(db, settings, *, kb_ids, query, enabled):
         # Runs a genuinely aborting statement to enter the "failed transaction" state,
         # exactly as a Cloud SQL statement-timeout / pgvector error would.
         await db.execute(text("SELECT 1/0"))

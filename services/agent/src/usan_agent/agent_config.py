@@ -37,6 +37,10 @@ class VoiceConfig(BaseModel):
 class LLMConfig(BaseModel):
     model: str = "gemini-3.1-flash-lite"
     temperature: float | None = None
+    # Phase 5c: KB ids bound to this agent (mirrors the API copy). Used by the worker ONLY
+    # as a local gate (skip the per-turn retrieval HTTP call when empty); the ids themselves
+    # are never sent — the server re-derives them. Optional+default per the forward-compat rule.
+    knowledge_base_ids: list[str] | None = None
 
 
 class STTConfig(BaseModel):

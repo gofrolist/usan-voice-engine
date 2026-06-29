@@ -185,3 +185,17 @@ class CloseFamilyTaskResponse(BaseModel):
     # "delivered" when >=1 task was moved open->delivered, else "noop".
     status: str
     delivered: int
+
+
+class RetrieveKbContextRequest(ToolCallRequest):
+    # The worker sends the latest user utterance. The server re-derives kb_ids + org
+    # itself (server-authoritative); the worker is trusted for neither. max_length caps
+    # a hijacked-agent abuse path on the per-turn embed. Empty is allowed (retrieve_context
+    # returns an empty result for a blank query).
+    query: str = Field(max_length=4000)
+
+
+class RetrieveKbContextResponse(BaseModel):
+    # Invisible RAG: the assembled context block + a count. Never echoes kb ids or titles.
+    context: str
+    hit_count: int

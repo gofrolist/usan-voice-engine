@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     api_base_url: str = Field(..., min_length=1, alias="API_BASE_URL")
     jwt_signing_key: str = Field(..., min_length=32, alias="JWT_SIGNING_KEY")
     gcs_bucket: str | None = Field(default=None, alias="GCS_BUCKET")
+    # Voice-RAG (Phase 5c). kb_retrieval_voice_enabled gates whether the worker makes the
+    # per-turn retrieve_kb_context call at all (a true no-op when off — no wasted round-trip);
+    # the API has its own KB_RETRIEVAL_VOICE_ENABLED that is the real embed/search gate.
+    # kb_retrieval_timeout_s bounds the per-turn retrieval HTTP call so a slow lookup can't
+    # stall turn-taking; on timeout the worker speaks without injected context.
+    kb_retrieval_voice_enabled: bool = Field(default=False, alias="KB_RETRIEVAL_VOICE_ENABLED")
+    kb_retrieval_timeout_s: float = Field(default=3.0, alias="KB_RETRIEVAL_TIMEOUT_S")
     # The outbound answer timeout is now driven by the published agent config
     # (agent_config.TimingConfig.answer_timeout_s), resolved per call at start.
     # The former OUTBOUND_ANSWER_TIMEOUT_S env var / Settings field was removed to

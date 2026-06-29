@@ -48,9 +48,11 @@ def _assemble(contents: list[str], max_chars: int) -> str:
 
 
 async def retrieve_context(
-    db: AsyncSession, settings: Settings, *, kb_ids: list[str], query: str
+    db: AsyncSession, settings: Settings, *, kb_ids: list[str], query: str, enabled: bool
 ) -> RetrievedContext:
-    if not settings.kb_retrieval_enabled or not settings.gcp_project or not kb_ids:
+    # `enabled` is the CHANNEL's gate: chat passes settings.kb_retrieval_enabled, voice
+    # passes settings.kb_retrieval_voice_enabled. gcp_project stays the egress hard-gate.
+    if not enabled or not settings.gcp_project or not kb_ids:
         return _EMPTY
     if not query.strip():
         return _EMPTY

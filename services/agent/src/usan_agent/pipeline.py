@@ -17,6 +17,7 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from loguru import logger
 
 from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
+from usan_agent.rag_agent import RagAgent
 from usan_agent.settings import Settings
 
 # Back-compat module aliases — the current defaults, sourced from DEFAULT_AGENT_CONFIG
@@ -106,12 +107,20 @@ def build_session(
     return AgentSession(**session_kwargs)
 
 
-def build_agent(cfg: AgentConfig | None = None) -> Agent:
+def build_agent(
+    cfg: AgentConfig | None = None,
+    *,
+    call_id: str | None = None,
+    settings: Settings | None = None,
+) -> Agent:
     """Construct the greet-only Agent with the configured system prompt (no tools)."""
     cfg = cfg or DEFAULT_AGENT_CONFIG
-    return Agent(
+    return RagAgent(
         instructions=cfg.prompts.system_prompt,
         chat_ctx=ChatContext(),
+        call_id=call_id,
+        kb_ids=cfg.llm.knowledge_base_ids,
+        settings=settings,
     )
 
 

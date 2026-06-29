@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import activities_catalog, cost, emergency_resources, notifications, sms_render
 from usan_api.auth import require_service_token
+from usan_api.compat.kb_retrieval import RetrievedContext, retrieve_context
 from usan_api.db.base import CallType
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
@@ -60,6 +61,8 @@ from usan_api.schemas.tools import (
     MetricsAcceptedResponse,
     OptOutRecordedResponse,
     RegisterOptOutRequest,
+    RetrieveKbContextRequest,
+    RetrieveKbContextResponse,
     ScheduleCallbackRequest,
     SendInfoSmsRequest,
     SendSmsRequest,
@@ -667,6 +670,50 @@ async def send_info_sms(
     # Does NOT send synchronously: flush_pending_sms delivers post-call (design §6.3).
     logger.bind(call_id=str(call.id)).info("Queued send_info_sms")
     return SmsQueuedResponse(id=row.id, status=row.status)
+
+
+@router.post("/retrieve_kb_context", response_model=RetrieveKbContextResponse)
+@track_tool("retrieve_kb_context")
+async def retrieve_kb_context(
+    body: RetrieveKbContextRequest,
+    db: AsyncSession = Depends(get_db),
+    claims: dict[str, Any] = Depends(require_service_token),
+    settings: Settings = Depends(get_settings),
+) -> RetrieveKbContextResponse:
+    """Voice-RAG (Phase 5c): retrieve KB context for the worker's current turn.
+
+    Server-authoritative: org is bound by RLS (via the call, fail-closed) and kb_ids are
+    re-derived from the resolved profile — the worker sends only {call_id, query}. Read-only
+    and best-effort: any retrieval failure degrades to empty context (never 500s the call).
+    """
+    call = await _authorize_call(body.call_id, claims, db)
+    contact = (
+        await contacts_repo.get_contact(db, call.contact_id)
+        if call.contact_id is not None
+        else None
+    )
+    resolved = await profiles_repo.resolve_agent_config(
+        db,
+        profile_override=call.profile_override,
+        contact_profile_id=contact.agent_profile_id if contact is not None else None,
+        direction=call.direction.value,
+    )
+    cfg = resolved.config if resolved is not None else DEFAULT_AGENT_CONFIG
+    kb_ids = cfg.llm.knowledge_base_ids or []
+    try:
+        retrieved = await retrieve_context(
+            db,
+            settings,
+            kb_ids=kb_ids,
+            query=body.query,
+            enabled=settings.kb_retrieval_voice_enabled,
+        )
+    except Exception as exc:  # best-effort: retrieval NEVER breaks a call
+        logger.bind(err=type(exc).__name__, kb_count=len(kb_ids)).warning(
+            "voice kb retrieval failed; returning empty context"
+        )
+        retrieved = RetrievedContext("", 0)
+    return RetrieveKbContextResponse(context=retrieved.text, hit_count=retrieved.hit_count)
 
 
 @router.post("/set_spanish_callback", response_model=SpanishCallbackScheduledResponse)

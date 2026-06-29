@@ -144,6 +144,8 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
             resolved_vars=info.get("resolved_vars") or {},
             custom_vars=dynamic_vars,
             timezone=info.get("timezone") or "",
+            call_id=call_id,
+            settings=settings,
         )
         # Register the mid-call dynamic-var receiver BEFORE session.start().
         _inbound_vars = prompt_vars.build_vars(
@@ -178,7 +180,11 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
 
     # Unknown caller or lookup failed: greet-only, no per-contact state.
     session = build_session(settings, cfg)
-    agent = build_agent(cfg)
+    agent = build_agent(
+        cfg,
+        call_id=(str(info["call_id"]) if info and info.get("call_id") else None),
+        settings=settings,
+    )
     await session.start(agent=agent, room=ctx.room)
     # Arm the max-duration guard on this path too (it backstops the cost/safety cap on
     # every answered call). Hold a reference so the fire-and-forget task is not GC'd.
@@ -326,7 +332,12 @@ async def _run_web(
     )
     session = build_session(settings, cfg, userdata=data)
     agent = build_check_in_agent(
-        cfg, resolved_vars=meta.resolved_vars, custom_vars=meta.dynamic_vars, timezone=meta.timezone
+        cfg,
+        resolved_vars=meta.resolved_vars,
+        custom_vars=meta.dynamic_vars,
+        timezone=meta.timezone,
+        call_id=call_id,
+        settings=settings,
     )
     _web_vars = prompt_vars.build_vars(
         meta.resolved_vars or {},
@@ -508,6 +519,8 @@ async def entrypoint(ctx: JobContext) -> None:
             resolved_vars=meta.resolved_vars,
             custom_vars=meta.dynamic_vars,
             timezone=meta.timezone,
+            call_id=call_id,
+            settings=settings,
         )
         # Register the mid-call dynamic-var receiver BEFORE session.start() so it
         # is live when the LLM loop begins.  current_vars mirrors what build_check_in_agent

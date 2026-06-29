@@ -1,4 +1,4 @@
-from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
+from usan_agent.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig, LLMConfig
 
 
 def test_default_is_complete_and_branded():
@@ -105,6 +105,23 @@ def test_agent_config_roundtrips_sms_block():
     cfg = AgentConfig.model_validate(base)
     assert cfg.tools.sms is not None
     assert cfg.tools.sms.templates[0].key == "a"
+
+
+def test_llm_config_knowledge_base_ids_defaults_none():
+    assert LLMConfig().knowledge_base_ids is None
+
+
+def test_llm_config_parses_knowledge_base_ids():
+    cfg = LLMConfig.model_validate({"model": "m", "knowledge_base_ids": ["knowledge_base_a"]})
+    assert cfg.knowledge_base_ids == ["knowledge_base_a"]
+
+
+def test_old_config_without_knowledge_base_ids_still_validates():
+    # Forward-compat: a published config produced before the field existed must parse.
+    raw = DEFAULT_AGENT_CONFIG.model_dump()
+    raw["llm"].pop("knowledge_base_ids", None)
+    cfg = AgentConfig.model_validate(raw)
+    assert cfg.llm.knowledge_base_ids is None
 
 
 def test_unknown_policy_key_is_ignored():
