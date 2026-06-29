@@ -131,3 +131,22 @@ def test_api_base_url_rejects_external_http(monkeypatch):
     monkeypatch.setenv("API_BASE_URL", "http://api.usan.example.com")
     with pytest.raises(ValueError, match="API_BASE_URL"):
         get_settings()
+
+
+def _set_required_env(monkeypatch):
+    """Set all required env-var aliases so Settings() constructs without error."""
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://lk")
+    monkeypatch.setenv("CARTESIA_API_KEY", "cart-key")
+    monkeypatch.setenv("GCP_PROJECT", "usan-retirement")
+    monkeypatch.setenv("DEFAULT_CARTESIA_VOICE_ID", "voice-uuid")
+    monkeypatch.setenv("API_BASE_URL", "http://api:8000")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+
+
+def test_kb_retrieval_voice_settings_defaults(monkeypatch):
+    _set_required_env(monkeypatch)
+    s = Settings()
+    assert s.kb_retrieval_voice_enabled is False
+    assert s.kb_retrieval_timeout_s == 3.0
