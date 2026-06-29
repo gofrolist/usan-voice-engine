@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from usan_api import chat_analysis, telnyx_messaging
 from usan_api.compat import ids
 from usan_api.compat.errors import CompatError
+from usan_api.compat.kb_retrieval import RetrievedContext, retrieve_context
 from usan_api.compat.schemas.chats import (
     CreateChatCompletionRequest,
     CreateChatRequest,
@@ -201,6 +202,24 @@ async def generate_agent_reply(db: AsyncSession, settings: Settings, session: Ch
     values = build_vars({}, bare_vars, timezone="", now=datetime.now(UTC))
     system_instruction = substitute(cfg.prompts.system_prompt, values)
     history = await chats_repo.list_messages(db, session.id)
+
+    kb_ids = cfg.llm.knowledge_base_ids or []
+    if kb_ids and settings.kb_retrieval_enabled:
+        query_text = next((m.content for m in reversed(history) if m.role in ("user", "sms")), "")
+        try:
+            retrieved = await retrieve_context(db, settings, kb_ids=kb_ids, query=query_text)
+        except Exception as exc:  # best-effort: retrieval NEVER breaks a reply
+            logger.bind(err=type(exc).__name__, kb_count=len(kb_ids)).warning(
+                "kb retrieval failed; replying without context"
+            )
+            retrieved = RetrievedContext("", 0)
+        if retrieved.text:
+            system_instruction += (
+                "\n\nKnowledge base context:\n"
+                + retrieved.text
+                + "\n\nUse the above context to answer when relevant."
+            )
+
     contents = [
         {"role": "model" if m.role == "agent" else "user", "parts": [{"text": m.content}]}
         for m in history

@@ -1,7 +1,8 @@
-"""Service-level tests for compat.chat_service (Phase 4a)."""
+"""Service-level tests for compat.chat_service (Phase 4a + 5b)."""
 
 from __future__ import annotations
 
+import copy
 import uuid
 from unittest.mock import AsyncMock
 
@@ -14,6 +15,7 @@ from usan_api.compat.ids import encode_agent_id, encode_chat_id
 from usan_api.compat.schemas.chats import CreateChatCompletionRequest, CreateChatRequest
 from usan_api.db.base import ProfileStatus
 from usan_api.db.models import AgentProfile, AgentProfileVersion
+from usan_api.repositories import chats as chats_repo
 from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG
 from usan_api.settings import get_settings
 from usan_api.tenant_context import set_tenant_context
@@ -51,6 +53,51 @@ async def _seed_chat(db, org_id, agent_token: str) -> str:
     # create_chat commits, which clears the transaction-local tenant set_config; restore it.
     await set_tenant_context(db, org_id)
     return chat_id
+
+
+async def _seed_session_with_kb(
+    db,
+    org_id: uuid.UUID,
+    *,
+    kb_ids: list[str],
+    user_text: str,
+):
+    """Seed a published profile with knowledge_base_ids set, a ChatSession, and one user message.
+    Returns the ChatSession (not yet committed — tests own the transaction lifecycle)."""
+    cfg = copy.deepcopy(_VALID_CONFIG)
+    cfg["llm"]["knowledge_base_ids"] = kb_ids
+
+    profile = AgentProfile(
+        name=f"KB Test Agent {uuid.uuid4().hex[:8]}",
+        draft_config=cfg,
+        status=ProfileStatus.ACTIVE,
+        published_version=1,
+    )
+    db.add(profile)
+    await db.flush()
+
+    version = AgentProfileVersion(
+        profile_id=profile.id,
+        version=1,
+        config=cfg,
+    )
+    db.add(version)
+    await db.flush()
+
+    from usan_api.compat.serialization import pack_dynamic_vars
+
+    session = await chats_repo.add_session(
+        db,
+        agent_profile_id=profile.id,
+        agent_version=profile.published_version,
+        dynamic_vars=pack_dynamic_vars(None, None),
+    )
+    await db.flush()
+
+    seq = await chats_repo.next_seq(db, session.id)
+    await chats_repo.add_message(db, session_id=session.id, seq=seq, role="user", content=user_text)
+    await db.flush()
+    return session
 
 
 @pytest.mark.asyncio
@@ -114,4 +161,100 @@ async def test_completion_returns_only_new_agent_message(app_session, monkeypatc
     )
     assert [m.role for m in new] == ["agent"]
     assert new[0].content == "hello there"
+    await app_session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_generate_agent_reply_injects_kb_context(app_session, monkeypatch) -> None:
+    from usan_api.compat import chat_service
+    from usan_api.compat.kb_retrieval import RetrievedContext
+    from usan_api.vertex_test import VertexTurn
+
+    captured: dict = {}
+
+    async def fake_turn(**kwargs):
+        captured["system_instruction"] = kwargs["system_instruction"]
+        return VertexTurn(text="answer")
+
+    async def fake_retrieve(db, settings, *, kb_ids, query):
+        captured["query"] = query
+        return RetrievedContext(text="DOC_CONTEXT", hit_count=1)
+
+    monkeypatch.setattr("usan_api.compat.chat_service.run_vertex_turn", fake_turn)
+    monkeypatch.setattr("usan_api.compat.chat_service.retrieve_context", fake_retrieve)
+    settings = get_settings().model_copy(
+        update={"gcp_project": "test-project", "kb_retrieval_enabled": True}
+    )
+
+    org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
+    await set_tenant_context(app_session, org_id)
+    session = await _seed_session_with_kb(
+        app_session, org_id, kb_ids=["knowledge_base_abc"], user_text="my question"
+    )
+
+    reply = await chat_service.generate_agent_reply(app_session, settings, session)
+    assert reply == "answer"
+    assert "DOC_CONTEXT" in captured["system_instruction"]
+    assert "Knowledge base context:" in captured["system_instruction"]
+    assert captured["query"] == "my question"
+    await app_session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_generate_agent_reply_no_kb_context_when_no_match(app_session, monkeypatch) -> None:
+    from usan_api.compat import chat_service
+    from usan_api.compat.kb_retrieval import RetrievedContext
+    from usan_api.vertex_test import VertexTurn
+
+    captured: dict = {}
+
+    async def fake_turn(**kwargs):
+        captured["system_instruction"] = kwargs["system_instruction"]
+        return VertexTurn(text="answer")
+
+    async def fake_retrieve(db, settings, *, kb_ids, query):
+        return RetrievedContext(text="", hit_count=0)
+
+    monkeypatch.setattr("usan_api.compat.chat_service.run_vertex_turn", fake_turn)
+    monkeypatch.setattr("usan_api.compat.chat_service.retrieve_context", fake_retrieve)
+    settings = get_settings().model_copy(
+        update={"gcp_project": "test-project", "kb_retrieval_enabled": True}
+    )
+    org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
+    await set_tenant_context(app_session, org_id)
+    session = await _seed_session_with_kb(
+        app_session, org_id, kb_ids=["knowledge_base_abc"], user_text="q"
+    )
+    await chat_service.generate_agent_reply(app_session, settings, session)
+    assert "Knowledge base context:" not in captured["system_instruction"]
+    await app_session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_generate_agent_reply_degrades_on_retrieval_error(app_session, monkeypatch) -> None:
+    from usan_api.compat import chat_service
+    from usan_api.vertex_test import VertexTurn
+
+    captured: dict = {}
+
+    async def fake_turn(**kwargs):
+        captured["system_instruction"] = kwargs["system_instruction"]
+        return VertexTurn(text="answer")
+
+    async def boom_retrieve(db, settings, *, kb_ids, query):
+        raise RuntimeError("vertex 429")
+
+    monkeypatch.setattr("usan_api.compat.chat_service.run_vertex_turn", fake_turn)
+    monkeypatch.setattr("usan_api.compat.chat_service.retrieve_context", boom_retrieve)
+    settings = get_settings().model_copy(
+        update={"gcp_project": "test-project", "kb_retrieval_enabled": True}
+    )
+    org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
+    await set_tenant_context(app_session, org_id)
+    session = await _seed_session_with_kb(
+        app_session, org_id, kb_ids=["knowledge_base_abc"], user_text="q"
+    )
+    reply = await chat_service.generate_agent_reply(app_session, settings, session)
+    assert reply == "answer"  # retrieval failure never breaks the reply
+    assert "Knowledge base context:" not in captured["system_instruction"]
     await app_session.rollback()
