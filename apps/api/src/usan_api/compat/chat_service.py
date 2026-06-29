@@ -206,8 +206,13 @@ async def generate_agent_reply(db: AsyncSession, settings: Settings, session: Ch
     kb_ids = cfg.llm.knowledge_base_ids or []
     if kb_ids and settings.kb_retrieval_enabled:
         query_text = next((m.content for m in reversed(history) if m.role in ("user", "sms")), "")
+        retrieved = RetrievedContext("", 0)
         try:
-            retrieved = await retrieve_context(db, settings, kb_ids=kb_ids, query=query_text)
+            # SAVEPOINT: a DB-class search failure rolls back only this sub-txn, so it can
+            # never poison the caller's transaction (the flushed user turn survives) — retrieval
+            # is best-effort and must never break the reply or 500 the request.
+            async with db.begin_nested():
+                retrieved = await retrieve_context(db, settings, kb_ids=kb_ids, query=query_text)
         except Exception as exc:  # best-effort: retrieval NEVER breaks a reply
             logger.bind(err=type(exc).__name__, kb_count=len(kb_ids)).warning(
                 "kb retrieval failed; replying without context"

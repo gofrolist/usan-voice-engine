@@ -267,10 +267,12 @@ class Settings(BaseSettings):
     # DISTANCE ceiling (0=identical, 2=opposite) — the relevance floor; 0.7 is a permissive
     # starting default that MUST be tuned against real KB content (model-specific distribution).
     kb_retrieval_enabled: bool = Field(default=False, alias="KB_RETRIEVAL_ENABLED")
-    kb_retrieval_top_k: int = Field(default=5, alias="KB_RETRIEVAL_TOP_K")
-    kb_retrieval_max_distance: float = Field(default=0.7, alias="KB_RETRIEVAL_MAX_DISTANCE")
+    kb_retrieval_top_k: int = Field(default=5, ge=1, le=50, alias="KB_RETRIEVAL_TOP_K")
+    kb_retrieval_max_distance: float = Field(
+        default=0.7, ge=0.0, le=2.0, alias="KB_RETRIEVAL_MAX_DISTANCE"
+    )
     kb_retrieval_max_context_chars: int = Field(
-        default=8000, alias="KB_RETRIEVAL_MAX_CONTEXT_CHARS"
+        default=8000, ge=1, alias="KB_RETRIEVAL_MAX_CONTEXT_CHARS"
     )
 
     # --- Clara Care Parity (feature 002): three new poller phases + inbound-SMS

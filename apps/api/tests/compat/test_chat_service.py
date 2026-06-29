@@ -258,3 +258,70 @@ async def test_generate_agent_reply_degrades_on_retrieval_error(app_session, mon
     assert reply == "answer"  # retrieval failure never breaks the reply
     assert "Knowledge base context:" not in captured["system_instruction"]
     await app_session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_create_chat_completion_survives_db_abort_in_retrieval(
+    app_session, monkeypatch
+) -> None:
+    """Regression: a DB-aborting statement inside retrieve_context must NOT poison the
+    caller's transaction. With the savepoint fix, create_chat_completion succeeds and the
+    flushed user turn is still present; without the fix it would raise PendingRollbackError
+    on the post-retrieval agent-turn persist and 500 the request."""
+    from usan_api.compat.kb_retrieval import RetrievedContext
+    from usan_api.vertex_test import VertexTurn
+
+    async def poison_retrieve(db, settings, *, kb_ids, query):
+        # Runs a genuinely aborting statement to enter the "failed transaction" state,
+        # exactly as a Cloud SQL statement-timeout / pgvector error would.
+        await db.execute(text("SELECT 1/0"))
+        return RetrievedContext("", 0)
+
+    async def fake_turn(**kwargs):
+        return VertexTurn(text="agent reply")
+
+    monkeypatch.setattr("usan_api.compat.chat_service.retrieve_context", poison_retrieve)
+    monkeypatch.setattr("usan_api.compat.chat_service.run_vertex_turn", fake_turn)
+
+    settings = get_settings().model_copy(
+        update={"gcp_project": "test-project", "kb_retrieval_enabled": True}
+    )
+
+    org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
+    await set_tenant_context(app_session, org_id)
+
+    # Seed a profile whose published config binds a kb id, plus a chat session
+    session = await _seed_session_with_kb(
+        app_session, org_id, kb_ids=["knowledge_base_abc123456789012345678901"], user_text="hi"
+    )
+    # Commit the seed (creates the session row); re-apply tenant context
+    await app_session.commit()
+    await set_tenant_context(app_session, org_id)
+    chat_id = encode_chat_id(session.id)
+
+    # Drive the FULL create_chat_completion (not generate_agent_reply directly)
+    msgs = await chat_service.create_chat_completion(
+        app_session,
+        settings,
+        CreateChatCompletionRequest(chat_id=chat_id, content="hello"),
+    )
+
+    # Agent reply returned normally — no exception, no 500
+    assert len(msgs) == 1
+    assert msgs[0].role == "agent"
+    assert msgs[0].content == "agent reply"
+
+    # create_chat_completion commits internally (is_local set_config is cleared); re-apply
+    # tenant context so RLS allows the subsequent list_messages SELECT.
+    await set_tenant_context(app_session, org_id)
+
+    # The user turn seeded by create_chat_completion is still present (savepoint preserved
+    # the outer transaction — it was NOT rolled back along with the aborting retrieval)
+    from usan_api.repositories import chats as chats_repo
+
+    history = await chats_repo.list_messages(app_session, session.id)
+    roles = [m.role for m in history]
+    # history: original "user" seed (from _seed_session_with_kb) + new "user" + "agent"
+    assert "user" in roles
+    assert "agent" in roles
+    await app_session.rollback()

@@ -146,3 +146,65 @@ async def test_create_retell_llm_persists_and_echoes_valid_kb_id(app_session) ->
     # echo path unchanged
     resp = agent_bridge.serialize_llm(profile)
     assert resp.model_dump().get("knowledge_base_ids") == [kb_token]
+
+
+@pytest.mark.asyncio
+async def test_update_retell_llm_rejects_unknown_kb_id(app_session) -> None:
+    """update_response_engine (PATCH) with an absent but well-formed kb id -> 422."""
+    from usan_api.compat.ids import encode_llm_id
+    from usan_api.compat.schemas.retell_llm import CreateRetellLlmRequest, UpdateRetellLlmRequest
+
+    await _org(app_session)
+    profile = await agent_bridge.create_response_engine(
+        app_session,
+        _settings(),
+        CreateRetellLlmRequest(general_prompt="hello"),
+    )
+    llm_token = encode_llm_id(profile.id)
+
+    with pytest.raises(CompatError) as ei:
+        await agent_bridge.update_response_engine(
+            app_session,
+            _settings(),
+            llm_token,
+            UpdateRetellLlmRequest(knowledge_base_ids=[encode_kb_id(uuid.uuid4())]),
+        )
+    assert ei.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_retell_llm_preserves_kb_binding_on_noop(app_session) -> None:
+    """PATCH with knowledge_base_ids=None (omitted) must leave a prior binding intact."""
+    from usan_api.compat.ids import encode_llm_id
+    from usan_api.compat.schemas.retell_llm import CreateRetellLlmRequest, UpdateRetellLlmRequest
+    from usan_api.repositories import knowledge_bases as kb_repo
+
+    await _org(app_session)
+    kb = await kb_repo.create_kb(
+        app_session,
+        name="kb-noop",
+        max_chunk_size=2000,
+        min_chunk_size=400,
+        enable_auto_refresh=False,
+    )
+    await app_session.commit()
+    # after_begin listener re-applies RLS context after commit
+    kb_token = encode_kb_id(kb.id)
+
+    # Create the LLM bound to the KB
+    profile = await agent_bridge.create_response_engine(
+        app_session,
+        _settings(),
+        CreateRetellLlmRequest(general_prompt="hi", knowledge_base_ids=[kb_token]),
+    )
+    llm_token = encode_llm_id(profile.id)
+
+    # PATCH with an unrelated field change — knowledge_base_ids is absent (None)
+    updated = await agent_bridge.update_response_engine(
+        app_session,
+        _settings(),
+        llm_token,
+        UpdateRetellLlmRequest(general_prompt="updated prompt"),
+    )
+    # The prior KB binding must survive the no-op patch
+    assert updated.draft_config["llm"]["knowledge_base_ids"] == [kb_token]
