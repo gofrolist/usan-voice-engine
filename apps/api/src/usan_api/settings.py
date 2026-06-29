@@ -274,6 +274,12 @@ class Settings(BaseSettings):
     kb_retrieval_max_context_chars: int = Field(
         default=8000, ge=1, alias="KB_RETRIEVAL_MAX_CONTEXT_CHARS"
     )
+    # Knowledge-base VOICE retrieval (Phase 5c). Separate from kb_retrieval_enabled so the
+    # latency-sensitive live-voice path can be rolled out independently of chat. Ship-inert:
+    # default OFF, so the voice retrieval endpoint embeds/searches nothing until a deploy
+    # enables it AND gcp_project is set. Reuses kb_retrieval_top_k / max_distance /
+    # max_context_chars / kb_embedding_* (one tuning set for both channels).
+    kb_retrieval_voice_enabled: bool = Field(default=False, alias="KB_RETRIEVAL_VOICE_ENABLED")
 
     # --- Clara Care Parity (feature 002): three new poller phases + inbound-SMS
     # verification + Spanish callback. All ship-inert: every new poller defaults OFF,
