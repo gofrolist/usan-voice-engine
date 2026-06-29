@@ -9,7 +9,7 @@ inbound SMS); this note covers the voice channel (`services/agent`).
 ## How it works
 
 1. The LiveKit worker receives the caller's transcript turn.
-2. It calls the API endpoint `POST /v1/kb/retrieve-context` with `{call_id, query}`.
+2. It calls the API endpoint `POST /v1/tools/retrieve_kb_context` with `{call_id, query}`.
 3. The API embeds the query via Vertex `text-embedding-005`, runs a pgvector cosine-similarity
    search scoped to the caller's org (RLS-enforced), and returns a context string.
 4. The worker prepends the context to that turn's system prompt before sending it to the LLM.
@@ -65,9 +65,11 @@ Voice reuses the same tunable set as chat-RAG — one tuning pass covers both ch
 | `KB_EMBEDDING_LOCATION` | `us-central1` | Vertex region for embedding calls. |
 | `KB_RETRIEVAL_TIMEOUT_S` | `3.0` | Per-turn retrieval timeout (agent-side). On timeout the agent speaks without context — the call continues. |
 
-Set these in Secret Manager / `.env` under the **apps/api** service (the api performs the
-embed and search). `KB_RETRIEVAL_TIMEOUT_S` is an **apps/api** setting; it lives in the
-**services/agent** settings block and is passed only to the agent container.
+Set the embed/search tunables (`KB_RETRIEVAL_TOP_K`, `KB_RETRIEVAL_MAX_DISTANCE`,
+`KB_RETRIEVAL_MAX_CONTEXT_CHARS`, `KB_EMBEDDING_MODEL`, `KB_EMBEDDING_LOCATION`) in Secret
+Manager / `.env` under the **apps/api** service — the api performs the embed and search.
+`KB_RETRIEVAL_TIMEOUT_S` is a **services/agent** setting (it bounds the worker's per-turn
+retrieval HTTP call); set it under the agent service.
 
 ## VERIFY at deploy
 
