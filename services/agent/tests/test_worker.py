@@ -128,7 +128,7 @@ async def test_outbound_starts_check_in_agent(monkeypatch):
     built = {}
 
     def _fake_build_check_in_agent(
-        cfg=None, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+        cfg=None, *, resolved_vars=None, custom_vars=None, timezone="", now=None, **kwargs
     ):
         agent = MagicMock(name="check_in_agent")
         built["agent"] = agent
@@ -252,7 +252,7 @@ async def test_inbound_known_contact_runs_check_in(monkeypatch):
     built = {}
 
     def _fake_build_inbound_agent(
-        cfg, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+        cfg, *, resolved_vars=None, custom_vars=None, timezone="", now=None, **kwargs
     ):
         built["custom_vars"] = custom_vars
         agent = MagicMock(name="inbound_agent")
@@ -610,7 +610,7 @@ async def test_outbound_threads_resolved_vars_into_builder(monkeypatch):
     built = {}
 
     def _fake_build_check_in_agent(
-        cfg=None, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+        cfg=None, *, resolved_vars=None, custom_vars=None, timezone="", now=None, **kwargs
     ):
         built["resolved_vars"] = resolved_vars
         built["custom_vars"] = custom_vars
@@ -665,7 +665,7 @@ async def test_inbound_threads_resolved_vars_into_builder(monkeypatch):
     built = {}
 
     def _fake_build_inbound_agent(
-        cfg, *, resolved_vars=None, custom_vars=None, timezone="", now=None
+        cfg, *, resolved_vars=None, custom_vars=None, timezone="", now=None, **kwargs
     ):
         built["resolved_vars"] = resolved_vars
         built["custom_vars"] = custom_vars

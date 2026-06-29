@@ -328,7 +328,12 @@ async def _run_web(
     )
     session = build_session(settings, cfg, userdata=data)
     agent = build_check_in_agent(
-        cfg, resolved_vars=meta.resolved_vars, custom_vars=meta.dynamic_vars, timezone=meta.timezone
+        cfg,
+        resolved_vars=meta.resolved_vars,
+        custom_vars=meta.dynamic_vars,
+        timezone=meta.timezone,
+        call_id=call_id,
+        settings=settings,
     )
     _web_vars = prompt_vars.build_vars(
         meta.resolved_vars or {},
