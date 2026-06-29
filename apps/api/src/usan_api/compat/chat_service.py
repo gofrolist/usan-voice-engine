@@ -212,7 +212,13 @@ async def generate_agent_reply(db: AsyncSession, settings: Settings, session: Ch
             # never poison the caller's transaction (the flushed user turn survives) — retrieval
             # is best-effort and must never break the reply or 500 the request.
             async with db.begin_nested():
-                retrieved = await retrieve_context(db, settings, kb_ids=kb_ids, query=query_text)
+                retrieved = await retrieve_context(
+                    db,
+                    settings,
+                    kb_ids=kb_ids,
+                    query=query_text,
+                    enabled=settings.kb_retrieval_enabled,
+                )
         except Exception as exc:  # best-effort: retrieval NEVER breaks a reply
             logger.bind(err=type(exc).__name__, kb_count=len(kb_ids)).warning(
                 "kb retrieval failed; replying without context"
