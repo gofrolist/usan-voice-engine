@@ -29,6 +29,7 @@ class CreateRetellLlmRequest(BaseModel):
     starting_state: str | None = None
     model: str | None = None
     model_temperature: float | None = None
+    knowledge_base_ids: list[str] | None = None
 
 
 class UpdateRetellLlmRequest(BaseModel):
@@ -43,6 +44,7 @@ class UpdateRetellLlmRequest(BaseModel):
     starting_state: str | None = None
     model: str | None = None
     model_temperature: float | None = None
+    knowledge_base_ids: list[str] | None = None
 
 
 class LlmResponse(BaseModel):
