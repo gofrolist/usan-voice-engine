@@ -41,6 +41,19 @@ async def get_kb(db: AsyncSession, kb_id: uuid.UUID) -> KnowledgeBase | None:
     ).scalar_one_or_none()
 
 
+async def get_existing_kb_ids(db: AsyncSession, kb_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+    """Return the subset of `kb_ids` that exist within the caller's org (RLS-scoped).
+    Cross-org ids are simply absent from the result. Empty input -> empty set (no query)."""
+    if not kb_ids:
+        return set()
+    rows = (
+        (await db.execute(select(KnowledgeBase.id).where(KnowledgeBase.id.in_(kb_ids))))
+        .scalars()
+        .all()
+    )
+    return set(rows)
+
+
 async def list_kbs(db: AsyncSession) -> list[KnowledgeBase]:
     rows = (
         (await db.execute(select(KnowledgeBase).order_by(KnowledgeBase.created_at.desc())))

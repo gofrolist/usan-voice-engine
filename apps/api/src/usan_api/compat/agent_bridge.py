@@ -114,13 +114,18 @@ def _validate_config(config: dict[str, Any]) -> None:
 async def _validate_kb_ids(db: AsyncSession, kb_ids: list[str] | None) -> None:
     """Reject any knowledge_base_id that doesn't resolve within the caller's org (RLS). Cross-org
     is indistinguishable from absent -> a generic 422 that never acknowledges cross-org
-    existence (the same id under another org simply returns None)."""
-    for token in kb_ids or []:
+    existence (the same id under another org simply returns None from the RLS-scoped query)."""
+    if not kb_ids:
+        return
+    decoded: list[uuid.UUID] = []
+    for token in kb_ids:
         try:
-            kb_uuid = ids.decode_kb_id(token)
+            decoded.append(ids.decode_kb_id(token))
         except CompatError as exc:
             raise CompatError(422, "unknown knowledge_base_id") from exc
-        if await kb_repo.get_kb(db, kb_uuid) is None:
+    present = await kb_repo.get_existing_kb_ids(db, decoded)
+    for kb_uuid in decoded:
+        if kb_uuid not in present:
             raise CompatError(422, "unknown knowledge_base_id")
 
 
