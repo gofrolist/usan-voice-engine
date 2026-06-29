@@ -261,6 +261,18 @@ class Settings(BaseSettings):
     # before re-claim); at this many failures the KB is set terminal 'error'.
     kb_ingestion_max_attempts: int = Field(default=3, alias="KB_INGESTION_MAX_ATTEMPTS")
 
+    # Knowledge-base text-RAG retrieval (Phase 5b). Ship-inert: default OFF, so no query
+    # embed (spend or PHI egress) until a deploy enables it AND gcp_project is set. Reuses
+    # kb_embedding_model / kb_embedding_location for the query embed. max_distance is a cosine
+    # DISTANCE ceiling (0=identical, 2=opposite) — the relevance floor; 0.7 is a permissive
+    # starting default that MUST be tuned against real KB content (model-specific distribution).
+    kb_retrieval_enabled: bool = Field(default=False, alias="KB_RETRIEVAL_ENABLED")
+    kb_retrieval_top_k: int = Field(default=5, alias="KB_RETRIEVAL_TOP_K")
+    kb_retrieval_max_distance: float = Field(default=0.7, alias="KB_RETRIEVAL_MAX_DISTANCE")
+    kb_retrieval_max_context_chars: int = Field(
+        default=8000, alias="KB_RETRIEVAL_MAX_CONTEXT_CHARS"
+    )
+
     # --- Clara Care Parity (feature 002): three new poller phases + inbound-SMS
     # verification + Spanish callback. All ship-inert: every new poller defaults OFF,
     # so merging changes NO runtime behavior until a deploy explicitly enables them

@@ -568,3 +568,12 @@ def test_trusted_proxy_set_parsing(monkeypatch):
     monkeypatch.setenv("TRUSTED_PROXY_IPS", "")
     get_settings.cache_clear()
     assert get_settings().trusted_proxy_set == frozenset()
+
+
+def test_kb_retrieval_defaults_ship_inert(monkeypatch) -> None:
+    _base_env(monkeypatch)
+    s = Settings()
+    assert s.kb_retrieval_enabled is False
+    assert s.kb_retrieval_top_k == 5
+    assert s.kb_retrieval_max_distance == 0.7
+    assert s.kb_retrieval_max_context_chars == 8000
