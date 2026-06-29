@@ -56,6 +56,36 @@ def _embed_sync(texts: list[str], settings: Settings) -> list[list[float]]:
     return vectors
 
 
+def _embed_query_sync(text: str, settings: Settings) -> list[float]:
+    client = genai.Client(
+        vertexai=True, project=settings.gcp_project, location=settings.kb_embedding_location
+    )
+    # RETRIEVAL_QUERY: asymmetric retrieval — the query is embedded differently from the stored
+    # documents (which used RETRIEVAL_DOCUMENT). auto_truncate guards an over-long query turn.
+    config = types.EmbedContentConfig(
+        task_type="RETRIEVAL_QUERY", output_dimensionality=_DIM, auto_truncate=True
+    )
+    try:
+        resp = client.models.embed_content(
+            model=settings.kb_embedding_model, contents=[text], config=config
+        )
+        embeddings = resp.embeddings or []
+        return list(embeddings[0].values or []) if embeddings else []
+    finally:
+        client.close()
+
+
+async def embed_query(text: str, settings: Settings) -> list[float]:
+    """Embed one query string -> a 768-dim vector. Raises ValueError on an unexpected shape."""
+    vector = await asyncio.to_thread(_embed_query_sync, text, settings)
+    if len(vector) != _DIM:
+        logger.bind(n_out=len(vector), model=settings.kb_embedding_model).error(
+            "KB query embedding returned unexpected shape model={model}"
+        )
+        raise ValueError("query embedding shape mismatch")
+    return vector
+
+
 async def embed_texts(texts: list[str], settings: Settings) -> list[list[float]]:
     """Embed chunk texts -> 768-dim vectors (order-preserving). Empty input -> []."""
     if not texts:
