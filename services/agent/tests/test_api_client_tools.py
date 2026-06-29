@@ -157,3 +157,25 @@ async def test_record_personal_fact_forwards_structured(fake_http):
         structured={"date": "2026-07-04"},
     )
     assert fake_http.captured["json"]["structured"] == {"date": "2026-07-04"}
+
+
+async def test_retrieve_kb_context_posts_scoped_request_and_returns_context(fake_http):
+    _FakeClient.json_data = {"context": "kb says hello", "hit_count": 2}
+    out = await api_client.retrieve_kb_context("call-1", _settings(), "how are meds taken")
+    cap = fake_http.captured
+    assert cap["url"] == "http://api:8000/v1/tools/retrieve_kb_context"
+    assert cap["json"] == {"call_id": "call-1", "query": "how are meds taken"}
+    assert cap["headers"]["Authorization"].startswith("Bearer ")
+    assert out == "kb says hello"
+
+
+async def test_retrieve_kb_context_returns_empty_on_http_error(fake_http):
+    _FakeClient.status = 500  # raise_for_status() will raise httpx.HTTPStatusError
+    out = await api_client.retrieve_kb_context("call-1", _settings(), "q")
+    assert out == ""
+
+
+async def test_retrieve_kb_context_returns_empty_on_missing_context_field(fake_http):
+    _FakeClient.json_data = {"hit_count": 0}
+    out = await api_client.retrieve_kb_context("call-1", _settings(), "q")
+    assert out == ""

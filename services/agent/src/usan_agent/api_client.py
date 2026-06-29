@@ -293,6 +293,33 @@ async def post_metrics(call_id: str, settings: Settings, payload: dict[str, Any]
         logger.bind(call_id=call_id).warning("Failed to post call metrics to API")
 
 
+async def retrieve_kb_context(call_id: str, settings: Settings, query: str) -> str:
+    """Best-effort voice-RAG context for the current turn. Returns "" on any failure.
+
+    The server re-derives org + kb_ids; we send only {call_id, query}. Tight timeout so a
+    slow lookup never stalls turn-taking. PHI-safe: logs only the hit count — never the
+    query or the returned context. Never raises (the turn proceeds with no context on error).
+    """
+    try:
+        call_id = _validate_call_id(call_id)
+        url = f"{settings.api_base_url}/v1/tools/retrieve_kb_context"
+        headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
+        async with httpx.AsyncClient(timeout=settings.kb_retrieval_timeout_s) as client:
+            response = await client.post(
+                url, json={"call_id": call_id, "query": query}, headers=headers
+            )
+            response.raise_for_status()
+            body = response.json()
+        context = body.get("context", "")
+        logger.bind(call_id=call_id, hits=body.get("hit_count", 0)).debug(
+            "kb retrieval hits={hits}"
+        )
+        return context if isinstance(context, str) else ""
+    except Exception:
+        logger.bind(call_id=call_id).warning("kb retrieval call failed; continuing without context")
+        return ""
+
+
 async def start_inbound_call(
     phone_e164: str | None,
     livekit_room: str,
