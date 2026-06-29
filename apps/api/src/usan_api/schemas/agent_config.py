@@ -148,6 +148,10 @@ class VoiceConfig(BaseModel):
 class LLMConfig(BaseModel):
     model: str = Field(default="gemini-3.1-flash-lite", min_length=1, max_length=200)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    # Phase 5b: KB ids bound to this response engine for text-RAG. Encoded public ids
+    # (knowledge_base_<hex>). Optional+default to satisfy the frozen/re-validate forward-compat
+    # invariant. Echoed via compat_extras; consumed at chat generation.
+    knowledge_base_ids: list[str] | None = Field(default=None)
 
 
 class STTConfig(BaseModel):
