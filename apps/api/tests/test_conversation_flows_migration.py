@@ -30,14 +30,14 @@ def test_conversation_flows_table_force_rls_and_grant(async_database_url: str) -
                     )
                 )
                 assert policy == 1
-                grant = await conn.scalar(
+                grant_count = await conn.scalar(
                     text(
-                        "SELECT 1 FROM information_schema.role_table_grants "
+                        "SELECT COUNT(*) FROM information_schema.role_table_grants "
                         "WHERE table_name = 'conversation_flows' AND grantee = 'usan_app' "
-                        "AND privilege_type = 'INSERT'"
+                        "AND privilege_type IN ('SELECT','INSERT','UPDATE','DELETE')"
                     )
                 )
-                assert grant == 1
+                assert grant_count == 4
         finally:
             await engine.dispose()
 
