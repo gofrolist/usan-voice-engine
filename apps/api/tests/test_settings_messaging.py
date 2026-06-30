@@ -86,3 +86,23 @@ def test_inbound_sms_reply_enabled_via_env(monkeypatch):
     get_settings.cache_clear()
     assert get_settings().telnyx_inbound_sms_reply_enabled is True
     get_settings.cache_clear()
+
+
+def test_inbound_sms_autocreate_disabled_by_default(monkeypatch):
+    from usan_api.settings import get_settings
+
+    _set_required_env(monkeypatch)
+    monkeypatch.delenv("TELNYX_INBOUND_SMS_AUTOCREATE_ENABLED", raising=False)
+    get_settings.cache_clear()
+    assert get_settings().telnyx_inbound_sms_autocreate_enabled is False
+    get_settings.cache_clear()
+
+
+def test_inbound_sms_autocreate_enabled_via_env(monkeypatch):
+    from usan_api.settings import get_settings
+
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("TELNYX_INBOUND_SMS_AUTOCREATE_ENABLED", "true")
+    get_settings.cache_clear()
+    assert get_settings().telnyx_inbound_sms_autocreate_enabled is True
+    get_settings.cache_clear()

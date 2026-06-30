@@ -159,6 +159,11 @@ class Settings(BaseSettings):
     telnyx_inbound_sms_reply_enabled: bool = Field(
         default=False, alias="TELNYX_INBOUND_SMS_REPLY_ENABLED"
     )
+    # Phase 4b-3: gate the unknown-recipient inbound SMS auto-create path independently of
+    # the reply engine, so it can be staged/rolled-back on its own. Default FALSE.
+    telnyx_inbound_sms_autocreate_enabled: bool = Field(
+        default=False, alias="TELNYX_INBOUND_SMS_AUTOCREATE_ENABLED"
+    )
     telnyx_messaging_api_url: str = Field(
         default="https://api.telnyx.com/v2", alias="TELNYX_MESSAGING_API_URL"
     )
