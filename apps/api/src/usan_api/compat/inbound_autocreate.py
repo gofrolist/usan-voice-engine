@@ -104,53 +104,57 @@ async def handle_inbound_autocreate(
         _count("sms_autocreate_unconfigured")
         return True
 
-    # Create the chat session + persist the inbound turn (role="sms"). Use a SAVEPOINT so
-    # an IntegrityError on the dedup constraint (uq_chat_messages_provider_msg) only rolls
-    # back this write block, not the whole outer transaction. In the concurrent two-delivery
-    # race the loser's SAVEPOINT rolls back and the winner's committed session+message wins.
+    # Create the session + persist the inbound turn (role="sms"); the Telnyx id dedups
+    # redeliveries. Persisting in the SAME txn as the session means a concurrent/duplicate
+    # first delivery serializes on uq_chat_messages_provider_msg — the loser's whole txn
+    # (session + message) rolls back.
     try:
-        async with db.begin_nested():
-            agent_version = profile.published_version
-            assert agent_version is not None  # guaranteed by _resolve_live_profile
-            session = await chats_repo.add_session(
-                db,
-                agent_profile_id=profile.id,
-                agent_version=agent_version,
-                dynamic_vars={},
-                chat_type="sms_chat",
-                from_number=our_number,
-                to_number=recipient,
-            )
-            await db.flush()
-            seq = await chats_repo.next_seq(db, session.id)
-            await chats_repo.add_message(
-                db,
-                session_id=session.id,
-                seq=seq,
-                role="sms",
-                content=inbound.text,
-                provider_message_id=inbound.message_id,
-            )
+        agent_version = profile.published_version
+        assert agent_version is not None  # guaranteed by _resolve_live_profile
+        session = await chats_repo.add_session(
+            db,
+            agent_profile_id=profile.id,
+            agent_version=agent_version,
+            dynamic_vars={},
+            chat_type="sms_chat",
+            from_number=our_number,
+            to_number=recipient,
+        )
+        await db.flush()
+        seq = await chats_repo.next_seq(db, session.id)
+        await chats_repo.add_message(
+            db,
+            session_id=session.id,
+            seq=seq,
+            role="sms",
+            content=inbound.text,
+            provider_message_id=inbound.message_id,
+        )
+        await db.flush()
     except IntegrityError:
+        await db.rollback()
         _count("sms_autocreate_dedup")
         return True
 
-    # Generate + persist + send the reply. Use a SAVEPOINT so a failure rolls back only
-    # the reply writes (no orphan PHI), leaving the inbound turn visible to the caller.
+    # Generate + persist + send the reply; ANY failure discards the whole txn (no orphan PHI).
     try:
-        async with db.begin_nested():
-            reply = await generate_agent_reply(db, settings, session)
-            reply_seq = await chats_repo.next_seq(db, session.id)
-            await chats_repo.add_message(
-                db, session_id=session.id, seq=reply_seq, role="agent", content=reply
-            )
-            await telnyx_messaging.send_sms(settings, to_number=recipient, body=reply)
+        reply = await generate_agent_reply(db, settings, session)
+        reply_seq = await chats_repo.next_seq(db, session.id)
+        await chats_repo.add_message(
+            db, session_id=session.id, seq=reply_seq, role="agent", content=reply
+        )
+        await db.flush()
+        await telnyx_messaging.send_sms(settings, to_number=recipient, body=reply)
     except Exception as exc:
+        await db.rollback()
         logger.bind(message_id=inbound.message_id, err=type(exc).__name__).error(
             "inbound sms autocreate failed"
         )
         _count("sms_autocreate_failed")
         return True
 
+    # Commit OUTSIDE the send try: wrapping it would mislabel a commit-fail as a send-fail
+    # (the reply already went out) and risk a double-send on retry (mirrors sms_reply.py).
+    await db.commit()
     _count("sms_autocreate")
     return True
