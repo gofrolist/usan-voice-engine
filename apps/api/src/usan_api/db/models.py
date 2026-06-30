@@ -1460,3 +1460,24 @@ class KnowledgeBaseChunk(Base, TenantScoped):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class ConversationFlow(Base, TenantScoped):
+    """RetellAI conversation-flow (Phase 6a): the flow DAG persisted as opaque JSONB and echoed
+    conformantly, but NOT executed at call/chat time (persisted-not-honored). Referenced by
+    agents via response_engine.conversation_flow_id (the binding lands in 6c)."""
+
+    __tablename__ = "conversation_flows"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
