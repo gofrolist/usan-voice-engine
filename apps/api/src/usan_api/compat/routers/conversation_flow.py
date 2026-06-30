@@ -82,7 +82,8 @@ async def update_conversation_flow(
         raise CompatError(404, "conversation flow not found")
     merged = {**row.config, **_provided(body)}  # top-level shallow merge
     updated = await flows_repo.update(db, flow_id, config=merged, version=row.version + 1)
-    assert updated is not None  # loaded above in the same txn
+    if updated is None:
+        raise CompatError(404, "conversation flow not found")
     await db.commit()
     _audit(request, "update-conversation-flow")
     return serialize_flow(updated)

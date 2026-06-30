@@ -95,3 +95,24 @@ def test_list_is_paginated_envelope(compat_client, compat_headers) -> None:
             break
         key = nxt["pagination_key"]
     assert created <= seen
+
+
+def test_update_after_delete_is_404(compat_client, compat_headers) -> None:
+    cid = _create(compat_client, compat_headers)["conversation_flow_id"]
+    d = compat_client.delete(f"/delete-conversation-flow/{cid}", headers=compat_headers)
+    assert d.status_code == 204
+    r = compat_client.patch(
+        f"/update-conversation-flow/{cid}", json={"global_prompt": "x"}, headers=compat_headers
+    )
+    assert r.status_code == 404
+    assert r.json() == {"status": 404, "message": "conversation flow not found"}
+
+
+def test_update_missing_id_is_404(compat_client, compat_headers) -> None:
+    import uuid
+
+    missing = "conversation_flow_" + uuid.uuid4().hex
+    r = compat_client.patch(
+        f"/update-conversation-flow/{missing}", json={"global_prompt": "x"}, headers=compat_headers
+    )
+    assert r.status_code == 404
