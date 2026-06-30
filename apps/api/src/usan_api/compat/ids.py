@@ -23,6 +23,7 @@ _CHAT_PREFIX = "chat_"
 _MESSAGE_PREFIX = "message_"
 _KB_PREFIX = "knowledge_base_"
 _KB_SOURCE_PREFIX = "source_"
+_CONVERSATION_FLOW_PREFIX = "conversation_flow_"
 
 
 def encode_call_id(call_id: uuid.UUID) -> str:
@@ -83,6 +84,33 @@ def decode_kb_source_id(token: str) -> uuid.UUID:
 
 def encode_message_id(message_id: uuid.UUID) -> str:
     return _MESSAGE_PREFIX + message_id.hex
+
+
+def encode_conversation_flow_id(flow_id: uuid.UUID) -> str:
+    return _CONVERSATION_FLOW_PREFIX + flow_id.hex
+
+
+def decode_conversation_flow_id(token: str) -> uuid.UUID:
+    return _decode_hex(token, prefix=_CONVERSATION_FLOW_PREFIX, kind="conversation_flow_id")
+
+
+def encode_conversation_flow_cursor(created_at: datetime, fid: uuid.UUID) -> str:
+    """Opaque (created_at, id) keyset cursor (mirror of encode_phone_number_cursor)."""
+    raw = f"{created_at.isoformat()}|{fid.hex}".encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def decode_conversation_flow_cursor(token: str) -> tuple[datetime, uuid.UUID]:
+    try:
+        padding = 4 - len(token) % 4
+        padded = token + "=" * (padding % 4)
+        raw = base64.urlsafe_b64decode(padded).decode()
+        ts_part, hex_part = raw.split("|", 1)
+        created_at = datetime.fromisoformat(ts_part)
+        fid = uuid.UUID(hex=hex_part)
+    except (ValueError, binascii.Error, UnicodeDecodeError) as exc:
+        raise CompatError(422, "invalid pagination_key") from exc
+    return created_at, fid
 
 
 def encode_phone_number_cursor(created_at: datetime, pid: uuid.UUID) -> str:
