@@ -199,3 +199,111 @@ async def test_multi_turn_does_not_fork_second_chat(
     )
     assert await _session_count(session_factory) == 1
     assert len(recorded_sms) == 1
+
+
+# ---------------------------------------------------------------------------
+# Concurrency regression: Fix #1 — advisory lock serializes concurrent first-contact
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_distinct_first_deliveries_create_one_chat(
+    async_database_url, session_factory, monkeypatch
+):
+    """Two concurrent first-contact deliveries with DISTINCT message_ids for the same
+    (DID, sender) pair must result in exactly ONE chat session — not two.
+
+    Before Fix #1 both deliveries passed Gate 0 simultaneously (no row to lock) and each
+    created a chat. The advisory lock in lock_sms_autocreate serializes them so the second
+    delivery blocks, then Gate 0 sees the committed chat and declines.
+
+    The test uses two independent NullPool sessions (separate DB connections) so the
+    advisory lock contention is real; asyncio.gather drives them concurrently in one loop.
+    """
+    import asyncio
+
+    from usan_api import telnyx_messaging
+    from usan_api.compat import inbound_autocreate as _mod
+    from usan_api.schemas.inbound_sms import InboundSms
+    from usan_api.settings import get_settings
+    from usan_api.tenant_context import set_tenant_context
+
+    # Set minimum required env vars so get_settings() validates, then model_copy the extras.
+    monkeypatch.setenv("DATABASE_URL", async_database_url.replace("+asyncpg", ""))
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "a" * 32)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
+    monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
+    monkeypatch.setenv("TELNYX_INBOUND_SMS_AUTOCREATE_ENABLED", "true")
+    monkeypatch.setenv("TELNYX_MESSAGING_ENABLED", "true")
+    monkeypatch.setenv("TELNYX_MESSAGING_API_KEY", "test-key")
+    monkeypatch.setenv("TELNYX_MESSAGING_PROFILE_ID", "test-profile")
+    monkeypatch.setenv("TELNYX_FROM_NUMBER", _OUR)
+    monkeypatch.setenv("GCP_PROJECT", "proj")
+    get_settings.cache_clear()
+
+    # Patch generate_agent_reply and send_sms on the module under test.
+    async def _fake_reply(db, settings, session):
+        return "reply"
+
+    async def _fake_send(settings, *, to_number, body):
+        return "tx-out"
+
+    monkeypatch.setattr(_mod, "generate_agent_reply", _fake_reply)
+    monkeypatch.setattr(telnyx_messaging, "send_sms", _fake_send)
+
+    # Seed the bound number + live agent via session_factory (commits).
+    await _seed_bound_number(session_factory)
+
+    # Resolve the default org id so both sessions can set tenant context.
+    async with session_factory() as seed_db:
+        org_id = (await seed_db.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
+
+    settings = get_settings()
+
+    # Two independent engines/sessions (separate connections) for real lock contention.
+    engine_a = create_async_engine(async_database_url, poolclass=NullPool)
+    engine_b = create_async_engine(async_database_url, poolclass=NullPool)
+    factory_a = async_sessionmaker(engine_a, expire_on_commit=False)
+    factory_b = async_sessionmaker(engine_b, expire_on_commit=False)
+
+    inbound_m1 = InboundSms(
+        message_id="concurrent-m1",
+        from_number=_SENDER,
+        to_number=_OUR,
+        text="hello",
+        event_type="message.received",
+    )
+    inbound_m2 = InboundSms(
+        message_id="concurrent-m2",
+        from_number=_SENDER,
+        to_number=_OUR,
+        text="world",
+        event_type="message.received",
+    )
+
+    async def _run(factory, inbound):
+        async with factory() as db:
+            await set_tenant_context(db, org_id)
+            return await _mod.handle_inbound_autocreate(db, settings, inbound)
+
+    try:
+        results = await asyncio.gather(
+            _run(factory_a, inbound_m1),
+            _run(factory_b, inbound_m2),
+        )
+    finally:
+        await engine_a.dispose()
+        await engine_b.dispose()
+
+    get_settings.cache_clear()
+
+    # Exactly one delivery should have created the chat; the other declined at Gate 0.
+    assert sorted(results) == [False, True], (
+        f"Expected one True (created) and one False (Gate 0 decline), got {results}"
+    )
+    assert await _session_count(session_factory) == 1, (
+        "Advisory lock must prevent two concurrent first-contact deliveries from forking "
+        "two chat sessions"
+    )

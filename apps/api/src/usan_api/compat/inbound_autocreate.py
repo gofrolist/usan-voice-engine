@@ -80,15 +80,24 @@ async def handle_inbound_autocreate(
     our_number = to_e164(inbound.to_number) or inbound.to_number
     recipient = to_e164(inbound.from_number) or inbound.from_number
 
+    # Serialize concurrent first-contact deliveries: two concurrent inbound messages with
+    # DISTINCT Telnyx message_ids from the same new sender to the same bound DID would both
+    # pass Gate 0 (no row to FOR-UPDATE-lock) and each create a chat. This advisory lock
+    # blocks the second delivery until the first commits, so Gate 0 below sees the committed
+    # chat and declines. Held until commit/rollback.
+    await chats_repo.lock_sms_autocreate(db, our_number=our_number, recipient=recipient)
+
     # Gate 0: a continuing conversation (an open sms_chat already exists for this our-DID /
     # sender pair) belongs to the 4b-2 reply engine, never auto-create — so we never fork a
     # second chat or double-reply on a later turn. When the reply flag is OFF this prevents
     # duplicate chats/replies on multi-turn conversations (the reply engine is not there to
     # absorb them); when it is ON the reply engine already handled an open chat and we are not
     # reached for it. (provider_message_id dedup only stops same-message redelivery, not a new
-    # message id on a later turn.)
+    # message id on a later turn.) No FOR UPDATE needed: the advisory lock above serializes.
     if (
-        await chats_repo.find_open_sms_chat(db, our_number=our_number, recipient=recipient)
+        await chats_repo.find_open_sms_chat(
+            db, our_number=our_number, recipient=recipient, for_update=False
+        )
         is not None
     ):
         return False
@@ -117,24 +126,23 @@ async def handle_inbound_autocreate(
         _count("sms_autocreate_unconfigured")
         return True
 
-    # Create the session + persist the inbound turn (role="sms"); the Telnyx id dedups
-    # redeliveries. Persisting in the SAME txn as the session means a concurrent/duplicate
-    # first delivery serializes on uq_chat_messages_provider_msg — the loser's whole txn
-    # (session + message) rolls back.
+    # Create the session (the advisory lock above guarantees no concurrent first-contact conflict).
+    agent_version = profile.published_version
+    assert agent_version is not None  # guaranteed by _resolve_live_profile
+    session = await chats_repo.add_session(
+        db,
+        agent_profile_id=profile.id,
+        agent_version=agent_version,
+        dynamic_vars={},
+        chat_type="sms_chat",
+        from_number=our_number,
+        to_number=recipient,
+    )
+    await db.flush()
+    seq = await chats_repo.next_seq(db, session.id)
+    # Persist the inbound turn; the Telnyx id dedups a same-message redelivery (the advisory
+    # lock + Gate 0 already handle the common case — this stays as defense-in-depth).
     try:
-        agent_version = profile.published_version
-        assert agent_version is not None  # guaranteed by _resolve_live_profile
-        session = await chats_repo.add_session(
-            db,
-            agent_profile_id=profile.id,
-            agent_version=agent_version,
-            dynamic_vars={},
-            chat_type="sms_chat",
-            from_number=our_number,
-            to_number=recipient,
-        )
-        await db.flush()
-        seq = await chats_repo.next_seq(db, session.id)
         await chats_repo.add_message(
             db,
             session_id=session.id,

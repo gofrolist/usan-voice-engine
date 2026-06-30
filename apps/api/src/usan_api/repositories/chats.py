@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.compat import ids
@@ -13,6 +13,22 @@ from usan_api.compat.errors import CompatError
 from usan_api.compat.schemas.chats import ListChatsRequest
 from usan_api.db.base import ChatStatus
 from usan_api.db.models import ChatMessage, ChatSession
+
+# Transaction-scoped advisory lock for inbound SMS auto-create first-contact serialization.
+# hashtext() maps the (our_number, recipient) key string to an int4 lock id. Released
+# automatically on commit/rollback — mirrors dnc.py's pg_advisory_xact_lock pattern.
+_SMS_AUTOCREATE_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtext(:k))")
+
+
+async def lock_sms_autocreate(db: AsyncSession, *, our_number: str, recipient: str) -> None:
+    """Serialize concurrent first-contact inbound SMS deliveries for one (DID, sender) pair.
+
+    Two concurrent inbound messages with distinct Telnyx message_ids from the same new sender
+    to the same bound DID would both pass Gate 0 (no row to FOR-UPDATE-lock) and each create
+    a chat. This advisory lock, taken before Gate 0, serializes them: the second delivery
+    blocks until the first commits, then Gate 0 sees the committed chat and declines.
+    """
+    await db.execute(_SMS_AUTOCREATE_LOCK_SQL, {"k": f"sms_autocreate:{our_number}:{recipient}"})
 
 
 async def add_session(
@@ -54,11 +70,13 @@ async def lock_session(db: AsyncSession, session_id: uuid.UUID) -> ChatSession |
 
 
 async def find_open_sms_chat(
-    db: AsyncSession, *, our_number: str, recipient: str
+    db: AsyncSession, *, our_number: str, recipient: str, for_update: bool = True
 ) -> ChatSession | None:
     """The open sms_chat for an inbound reply: our number is the row's from_number and the
     sender (recipient of the original outbound) is its to_number. RLS scopes to the default
-    org. FOR UPDATE serializes concurrent inbound turns; newest-started wins on ties."""
+    org. FOR UPDATE (the default) serializes concurrent inbound turns in the 4b-2 reply
+    engine; newest-started wins on ties. Pass for_update=False for the auto-create Gate 0
+    existence check — the advisory lock there provides serialization without a row lock."""
     stmt = (
         select(ChatSession)
         .where(
@@ -70,8 +88,9 @@ async def find_open_sms_chat(
         )
         .order_by(ChatSession.started_at.desc(), ChatSession.id.desc())
         .limit(1)
-        .with_for_update()
     )
+    if for_update:
+        stmt = stmt.with_for_update()
     return (await db.execute(stmt)).scalars().first()
 
 
