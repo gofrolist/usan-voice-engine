@@ -166,3 +166,34 @@ async def test_unconfigured_owns_but_skips(app_session, recorded_sms):
     assert result is True  # bound DID is SMS-agent territory -> owned, not relayed
     assert recorded_sms == []
     await app_session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_open_chat_declines(app_session, recorded_sms):
+    from usan_api.db.base import ChatStatus
+    from usan_api.db.models import ChatSession
+
+    profile = await _seed(app_session)  # bound DID + live agent
+    # A continuing conversation: an open sms_chat already exists for this our-DID / sender pair.
+    app_session.add(
+        ChatSession(
+            agent_profile_id=profile.id,
+            agent_version=1,
+            chat_type="sms_chat",
+            dynamic_vars={},
+            from_number=_OUR,
+            to_number=_SENDER,
+            status=ChatStatus.ONGOING,
+        )
+    )
+    await app_session.flush()
+    result = await handle_inbound_autocreate(app_session, _settings(), _inbound())
+    assert result is False  # belongs to the reply engine, not auto-create
+    assert recorded_sms == []
+    count = (
+        await app_session.execute(
+            text("SELECT count(*) FROM chat_sessions WHERE to_number = :s"), {"s": _SENDER}
+        )
+    ).scalar_one()
+    assert count == 1  # no SECOND chat created
+    await app_session.rollback()

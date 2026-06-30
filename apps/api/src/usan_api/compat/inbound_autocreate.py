@@ -80,6 +80,19 @@ async def handle_inbound_autocreate(
     our_number = to_e164(inbound.to_number) or inbound.to_number
     recipient = to_e164(inbound.from_number) or inbound.from_number
 
+    # Gate 0: a continuing conversation (an open sms_chat already exists for this our-DID /
+    # sender pair) belongs to the 4b-2 reply engine, never auto-create — so we never fork a
+    # second chat or double-reply on a later turn. When the reply flag is OFF this prevents
+    # duplicate chats/replies on multi-turn conversations (the reply engine is not there to
+    # absorb them); when it is ON the reply engine already handled an open chat and we are not
+    # reached for it. (provider_message_id dedup only stops same-message redelivery, not a new
+    # message id on a later turn.)
+    if (
+        await chats_repo.find_open_sms_chat(db, our_number=our_number, recipient=recipient)
+        is not None
+    ):
+        return False
+
     # Gate 1: the destination DID must carry an inbound_sms_agents binding.
     pn = await phone_numbers_repo.get_by_e164(db, our_number)
     token = _pick_inbound_sms_agent(pn)

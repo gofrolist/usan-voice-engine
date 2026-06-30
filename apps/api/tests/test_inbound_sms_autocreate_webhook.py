@@ -174,7 +174,28 @@ async def test_redelivery_deduped_one_chat(
     await _seed_bound_number(session_factory)
     raw = _envelope("dup", "hi", sender=_SENDER, recipient=_OUR)
     assert _post(client, signer, raw).status_code == 200
-    # Redelivery: the now-open sms_chat matches the 4b-2 reply engine (dedup), not autocreate.
+    # Redelivery of the same message_id: the second delivery finds the now-open chat at Gate 0
+    # and declines — one chat, one reply.
     assert _post(client, signer, raw).status_code == 200
+    assert await _session_count(session_factory) == 1
+    assert len(recorded_sms) == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_does_not_fork_second_chat(
+    client, signer, fake_reply, recorded_sms, session_factory
+):
+    # Reply flag OFF (signer sets only autocreate). Two DISTINCT inbound turns (different
+    # message ids) from the same unknown sender to the bound DID must yield exactly ONE chat
+    # and ONE reply: the second turn finds the open chat at Gate 0 and declines.
+    await _seed_bound_number(session_factory)
+    assert (
+        _post(client, signer, _envelope("t1", "hello", sender=_SENDER, recipient=_OUR)).status_code
+        == 200
+    )
+    assert (
+        _post(client, signer, _envelope("t2", "again", sender=_SENDER, recipient=_OUR)).status_code
+        == 200
+    )
     assert await _session_count(session_factory) == 1
     assert len(recorded_sms) == 1
