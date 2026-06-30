@@ -101,6 +101,7 @@ def encode_conversation_flow_cursor(created_at: datetime, fid: uuid.UUID) -> str
 
 
 def decode_conversation_flow_cursor(token: str) -> tuple[datetime, uuid.UUID]:
+    """Decode a cursor token back to (created_at, id). Raises CompatError(422) on any bad input."""
     try:
         padding = 4 - len(token) % 4
         padded = token + "=" * (padding % 4)
