@@ -23,12 +23,6 @@ from usan_api.compat.errors import CompatError
 router = APIRouter(tags=["compat-unsupported"])
 
 _UNSUPPORTED: tuple[tuple[str, str], ...] = (
-    # --- Conversation flow ---
-    ("POST", "/create-conversation-flow"),
-    ("GET", "/get-conversation-flow/{conversation_flow_id}"),
-    ("PATCH", "/update-conversation-flow/{conversation_flow_id}"),
-    ("DELETE", "/delete-conversation-flow/{conversation_flow_id}"),
-    ("GET", "/v2/list-conversation-flows"),
     # --- Conversation flow component ---
     ("POST", "/create-conversation-flow-component"),
     ("GET", "/v2/list-conversation-flow-components"),
