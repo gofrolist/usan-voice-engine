@@ -1481,3 +1481,23 @@ class ConversationFlow(Base, TenantScoped):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class ConversationFlowComponent(Base, TenantScoped):
+    """RetellAI conversation-flow component (Phase 6b): a shared, reusable flow fragment persisted
+    as opaque JSONB and echoed conformantly, but NOT executed at call/chat time
+    (persisted-not-honored). Standalone entity; no version column (the oracle response has none)."""
+
+    __tablename__ = "conversation_flow_components"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

@@ -4,11 +4,10 @@ US5, FR-053 / SC-009).
 A CRM that hits an endpoint the USAN voice engine does not implement gets a clean,
 RetellAI-shaped ``{status:501, message:"not_supported: <endpoint>"}`` instead of a
 bare 404 — and the endpoints are listed in the compat OpenAPI so the gap is explicit.
-The set is the contracts/endpoints.md "Out-of-scope" list (conversation-flow,
-conversation-flow-component, knowledge-base, chat, chat-agent, web-call, voice
-add/clone/search, test-suite, phone-number, MCP tools, export requests, agent
-playground, retell-llm, agent-version, analysis re-run).  Every path uses the
-oracle's EXACT versioned path and param name (no uniform {resource_id} shorthand).
+The authoritative set is the ``_UNSUPPORTED`` tuple below (endpoints are promoted out
+of it as each phase implements them — e.g. conversation-flow and its components are now
+served). Every path uses the oracle's EXACT versioned path and param name (no uniform
+{resource_id} shorthand).
 """
 
 from __future__ import annotations
@@ -23,12 +22,6 @@ from usan_api.compat.errors import CompatError
 router = APIRouter(tags=["compat-unsupported"])
 
 _UNSUPPORTED: tuple[tuple[str, str], ...] = (
-    # --- Conversation flow component ---
-    ("POST", "/create-conversation-flow-component"),
-    ("GET", "/v2/list-conversation-flow-components"),
-    ("GET", "/get-conversation-flow-component/{conversation_flow_component_id}"),
-    ("PATCH", "/update-conversation-flow-component/{conversation_flow_component_id}"),
-    ("DELETE", "/delete-conversation-flow-component/{conversation_flow_component_id}"),
     # --- Voice authoring (add / clone / search) — distinct from read-only catalog ---
     ("POST", "/add-community-voice"),
     ("POST", "/clone-voice"),

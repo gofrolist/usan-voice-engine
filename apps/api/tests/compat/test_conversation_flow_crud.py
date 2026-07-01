@@ -118,6 +118,44 @@ def test_update_missing_id_is_404(compat_client, compat_headers) -> None:
     assert r.status_code == 404
 
 
+def test_update_null_clear_required_field_is_422(compat_client, compat_headers) -> None:
+    cid = _create(compat_client, compat_headers)["conversation_flow_id"]
+    r = compat_client.patch(
+        f"/update-conversation-flow/{cid}",
+        json={"start_speaker": None},
+        headers=compat_headers,
+    )
+    assert r.status_code == 422
+    body = r.json()
+    assert body["status"] == 422
+    assert "start_speaker" in body["message"]
+    g = compat_client.get(f"/get-conversation-flow/{cid}", headers=compat_headers).json()
+    assert g["start_speaker"] == "agent"
+
+    r2 = compat_client.patch(
+        f"/update-conversation-flow/{cid}",
+        json={"model_choice": None},
+        headers=compat_headers,
+    )
+    assert r2.status_code == 422
+    body2 = r2.json()
+    assert body2["status"] == 422
+    assert "model_choice" in body2["message"]
+    g2 = compat_client.get(f"/get-conversation-flow/{cid}", headers=compat_headers).json()
+    assert "model_choice" in g2
+
+
+def test_list_invalid_sort_order_is_422(compat_client, compat_headers) -> None:
+    r = compat_client.get("/v2/list-conversation-flows?sort_order=asc", headers=compat_headers)
+    assert r.status_code == 422
+    assert r.json()["status"] == 422
+    for valid in ("ascending", "descending"):
+        ok = compat_client.get(
+            f"/v2/list-conversation-flows?sort_order={valid}", headers=compat_headers
+        )
+        assert ok.status_code == 200
+
+
 def test_server_keys_stripped_from_stored_config(
     compat_client, compat_headers, async_database_url
 ) -> None:
