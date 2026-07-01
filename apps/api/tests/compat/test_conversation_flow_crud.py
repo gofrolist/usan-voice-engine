@@ -118,6 +118,43 @@ def test_update_missing_id_is_404(compat_client, compat_headers) -> None:
     assert r.status_code == 404
 
 
+def test_server_keys_stripped_from_stored_config(
+    compat_client, compat_headers, async_database_url
+) -> None:
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from usan_api.compat import ids
+
+    body = _create(
+        compat_client,
+        compat_headers,
+        version=999,
+        conversation_flow_id="conversation_flow_deadbeef",
+        last_modification_timestamp=1,
+    )
+    fid = ids.decode_conversation_flow_id(body["conversation_flow_id"])
+
+    async def _read_config() -> dict:
+        engine = create_async_engine(async_database_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                return await conn.scalar(
+                    text("SELECT config FROM conversation_flows WHERE id = :i"), {"i": fid}
+                )
+        finally:
+            await engine.dispose()
+
+    stored = asyncio.run(_read_config())
+    assert "version" not in stored
+    assert "conversation_flow_id" not in stored
+    assert "last_modification_timestamp" not in stored
+    assert stored["start_speaker"] == "agent"  # real fields survive
+
+
 def test_update_null_clears_field(compat_client, compat_headers) -> None:
     cid = _create(compat_client, compat_headers, global_prompt="SECRET")["conversation_flow_id"]
     u = compat_client.patch(

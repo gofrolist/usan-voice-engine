@@ -27,6 +27,17 @@ from usan_api.repositories import conversation_flows as flows_repo
 
 router = APIRouter(tags=["compat-conversation-flows"])
 
+# Server-generated response fields — never stored inside the flow config. A client can inject
+# them via extra='allow', but serialize_flow always derives them from the ORM columns, so we
+# drop them before persisting (defense-in-depth against a future reader of row.config[...]).
+_SERVER_KEYS = ("conversation_flow_id", "version", "last_modification_timestamp")
+
+
+def _strip_server_keys(config: dict[str, Any]) -> dict[str, Any]:
+    for _k in _SERVER_KEYS:
+        config.pop(_k, None)
+    return config
+
 
 def _audit(request: Request, op: str) -> None:
     # PHI-free: org + op only. NEVER the flow config (it can carry prompts).
@@ -47,7 +58,8 @@ async def create_conversation_flow(
     request: Request,
     db: AsyncSession = Depends(get_compat_db),
 ) -> dict[str, Any]:
-    row = await flows_repo.create(db, config=_provided(body), version=0)
+    config = _strip_server_keys(_provided(body))
+    row = await flows_repo.create(db, config=config, version=0)
     await db.commit()
     _audit(request, "create-conversation-flow")
     return serialize_flow(row)
@@ -89,6 +101,7 @@ async def update_conversation_flow(
             merged.pop(_key, None)
         else:
             merged[_key] = _value
+    _strip_server_keys(merged)
     updated = await flows_repo.update(db, flow_id, config=merged, version=row.version + 1)
     if updated is None:
         raise CompatError(404, "conversation flow not found")
