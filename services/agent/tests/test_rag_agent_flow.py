@@ -46,6 +46,7 @@ async def test_bound_steers_instruction_and_advances_cursor(monkeypatch) -> None
         return_value={
             "bound": True,
             "node_id": "n2",
+            "cursor": "flow-uuid:n2",
             "instruction": "Ask about meds",
             "is_end": False,
         }
@@ -55,9 +56,14 @@ async def test_bound_steers_instruction_and_advances_cursor(monkeypatch) -> None
     update = AsyncMock()
     agent = _agent(_settings(flow=True))
     monkeypatch.setattr(agent, "update_instructions", update)
+    assert agent.flow_active is False
     await agent.on_user_turn_completed(llm.ChatContext.empty(), _user_msg("hello"))
     update.assert_awaited_once_with("Ask about meds")
-    assert agent._flow_node_id == "n2"
+    assert agent._flow_cursor == "flow-uuid:n2"
+    assert agent.flow_active is True
+    # the cursor round-trips verbatim as the next request's cursor kwarg
+    _, kwargs = spy.await_args
+    assert kwargs["cursor"] is None  # first call had no cursor yet
 
 
 async def test_unbound_latches_off_after_one_call(monkeypatch) -> None:
@@ -68,7 +74,8 @@ async def test_unbound_latches_off_after_one_call(monkeypatch) -> None:
     ctx = llm.ChatContext.empty()
     await agent.on_user_turn_completed(ctx, _user_msg("a"))
     await agent.on_user_turn_completed(ctx, _user_msg("b"))
-    assert spy.await_count == 1  # latched off after the first bound=False
+    assert spy.await_count == 1  # latched off after the first bound=False (never bound)
+    assert agent.flow_active is False
 
 
 async def test_advance_failure_does_not_latch_or_raise(monkeypatch) -> None:
@@ -83,7 +90,37 @@ async def test_advance_failure_does_not_latch_or_raise(monkeypatch) -> None:
     await agent.on_user_turn_completed(ctx, _user_msg("b"))
     assert spy.await_count == 2  # retried; no latch
     update.assert_not_awaited()
-    assert agent._flow_node_id is None
+    assert agent._flow_cursor is None
+
+
+async def test_bound_then_transient_unbound_does_not_latch(monkeypatch) -> None:
+    """#3 fix: once a flow has ever bound, a later bound=False is treated as transient —
+    the agent stays on its current cursor, does not latch off, and keeps retrying."""
+    spy = AsyncMock(
+        side_effect=[
+            {"bound": True, "node_id": "n1", "cursor": "flow-uuid:n1", "instruction": "Hi"},
+            {"bound": False},
+            {"bound": False},
+        ]
+    )
+    monkeypatch.setattr(api_client, "flow_advance", spy)
+    monkeypatch.setattr(api_client, "retrieve_kb_context", AsyncMock(return_value=""))
+    update = AsyncMock()
+    agent = _agent(_settings(flow=True))
+    monkeypatch.setattr(agent, "update_instructions", update)
+    ctx = llm.ChatContext.empty()
+
+    await agent.on_user_turn_completed(ctx, _user_msg("a"))
+    assert agent._flow_cursor == "flow-uuid:n1"
+    assert agent.flow_active is True
+
+    await agent.on_user_turn_completed(ctx, _user_msg("b"))
+    assert agent._flow_latched_off is False  # NOT latched — a bound flow saw a transient blip
+    assert agent._flow_cursor == "flow-uuid:n1"  # stays on the last-known cursor
+    assert agent.flow_active is True
+
+    await agent.on_user_turn_completed(ctx, _user_msg("c"))
+    assert spy.await_count == 3  # kept retrying every turn, no latch
 
 
 async def test_kb_hook_still_runs_alongside_flow(monkeypatch) -> None:

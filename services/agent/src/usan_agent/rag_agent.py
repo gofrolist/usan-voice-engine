@@ -10,11 +10,13 @@ each behind its own settings flag:
    ``settings.kb_retrieval_voice_enabled``.
 
 2. Conversation-flow steering (Phase 6-runtime-voice): on each completed user turn, calls
-   the stateless flow-advance endpoint with the agent-held cursor (current node id) and a
-   recent turn window, then applies the returned instruction via ``update_instructions``
-   and advances the cursor. Once an advance definitively reports the call is not
-   flow-bound, the agent latches off for the rest of the call (no more per-turn calls on
-   the common non-flow path); a transient failure does not latch. Gated by
+   the stateless flow-advance endpoint with the agent-held cursor (an opaque,
+   flow-qualified token the agent never interprets) and a recent turn window, then applies
+   the returned instruction via ``update_instructions`` and stores the new cursor. The
+   agent latches off (no more per-turn calls on the common non-flow path) only if the very
+   first advance reports the call is not flow-bound; once a flow has ever bound, a later
+   transient ``bound=False`` is treated as transient (stay on the current cursor, retry
+   next turn, no latch) — see ``_flow_ever_bound``. Gated by
    ``settings.flow_runtime_voice_enabled``.
 
 Both hooks are independently exception-guarded: an exception raised in
@@ -27,6 +29,7 @@ Both enabled flags are derived from the ``settings`` constructor parameter — p
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from livekit.agents import llm
@@ -85,14 +88,29 @@ class RagAgent(Agent):
         # definitively reports the call is not flow-bound, latch off (no per-turn calls on the
         # common non-flow path). A transient failure (None) does NOT latch.
         self._flow_enabled = bool(settings and settings.flow_runtime_voice_enabled)
-        self._flow_node_id: str | None = None
+        self._flow_cursor: str | None = None
         self._flow_latched_off = False
+        self._flow_ever_bound = False
+
+    @property
+    def flow_active(self) -> bool:
+        """True once a conversation flow is actively steering this call.
+
+        Used by the worker's dynamic-vars receiver to decide whether the flow (rather
+        than a mid-call variable update) owns the system prompt.
+        """
+        return self._flow_enabled and not self._flow_latched_off and self._flow_ever_bound
 
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
     ) -> None:
-        await self._maybe_advance_flow(turn_ctx, new_message)
-        await self._maybe_inject_kb(turn_ctx, new_message)
+        # The two hooks target independent state (flow calls update_instructions; kb calls
+        # turn_ctx.add_message) and each swallows its own exceptions, so running them
+        # concurrently is safe and shaves one hook's latency off the turn.
+        await asyncio.gather(
+            self._maybe_advance_flow(turn_ctx, new_message),
+            self._maybe_inject_kb(turn_ctx, new_message),
+        )
 
     async def _maybe_advance_flow(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
@@ -100,29 +118,35 @@ class RagAgent(Agent):
         try:
             if not (self._flow_enabled and self._kb_call_id) or self._flow_latched_off:
                 return
-            if self._kb_settings is None:
-                return
+            # _flow_enabled is only True when settings was provided at construction time, so
+            # this can never actually be None here; narrow the type for mypy.
+            assert self._kb_settings is not None
             turns = _turns_for_flow(turn_ctx, new_message)
             result = await api_client.flow_advance(
                 self._kb_call_id,
                 self._kb_settings,
-                current_node_id=self._flow_node_id,
+                cursor=self._flow_cursor,
                 turns=turns,
             )
             if result is None:
-                return  # transient failure: retry next turn, no latch, stay on current node
+                return  # transient failure: retry next turn, no latch, stay on current cursor
             if not result.get("bound"):
-                self._flow_latched_off = True
+                # A bound=False AFTER we've seen bound=true is treated as transient (stay on
+                # the current cursor, retry next turn). Only latch off if the call has never
+                # bound — that's the definitive "this call has no flow" signal.
+                if not self._flow_ever_bound:
+                    self._flow_latched_off = True
                 return
+            self._flow_ever_bound = True
             instruction = result.get("instruction")
             if isinstance(instruction, str) and instruction:
                 await self.update_instructions(instruction)
-            node_id = result.get("node_id")
-            if isinstance(node_id, str) and node_id:
-                self._flow_node_id = node_id
+            cursor = result.get("cursor")
+            if isinstance(cursor, str) and cursor:
+                self._flow_cursor = cursor
         except Exception as exc:  # a failure here must never abort the turn
             logger.bind(err=type(exc).__name__).warning(
-                "voice flow advance hook failed; staying on current node"
+                "voice flow advance hook failed; staying on current cursor"
             )
 
     async def _maybe_inject_kb(

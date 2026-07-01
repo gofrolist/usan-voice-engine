@@ -54,12 +54,14 @@ async def test_flow_advance_returns_json_on_200(monkeypatch) -> None:
     out = await api_client.flow_advance(
         "11111111-1111-1111-1111-111111111111",
         _settings(),
-        current_node_id=None,
+        cursor=None,
         turns=[{"role": "user", "content": "hello"}],
     )
     assert out == {"bound": True, "node_id": "n1", "instruction": "Hi", "is_end": False}
     assert captured["url"].endswith("/v1/runtime/flow-advance")
     assert captured["json"]["turns"] == [{"role": "user", "content": "hello"}]
+    assert captured["json"]["cursor"] is None
+    assert "current_node_id" not in captured["json"]
 
 
 async def test_flow_advance_returns_none_on_error(monkeypatch) -> None:
@@ -76,7 +78,33 @@ async def test_flow_advance_returns_none_on_error(monkeypatch) -> None:
     out = await api_client.flow_advance(
         "11111111-1111-1111-1111-111111111111",
         _settings(),
-        current_node_id="n1",
+        cursor="flow-uuid:n1",
         turns=[],
     )
     assert out is None
+
+
+async def test_flow_advance_sends_cursor_field(monkeypatch) -> None:
+    """The opaque cursor round-trips verbatim under the 'cursor' request key."""
+    captured: dict[str, Any] = {}
+
+    class _Client:
+        def __init__(self, *a: Any, **k: Any) -> None: ...
+        async def __aenter__(self) -> _Client:
+            return self
+
+        async def __aexit__(self, *a: Any) -> None: ...
+        async def post(self, url: str, json: dict[str, Any], headers: dict[str, str]) -> _Resp:
+            captured["json"] = json
+            return _Resp(200, {"bound": True, "node_id": "n2", "cursor": "flow-uuid:n2"})
+
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _Client)
+    out = await api_client.flow_advance(
+        "11111111-1111-1111-1111-111111111111",
+        _settings(),
+        cursor="flow-uuid:n1",
+        turns=[],
+    )
+    assert captured["json"]["cursor"] == "flow-uuid:n1"
+    assert out is not None
+    assert out["cursor"] == "flow-uuid:n2"

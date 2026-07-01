@@ -324,18 +324,20 @@ async def flow_advance(
     call_id: str,
     settings: Settings,
     *,
-    current_node_id: str | None,
+    cursor: str | None,
     turns: list[dict[str, str]],
 ) -> dict[str, Any] | None:
     """Best-effort one-turn conversation-flow advance. Returns the parsed JSON
-    ({bound, node_id, instruction, is_end}) or None on any failure — a failed advance leaves
-    the caller on its current node and never breaks the turn. PHI-safe: logs only the
-    exception type, never turn/instruction content."""
+    ({bound, node_id, cursor, instruction, is_end}) or None on any failure — a failed
+    advance leaves the caller on its current cursor and never breaks the turn. The
+    ``cursor`` is an opaque, flow-qualified token the agent round-trips verbatim; it never
+    interprets or parses it. PHI-safe: logs only the exception type, never turn/instruction
+    content."""
     try:
         call_id = _validate_call_id(call_id)
         url = f"{settings.api_base_url}/v1/runtime/flow-advance"
         headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
-        payload = {"call_id": call_id, "current_node_id": current_node_id, "turns": turns}
+        payload = {"call_id": call_id, "cursor": cursor, "turns": turns}
         async with httpx.AsyncClient(timeout=_CONFIG_TIMEOUT_S) as client:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
