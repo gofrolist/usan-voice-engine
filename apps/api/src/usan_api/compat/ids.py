@@ -24,6 +24,7 @@ _MESSAGE_PREFIX = "message_"
 _KB_PREFIX = "knowledge_base_"
 _KB_SOURCE_PREFIX = "source_"
 _CONVERSATION_FLOW_PREFIX = "conversation_flow_"
+_CONVERSATION_FLOW_COMPONENT_PREFIX = "conversation_flow_component_"
 
 
 def encode_call_id(call_id: uuid.UUID) -> str:
@@ -94,6 +95,18 @@ def decode_conversation_flow_id(token: str) -> uuid.UUID:
     return _decode_hex(token, prefix=_CONVERSATION_FLOW_PREFIX, kind="conversation_flow_id")
 
 
+def encode_conversation_flow_component_id(component_id: uuid.UUID) -> str:
+    return _CONVERSATION_FLOW_COMPONENT_PREFIX + component_id.hex
+
+
+def decode_conversation_flow_component_id(token: str) -> uuid.UUID:
+    return _decode_hex(
+        token,
+        prefix=_CONVERSATION_FLOW_COMPONENT_PREFIX,
+        kind="conversation_flow_component_id",
+    )
+
+
 def _encode_keyset_cursor(created_at: datetime, eid: uuid.UUID) -> str:
     """Opaque (created_at, id) keyset cursor shared by the v2 list endpoints."""
     raw = f"{created_at.isoformat()}|{eid.hex}".encode()
@@ -120,6 +133,16 @@ def encode_conversation_flow_cursor(created_at: datetime, fid: uuid.UUID) -> str
 
 
 def decode_conversation_flow_cursor(token: str) -> tuple[datetime, uuid.UUID]:
+    """Decode a cursor token back to (created_at, id). Raises CompatError(422) on any bad input."""
+    return _decode_keyset_cursor(token)
+
+
+def encode_conversation_flow_component_cursor(created_at: datetime, cid: uuid.UUID) -> str:
+    """Opaque (created_at, id) keyset cursor (delegates to the shared helper)."""
+    return _encode_keyset_cursor(created_at, cid)
+
+
+def decode_conversation_flow_component_cursor(token: str) -> tuple[datetime, uuid.UUID]:
     """Decode a cursor token back to (created_at, id). Raises CompatError(422) on any bad input."""
     return _decode_keyset_cursor(token)
 
