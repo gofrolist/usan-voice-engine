@@ -536,14 +536,18 @@ def serialize_agent_version(
 def _response_engine(profile: AgentProfile) -> dict[str, Any]:
     """Derive the oracle ``response_engine`` oneOf variant from stored state.
 
-    A flow-bound agent stores ``compat_response_engine`` (Phase 6c); absent ⇒ the
-    retell-llm self-view (``llm_id`` == this profile, data-model §5). ``version`` is
-    omitted when null (oracle omit-nulls)."""
+    A flow-bound agent stores ``compat_response_engine`` (Phase 6c); absent (or a
+    malformed blob missing ``conversation_flow_id``) ⇒ the retell-llm self-view
+    (``llm_id`` == this profile, data-model §5). ``version`` is omitted when null
+    (oracle omit-nulls). The blob is only ever written whole by ``_store_flow_engine``;
+    the defensive ``.get`` guards degrade an out-of-band-corrupted row to the self-view
+    instead of 500-ing every read of that agent."""
     stored = (profile.draft_config or {}).get("compat_response_engine")
-    if stored and stored.get("type") == "conversation-flow":
+    flow_id = stored.get("conversation_flow_id") if isinstance(stored, dict) else None
+    if isinstance(stored, dict) and stored.get("type") == "conversation-flow" and flow_id:
         engine: dict[str, Any] = {
             "type": "conversation-flow",
-            "conversation_flow_id": stored["conversation_flow_id"],
+            "conversation_flow_id": flow_id,
         }
         if stored.get("version") is not None:
             engine["version"] = stored["version"]

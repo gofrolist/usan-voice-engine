@@ -55,3 +55,16 @@ def test_response_engine_conversation_flow_omits_null_version():
 def test_response_engine_ignores_none_draft_config():
     p = SimpleNamespace(id=uuid.uuid4(), draft_config=None)
     assert agent_bridge._response_engine(p)["type"] == "retell-llm"
+
+
+def test_response_engine_degrades_malformed_flow_blob_to_self_view():
+    """A corrupt/partial compat_response_engine (missing conversation_flow_id, or not a
+    dict) degrades to the retell-llm self-view instead of raising — never written by the
+    app, but hardens against an out-of-band-corrupted row 500-ing every read."""
+    missing_id = _profile({"compat_response_engine": {"type": "conversation-flow"}})
+    assert agent_bridge._response_engine(missing_id) == {
+        "type": "retell-llm",
+        "llm_id": ids.encode_llm_id(missing_id.id),
+    }
+    not_a_dict = _profile({"compat_response_engine": "conversation-flow"})
+    assert agent_bridge._response_engine(not_a_dict)["type"] == "retell-llm"
