@@ -34,3 +34,7 @@ archived / cross-org / malformed flow binding. The runtime never breaks a live c
   transitions, `flex_mode`, per-node model/voice overrides. `static_text` instructions are
   executed as prompts (not verbatim utterances).
 - Auto-ending the chat on an `end` node (ending stays the client's `end-chat` op).
+- `start_speaker: "user"` is ignored — the start node always speaks first. Advancement is
+  single-hop per user turn (one classifier + one speak Vertex call per turn), so an
+  `Always`-chained greeting node speaks on turn 1 and the next node engages on the following
+  inbound turn.
