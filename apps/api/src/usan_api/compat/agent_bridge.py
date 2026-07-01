@@ -325,6 +325,10 @@ async def bind_agent(
 
     config = _config_dict(profile)
     _apply_voice_overlay(config, cartesia_voice_id=cartesia)
+    # A retell-llm bind always yields a retell-llm agent: clear any flow binding the target
+    # profile may carry (only reachable if a client re-encodes a flow agent's own UUID as an
+    # llm_id — abnormal, but keeps create-agent symmetric with update-agent's retell-llm path).
+    _clear_flow_engine(config)
     _merge_extras(config, "agent", body.model_dump())
     _validate_config(config)
 

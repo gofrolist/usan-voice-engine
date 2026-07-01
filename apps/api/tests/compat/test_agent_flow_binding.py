@@ -215,3 +215,39 @@ def test_update_custom_llm_is_422(compat_client, compat_headers):
         headers=compat_headers,
     )
     assert r.status_code == 422, r.text
+
+
+def test_update_without_response_engine_preserves_flow_binding(compat_client, compat_headers):
+    """A PATCH that omits response_engine (e.g. voice-only) keeps the existing flow binding."""
+    flow_id = _create_flow(compat_client, compat_headers)
+    agent_id = _create_flow_agent(compat_client, compat_headers, flow_id).json()["agent_id"]
+    r = compat_client.patch(
+        f"/update-agent/{agent_id}",
+        json={"voice_id": RETELL_VOICE},
+        headers=compat_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["response_engine"] == {
+        "type": "conversation-flow",
+        "conversation_flow_id": flow_id,
+    }
+
+
+def test_create_retell_llm_rebind_of_flow_agent_own_id_yields_retell_llm(
+    compat_client, compat_headers
+):
+    """Re-binding a flow agent's own UUID (re-encoded as an llm_id) via create-agent produces a
+    genuine retell-llm agent — the stale flow key is cleared (symmetry with update-agent)."""
+    flow_id = _create_flow(compat_client, compat_headers)
+    agent_id = _create_flow_agent(compat_client, compat_headers, flow_id).json()["agent_id"]
+    self_llm_id = ids.encode_llm_id(ids.decode_agent_id(agent_id))
+    r = compat_client.post(
+        "/create-agent",
+        json={
+            "response_engine": {"type": "retell-llm", "llm_id": self_llm_id},
+            "voice_id": RETELL_VOICE,
+        },
+        headers=compat_headers,
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["response_engine"] == {"type": "retell-llm", "llm_id": self_llm_id}
