@@ -320,6 +320,34 @@ async def retrieve_kb_context(call_id: str, settings: Settings, query: str) -> s
         return ""
 
 
+async def flow_advance(
+    call_id: str,
+    settings: Settings,
+    *,
+    current_node_id: str | None,
+    turns: list[dict[str, str]],
+) -> dict[str, Any] | None:
+    """Best-effort one-turn conversation-flow advance. Returns the parsed JSON
+    ({bound, node_id, instruction, is_end}) or None on any failure — a failed advance leaves
+    the caller on its current node and never breaks the turn. PHI-safe: logs only the
+    exception type, never turn/instruction content."""
+    try:
+        call_id = _validate_call_id(call_id)
+        url = f"{settings.api_base_url}/v1/runtime/flow-advance"
+        headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
+        payload = {"call_id": call_id, "current_node_id": current_node_id, "turns": turns}
+        async with httpx.AsyncClient(timeout=_CONFIG_TIMEOUT_S) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            body = response.json()
+        return cast(dict[str, Any], body)
+    except Exception as exc:
+        logger.bind(call_id=call_id, err=type(exc).__name__).warning(
+            "flow advance call failed; staying on current node"
+        )
+        return None
+
+
 async def start_inbound_call(
     phone_e164: str | None,
     livekit_room: str,
