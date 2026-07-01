@@ -10,7 +10,7 @@ linked flows" fan-out is not backed (nothing links components to flows at rest).
 from __future__ import annotations
 
 import contextlib
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from loguru import logger
@@ -33,11 +33,13 @@ router = APIRouter(tags=["compat-conversation-flow-components"])
 # drop them before persisting (defense-in-depth against a future reader of row.config[...]).
 _SERVER_KEYS = ("conversation_flow_component_id", "user_modified_timestamp")
 
+# Oracle-required create fields — a client cannot null-clear these on update (would produce a
+# stored/echoed body that violates the required set).
+_CREATE_REQUIRED = ("name", "nodes")
+
 
 def _strip_server_keys(config: dict[str, Any]) -> dict[str, Any]:
-    for _k in _SERVER_KEYS:
-        config.pop(_k, None)
-    return config
+    return {k: v for k, v in config.items() if k not in _SERVER_KEYS}
 
 
 def _audit(request: Request, op: str) -> None:
@@ -97,10 +99,12 @@ async def update_conversation_flow_component(
     merged = dict(row.config)
     for _key, _value in body.model_dump().items():
         if _value is None:
+            if _key in _CREATE_REQUIRED:
+                raise CompatError(422, f"cannot clear required field: {_key}")
             merged.pop(_key, None)
         else:
             merged[_key] = _value
-    _strip_server_keys(merged)
+    merged = _strip_server_keys(merged)
     updated = await components_repo.update(db, component_id, config=merged)
     if updated is None:
         raise CompatError(404, "conversation flow component not found")
@@ -131,7 +135,7 @@ async def delete_conversation_flow_component(
 @router.get("/v2/list-conversation-flow-components")
 async def list_conversation_flow_components(
     request: Request,
-    sort_order: str = Query(default="descending"),
+    sort_order: Literal["ascending", "descending"] = Query(default="descending"),
     limit: int = Query(default=50, ge=1, le=1000),
     pagination_key: str | None = Query(default=None),
     db: AsyncSession = Depends(get_compat_db),

@@ -126,6 +126,46 @@ def test_list_is_paginated_envelope(compat_client, compat_headers) -> None:
     assert created <= seen
 
 
+def test_update_null_clear_required_field_is_422(compat_client, compat_headers) -> None:
+    cid = _create(compat_client, compat_headers)["conversation_flow_component_id"]
+    r = compat_client.patch(
+        f"/update-conversation-flow-component/{cid}",
+        json={"name": None},
+        headers=compat_headers,
+    )
+    assert r.status_code == 422
+    body = r.json()
+    assert body["status"] == 422
+    assert "name" in body["message"]
+    g = compat_client.get(f"/get-conversation-flow-component/{cid}", headers=compat_headers).json()
+    assert g["name"] == "Collector"
+
+    r2 = compat_client.patch(
+        f"/update-conversation-flow-component/{cid}",
+        json={"nodes": None},
+        headers=compat_headers,
+    )
+    assert r2.status_code == 422
+    body2 = r2.json()
+    assert body2["status"] == 422
+    assert "nodes" in body2["message"]
+    g2 = compat_client.get(f"/get-conversation-flow-component/{cid}", headers=compat_headers).json()
+    assert "nodes" in g2
+
+
+def test_list_invalid_sort_order_is_422(compat_client, compat_headers) -> None:
+    r = compat_client.get(
+        "/v2/list-conversation-flow-components?sort_order=asc", headers=compat_headers
+    )
+    assert r.status_code == 422
+    assert r.json()["status"] == 422
+    for valid in ("ascending", "descending"):
+        ok = compat_client.get(
+            f"/v2/list-conversation-flow-components?sort_order={valid}", headers=compat_headers
+        )
+        assert ok.status_code == 200
+
+
 def test_server_keys_stripped_and_not_spoofable(
     compat_client, compat_headers, async_database_url
 ) -> None:

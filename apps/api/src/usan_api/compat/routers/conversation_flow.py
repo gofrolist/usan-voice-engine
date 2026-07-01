@@ -9,7 +9,7 @@ each mutation commits explicitly. See docs/deployment/conversation-flows.md.
 from __future__ import annotations
 
 import contextlib
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from loguru import logger
@@ -32,11 +32,13 @@ router = APIRouter(tags=["compat-conversation-flows"])
 # drop them before persisting (defense-in-depth against a future reader of row.config[...]).
 _SERVER_KEYS = ("conversation_flow_id", "version", "last_modification_timestamp")
 
+# Oracle-required create fields — a client cannot null-clear these on update (would produce a
+# stored/echoed body that violates the required set).
+_CREATE_REQUIRED = ("start_speaker", "model_choice", "nodes")
+
 
 def _strip_server_keys(config: dict[str, Any]) -> dict[str, Any]:
-    for _k in _SERVER_KEYS:
-        config.pop(_k, None)
-    return config
+    return {k: v for k, v in config.items() if k not in _SERVER_KEYS}
 
 
 def _audit(request: Request, op: str) -> None:
@@ -98,10 +100,12 @@ async def update_conversation_flow(
     merged = dict(row.config)
     for _key, _value in body.model_dump().items():
         if _value is None:
+            if _key in _CREATE_REQUIRED:
+                raise CompatError(422, f"cannot clear required field: {_key}")
             merged.pop(_key, None)
         else:
             merged[_key] = _value
-    _strip_server_keys(merged)
+    merged = _strip_server_keys(merged)
     updated = await flows_repo.update(db, flow_id, config=merged, version=row.version + 1)
     if updated is None:
         raise CompatError(404, "conversation flow not found")
@@ -129,7 +133,7 @@ async def delete_conversation_flow(
 @router.get("/v2/list-conversation-flows")
 async def list_conversation_flows(
     request: Request,
-    sort_order: str = Query(default="descending"),
+    sort_order: Literal["ascending", "descending"] = Query(default="descending"),
     limit: int = Query(default=50, ge=1, le=1000),
     pagination_key: str | None = Query(default=None),
     db: AsyncSession = Depends(get_compat_db),
