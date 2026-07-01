@@ -357,6 +357,22 @@ async def update_agent(
     config = _config_dict(profile)
     if body.voice_id is not None:
         _apply_voice_overlay(config, cartesia_voice_id=voice_map.resolve_voice_id(body.voice_id))
+    if body.response_engine is not None:
+        engine = body.response_engine
+        if engine.type == "conversation-flow":
+            if not engine.conversation_flow_id:
+                raise CompatError(422, "response_engine.conversation_flow_id is required")
+            flow_uuid = await _validate_flow_id(db, engine.conversation_flow_id)
+            _store_flow_engine(config, flow_uuid=flow_uuid, version=engine.version)
+        elif engine.type == "retell-llm":
+            if not engine.llm_id:
+                raise CompatError(422, "response_engine.llm_id is required")
+            if engine.llm_id != ids.encode_llm_id(profile.id):
+                # Our one-profile overlay can't represent RetellAI's one-llm-many-agents.
+                raise CompatError(409, "cannot bind agent to another agent's llm")
+            _clear_flow_engine(config)
+        else:
+            raise CompatError(422, "unsupported response_engine type")
     _merge_extras(config, "agent", body.model_dump(exclude_none=True))
     _validate_config(config)
 

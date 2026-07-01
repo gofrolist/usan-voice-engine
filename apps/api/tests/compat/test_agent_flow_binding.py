@@ -120,3 +120,98 @@ def test_create_retell_llm_agent_still_works(compat_client, compat_headers):
     )
     assert r.status_code == 201, r.text
     assert r.json()["response_engine"] == {"type": "retell-llm", "llm_id": llm["llm_id"]}
+
+
+def _create_retell_agent(compat_client, compat_headers) -> tuple[str, str]:
+    llm = compat_client.post(
+        "/create-retell-llm",
+        json={"start_speaker": "agent", "general_prompt": "hi"},
+        headers=compat_headers,
+    ).json()
+    agent = compat_client.post(
+        "/create-agent",
+        json={
+            "response_engine": {"type": "retell-llm", "llm_id": llm["llm_id"]},
+            "voice_id": RETELL_VOICE,
+        },
+        headers=compat_headers,
+    ).json()
+    return agent["agent_id"], llm["llm_id"]
+
+
+def test_update_switches_llm_agent_to_flow(compat_client, compat_headers):
+    agent_id, _ = _create_retell_agent(compat_client, compat_headers)
+    flow_id = _create_flow(compat_client, compat_headers)
+    r = compat_client.patch(
+        f"/update-agent/{agent_id}",
+        json={"response_engine": {"type": "conversation-flow", "conversation_flow_id": flow_id}},
+        headers=compat_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["response_engine"] == {
+        "type": "conversation-flow",
+        "conversation_flow_id": flow_id,
+    }
+    assert_conforms(r.json(), "AgentResponse")
+
+
+def test_update_repoints_flow_agent_to_another_flow(compat_client, compat_headers):
+    flow_a = _create_flow(compat_client, compat_headers)
+    flow_b = _create_flow(compat_client, compat_headers)
+    agent_id = _create_flow_agent(compat_client, compat_headers, flow_a).json()["agent_id"]
+    r = compat_client.patch(
+        f"/update-agent/{agent_id}",
+        json={"response_engine": {"type": "conversation-flow", "conversation_flow_id": flow_b}},
+        headers=compat_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["response_engine"]["conversation_flow_id"] == flow_b
+
+
+def test_update_reverts_flow_agent_to_self_llm(compat_client, compat_headers):
+    agent_id, llm_id = _create_retell_agent(compat_client, compat_headers)
+    flow_id = _create_flow(compat_client, compat_headers)
+    compat_client.patch(
+        f"/update-agent/{agent_id}",
+        json={"response_engine": {"type": "conversation-flow", "conversation_flow_id": flow_id}},
+        headers=compat_headers,
+    )
+    r = compat_client.patch(
+        f"/update-agent/{agent_id}",
+        json={"response_engine": {"type": "retell-llm", "llm_id": llm_id}},
+        headers=compat_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["response_engine"] == {"type": "retell-llm", "llm_id": llm_id}
+
+
+def test_update_foreign_llm_id_is_409(compat_client, compat_headers):
+    agent_a, _ = _create_retell_agent(compat_client, compat_headers)
+    _, llm_b = _create_retell_agent(compat_client, compat_headers)
+    r = compat_client.patch(
+        f"/update-agent/{agent_a}",
+        json={"response_engine": {"type": "retell-llm", "llm_id": llm_b}},
+        headers=compat_headers,
+    )
+    assert r.status_code == 409, r.text
+
+
+def test_update_unknown_flow_is_422(compat_client, compat_headers):
+    agent_id, _ = _create_retell_agent(compat_client, compat_headers)
+    bogus = ids.encode_conversation_flow_id(uuid.uuid4())
+    r = compat_client.patch(
+        f"/update-agent/{agent_id}",
+        json={"response_engine": {"type": "conversation-flow", "conversation_flow_id": bogus}},
+        headers=compat_headers,
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_update_custom_llm_is_422(compat_client, compat_headers):
+    agent_id, _ = _create_retell_agent(compat_client, compat_headers)
+    r = compat_client.patch(
+        f"/update-agent/{agent_id}",
+        json={"response_engine": {"type": "custom-llm", "llm_websocket_url": "wss://x/y"}},
+        headers=compat_headers,
+    )
+    assert r.status_code == 422, r.text
