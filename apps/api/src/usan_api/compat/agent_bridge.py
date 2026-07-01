@@ -51,6 +51,7 @@ from usan_api.db.base import ProfileStatus
 from usan_api.db.models import AgentProfile, AgentProfileVersion
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import compat_webhooks as compat_webhooks_repo
+from usan_api.repositories import conversation_flows as conversation_flows_repo
 from usan_api.repositories import knowledge_bases as kb_repo
 from usan_api.repositories.agent_profiles import ProfileInUseError
 from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
@@ -147,6 +148,43 @@ def _provisional_llm_name() -> str:
     return f"retell-llm-{uuid.uuid4().hex[:8]}"
 
 
+def _provisional_agent_name() -> str:
+    return f"agent-{uuid.uuid4().hex[:8]}"
+
+
+async def _validate_flow_id(db: AsyncSession, token: str) -> uuid.UUID:
+    """Reject a conversation_flow_id that doesn't resolve within the caller's org (RLS).
+    Cross-org is indistinguishable from absent — a single 422 that never acknowledges
+    cross-org existence (mirrors ``_validate_kb_ids``)."""
+    try:
+        flow_uuid = ids.decode_conversation_flow_id(token)
+    except CompatError as exc:
+        raise CompatError(422, "unknown conversation_flow_id") from exc
+    flow = await conversation_flows_repo.get(db, flow_uuid)
+    if flow is None:
+        raise CompatError(422, "unknown conversation_flow_id")
+    return flow_uuid
+
+
+def _store_flow_engine(
+    config: dict[str, Any], *, flow_uuid: uuid.UUID, version: int | None
+) -> None:
+    """Persist the conversation-flow binding as a namespaced top-level config key. The
+    canonical re-encoded token keeps the echo stable; ``version`` is accept-and-echo."""
+    engine: dict[str, Any] = {
+        "type": "conversation-flow",
+        "conversation_flow_id": ids.encode_conversation_flow_id(flow_uuid),
+    }
+    if version is not None:
+        engine["version"] = version
+    config["compat_response_engine"] = engine
+
+
+def _clear_flow_engine(config: dict[str, Any]) -> None:
+    """Revert to the retell-llm self-view (used when update-agent re-binds to retell-llm)."""
+    config.pop("compat_response_engine", None)
+
+
 # --- profile loading -------------------------------------------------------------------
 async def _load_active(
     db: AsyncSession, profile_id: uuid.UUID, *, kind: str, expected_channel: str | None = None
@@ -227,12 +265,57 @@ async def create_response_engine(
     return profile
 
 
+async def _create_flow_agent(
+    db: AsyncSession, settings: Settings, body: CreateAgentRequest
+) -> tuple[AgentProfile, str | None]:
+    """create-agent with a conversation-flow engine: mint a FRESH voice profile bound to an
+    in-org flow, then publish. (Unlike retell-llm, there is no prior create-retell-llm step —
+    the flow already exists in the Phase-6a table.)"""
+    engine = body.response_engine
+    if not engine.conversation_flow_id:
+        raise CompatError(422, "response_engine.conversation_flow_id is required")
+    flow_uuid = await _validate_flow_id(db, engine.conversation_flow_id)
+    cartesia = voice_map.resolve_voice_id(body.voice_id)
+
+    config = DEFAULT_AGENT_CONFIG.model_dump()
+    _apply_voice_overlay(config, cartesia_voice_id=cartesia)
+    _store_flow_engine(config, flow_uuid=flow_uuid, version=engine.version)
+    _merge_extras(config, "agent", body.model_dump())
+    _validate_config(config)
+
+    profile = await agent_profiles_repo.create_profile(
+        db, name=_provisional_agent_name(), description=None, actor_email=_ACTOR
+    )
+    secret: str | None = None
+    if body.webhook_url is not None:
+        secret = await _register_webhook(
+            db, settings, profile.id, body.webhook_url, body.webhook_events
+        )
+    updated = await agent_profiles_repo.update_draft(
+        db, profile.id, config=config, description=None, actor_email=_ACTOR
+    )
+    if updated is None:  # pragma: no cover - just created above
+        raise CompatError(404, "agent not found")
+    updated.channel = "voice"
+    if body.agent_name:
+        updated.name = await _unique_name(db, body.agent_name, exclude_id=updated.id)
+    await _publish_and_commit(db, profile.id, note="compat create-agent (conversation-flow)")
+    await db.refresh(updated)
+    return updated, secret
+
+
 async def bind_agent(
     db: AsyncSession, settings: Settings, body: CreateAgentRequest
 ) -> tuple[AgentProfile, str | None]:
     """create-agent: bind the agent half onto the profile its ``response_engine.llm_id``
-    points at, then publish (immediately live). Returns (profile, one-time webhook secret)."""
-    llm_id = body.response_engine.llm_id
+    points at, then publish (immediately live). Returns (profile, one-time webhook secret).
+    A ``conversation-flow`` engine takes the fresh-profile path instead (Phase 6c)."""
+    engine = body.response_engine
+    if engine.type == "conversation-flow":
+        return await _create_flow_agent(db, settings, body)
+    if engine.type != "retell-llm":
+        raise CompatError(422, "unsupported response_engine type")
+    llm_id = engine.llm_id
     if not llm_id:
         raise CompatError(422, "response_engine.llm_id is required")
     profile = await _load_active(db, ids.decode_llm_id(llm_id), kind="response engine")

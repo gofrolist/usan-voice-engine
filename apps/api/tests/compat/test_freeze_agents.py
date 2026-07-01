@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.compat.conformance import assert_conforms
+from tests.compat.conformance import assert_conforms, assert_sdk_roundtrip
 from tests.compat.conftest import RETELL_VOICE
 
 pytestmark = pytest.mark.frozen
@@ -143,3 +143,31 @@ def test_publish_agent_version_response_conforms_to_oracle(compat_client, compat
     )
     assert r.status_code == 200, r.text
     assert_conforms(r.json(), "AgentResponse")
+
+
+def test_conversation_flow_agent_conforms_to_oracle(compat_client, compat_headers):
+    """A conversation-flow-bound agent response conforms to the oracle + retell-sdk."""
+    flow = compat_client.post(
+        "/create-conversation-flow",
+        json={
+            "start_speaker": "agent",
+            "model_choice": {"type": "cascading", "model": "gpt-4.1"},
+            "nodes": [],
+        },
+        headers=compat_headers,
+    ).json()
+    r = compat_client.post(
+        "/create-agent",
+        json={
+            "response_engine": {
+                "type": "conversation-flow",
+                "conversation_flow_id": flow["conversation_flow_id"],
+            },
+            "voice_id": RETELL_VOICE,
+            "agent_name": "Flow Bot",
+        },
+        headers=compat_headers,
+    )
+    assert r.status_code == 201, r.text
+    assert_conforms(r.json(), "AgentResponse")
+    assert_sdk_roundtrip(r.json(), "retell.types:AgentResponse")
