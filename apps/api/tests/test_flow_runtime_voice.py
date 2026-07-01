@@ -5,6 +5,7 @@ import time
 import uuid
 
 import jwt
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -14,10 +15,40 @@ from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, Contact, ConversationFlow
 from usan_api.repositories import agent_profiles as repo
 from usan_api.repositories import conversation_flows as conversation_flows_repo
-from usan_api.settings import get_settings
+from usan_api.settings import Settings, get_settings
 from usan_api.tenant_context import resolve_default_org_id, set_tenant_context
 
 _SECRET = "s" * 32
+
+
+@pytest.fixture
+def flow_voice_on(client):
+    """Override get_settings on the routed app so flow_runtime_voice_enabled=True.
+
+    The `client` fixture builds the routed FastAPI app lazily via `_routed_app()`
+    (tests/conftest.py), which is cached at module scope and constructed the FIRST
+    time any test in this worker process calls it -- `create_app()` reads
+    `get_settings()` (an `lru_cache`d singleton) at that point, with the flag env var
+    still unset. Because the app object (and therefore that cached Settings instance
+    handed to `Depends(get_settings)`) is reused across tests, a later
+    `monkeypatch.setenv("FLOW_RUNTIME_VOICE_ENABLED", "true")` in a test body never
+    reaches the request handler: `get_settings()` keeps returning the stale cached
+    instance until `.cache_clear()` runs, and nothing here calls that.
+
+    This mirrors the Phase 6-runtime-chat precedent (tests/compat/conftest.py's
+    `chat_analysis_on` / `gcp_project_set`): install a FastAPI `dependency_overrides`
+    entry on the actual app object the `client` TestClient wraps, so
+    `Depends(get_settings)` observes the flag directly, independent of the
+    `lru_cache` state.
+    """
+    base = get_settings()
+
+    def _override() -> Settings:
+        return base.model_copy(update={"flow_runtime_voice_enabled": True})
+
+    client.app.dependency_overrides[get_settings] = _override
+    yield
+    client.app.dependency_overrides.pop(get_settings, None)
 
 
 def _worker_token() -> str:
@@ -141,8 +172,7 @@ def test_flag_off_returns_unbound(client, async_database_url, monkeypatch) -> No
     assert resp.json()["bound"] is False
 
 
-def test_bound_enters_start_node(client, async_database_url, monkeypatch) -> None:
-    monkeypatch.setenv("FLOW_RUNTIME_VOICE_ENABLED", "true")
+def test_bound_enters_start_node(client, async_database_url, flow_voice_on) -> None:
     seeded = _run(_seed(async_database_url, flow_config=_two_node_flow(), bind=True))
     resp = client.post(
         "/v1/runtime/flow-advance",
@@ -157,8 +187,7 @@ def test_bound_enters_start_node(client, async_database_url, monkeypatch) -> Non
     assert body["is_end"] is False
 
 
-def test_always_edge_advances_to_end(client, async_database_url, monkeypatch) -> None:
-    monkeypatch.setenv("FLOW_RUNTIME_VOICE_ENABLED", "true")
+def test_always_edge_advances_to_end(client, async_database_url, flow_voice_on) -> None:
     seeded = _run(_seed(async_database_url, flow_config=_two_node_flow(), bind=True))
     resp = client.post(
         "/v1/runtime/flow-advance",
@@ -175,8 +204,7 @@ def test_always_edge_advances_to_end(client, async_database_url, monkeypatch) ->
     assert body["is_end"] is True
 
 
-def test_stale_cursor_reenters_start(client, async_database_url, monkeypatch) -> None:
-    monkeypatch.setenv("FLOW_RUNTIME_VOICE_ENABLED", "true")
+def test_stale_cursor_reenters_start(client, async_database_url, flow_voice_on) -> None:
     seeded = _run(_seed(async_database_url, flow_config=_two_node_flow(), bind=True))
     resp = client.post(
         "/v1/runtime/flow-advance",
