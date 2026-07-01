@@ -119,7 +119,10 @@ def _equation_condition_true(cond: Mapping[str, Any], values: Mapping[str, str])
     return all(results) if cond.get("operator") == "&&" else any(results)
 
 
-def _contents(history: Sequence[Any]) -> list[dict[str, Any]]:
+def history_to_contents(history: Sequence[Any]) -> list[dict[str, Any]]:
+    """Map chat messages to the genai `contents` shape: "agent" turns become the model role,
+    every other role ("user"/"sms") becomes user. Shared by the flow runtime and the
+    single-prompt path so the two can never diverge on how turns reach Vertex."""
     return [
         {"role": "model" if m.role == "agent" else "user", "parts": [{"text": m.content}]}
         for m in history
@@ -161,10 +164,17 @@ async def _classify(
         temperature=0.0,
         system_instruction=system_instruction,
         tools=[],
-        contents=_contents(history),
+        contents=history_to_contents(history),
         settings=settings,
     )
-    match = _INT_RE.search(turn.text or "")
+    # The classifier is instructed to reply with ONLY the index or "none". Parse conservatively:
+    # a leading "none" (incl. "None of the ... apply") is the negative case, and the index must be
+    # anchored at the start — a stray digit buried in prose ("None of the 3 apply") must NOT be
+    # mistaken for a chosen index. A non-conforming reply yields None -> the caller falls to Else.
+    text = (turn.text or "").strip()
+    if text[:4].lower() == "none":
+        return None
+    match = _INT_RE.match(text)
     return int(match.group()) if match else None
 
 
@@ -176,14 +186,18 @@ async def evaluate_transition(
     model: str,
     settings: Settings,
 ) -> str | None:
-    """Pick the next destination_node_id: Always > satisfied equation > LLM-classified prompt
-    edge > Else. Returns None when nothing matches (caller remains on the current node)."""
+    """Pick the next destination_node_id: satisfied equation > Always > LLM-classified prompt
+    edge > Else. Returns None when nothing matches (caller remains on the current node).
+
+    Equation edges are evaluated BEFORE Always: an equation is an explicit condition, whereas an
+    Always edge is an unconditional catch-all, so a satisfied condition must win over the
+    fallback even when the Always edge appears first in the array."""
     edges = [e for e in (node.get("edges") or []) if isinstance(e, dict)]
     for edge in edges:
-        if _is_prompt(edge, prompt=_ALWAYS):
+        if _cond(edge).get("type") == "equation" and _equation_condition_true(_cond(edge), values):
             return edge.get("destination_node_id")
     for edge in edges:
-        if _cond(edge).get("type") == "equation" and _equation_condition_true(_cond(edge), values):
+        if _is_prompt(edge, prompt=_ALWAYS):
             return edge.get("destination_node_id")
     prompt_edges = [
         e for e in edges if _is_prompt(e) and _cond(e).get("prompt") not in (_ALWAYS, _ELSE)
@@ -218,7 +232,7 @@ async def speak(
         temperature=temperature,
         system_instruction=system_instruction,
         tools=[],
-        contents=_contents(history),
+        contents=history_to_contents(history),
         settings=settings,
     )
     return turn.text

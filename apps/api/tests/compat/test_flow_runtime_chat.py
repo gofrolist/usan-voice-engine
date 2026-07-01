@@ -163,3 +163,93 @@ def test_flag_off_ignores_flow_binding(compat_client, compat_headers, gcp_projec
     assert r.status_code == 201, r.text
     # flag off => single-prompt path => REPLY, never a NODE_* marker.
     assert _last_content(r.json()) == "reply-from-REPLY"
+
+
+# --- cursor-identity: repointing the agent to a different flow must not resume at a same-id node
+
+
+def _convo(node_id: str, marker: str, edges: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "id": node_id,
+        "type": "conversation",
+        "instruction": {"type": "prompt", "text": f"{marker} instruction"},
+        "edges": edges or [],
+    }
+
+
+def _always(dest: str) -> dict[str, Any]:
+    return {
+        "id": f"e-{dest}",
+        "transition_condition": {"type": "prompt", "prompt": "Always"},
+        "destination_node_id": dest,
+    }
+
+
+# Flow A: a_start --Always--> shared (a DEEP node). Flow B: b_start (start), plus a COLLIDING
+# node id "shared" that is a deep node. After advancing to "shared" in A then repointing to B,
+# the stale cursor "shared" must re-enter at B's start (b_start), not resume at B's "shared".
+_FLOW_A = {
+    "start_speaker": "agent",
+    "model_choice": {"type": "cascading", "model": "gemini-2.5-flash"},
+    "start_node_id": "a_start",
+    "nodes": [
+        _convo("a_start", "MARK_A_START", [_always("shared")]),
+        _convo("shared", "MARK_A_SHARED"),
+    ],
+}
+_FLOW_B = {
+    "start_speaker": "agent",
+    "model_choice": {"type": "cascading", "model": "gemini-2.5-flash"},
+    "start_node_id": "b_start",
+    "nodes": [_convo("b_start", "MARK_B_START"), _convo("shared", "MARK_B_SHARED")],
+}
+
+
+def test_repoint_to_different_flow_reenters_at_start_not_colliding_node(
+    compat_client, compat_headers, flow_runtime_on, monkeypatch
+):
+    async def _fake(**kw: Any) -> VertexTurn:
+        sysi = kw.get("system_instruction", "")
+        for mark in ("MARK_A_START", "MARK_A_SHARED", "MARK_B_START", "MARK_B_SHARED"):
+            if mark in sysi:
+                return VertexTurn(text=f"reply-from-{mark}")
+        return VertexTurn(text="reply-from-REPLY")
+
+    monkeypatch.setattr("usan_api.compat.flow_runtime.run_vertex_turn", _fake)
+    monkeypatch.setattr("usan_api.compat.chat_service.run_vertex_turn", _fake)
+
+    flow_a = _create_flow(compat_client, compat_headers, _FLOW_A)
+    flow_b = _create_flow(compat_client, compat_headers, _FLOW_B)
+    agent_id = _create_flow_agent(compat_client, compat_headers, flow_a)
+    chat_id = _start_chat(compat_client, compat_headers, agent_id)
+
+    # turn 1: enter a_start; turn 2: Always -> shared (cursor now "<flowA>:shared")
+    r1 = compat_client.post(
+        "/create-chat-completion",
+        json={"chat_id": chat_id, "content": "hi"},
+        headers=compat_headers,
+    )
+    assert _last_content(r1.json()) == "reply-from-MARK_A_START"
+    r2 = compat_client.post(
+        "/create-chat-completion",
+        json={"chat_id": chat_id, "content": "ok"},
+        headers=compat_headers,
+    )
+    assert _last_content(r2.json()) == "reply-from-MARK_A_SHARED"
+
+    # repoint the agent to flow B (Phase 6c update-agent, same profile, republished)
+    rp = compat_client.patch(
+        f"/update-agent/{agent_id}",
+        json={"response_engine": {"type": "conversation-flow", "conversation_flow_id": flow_b}},
+        headers=compat_headers,
+    )
+    assert rp.status_code == 200, rp.text
+
+    # turn 3: the stale "shared" cursor belongs to flow A, so it must NOT resolve against flow B's
+    # same-named node — the session re-enters at flow B's start (MARK_B_START), not MARK_B_SHARED.
+    r3 = compat_client.post(
+        "/create-chat-completion",
+        json={"chat_id": chat_id, "content": "still here"},
+        headers=compat_headers,
+    )
+    assert _last_content(r3.json()) == "reply-from-MARK_B_START"

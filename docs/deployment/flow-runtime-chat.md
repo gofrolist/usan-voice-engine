@@ -27,6 +27,14 @@ archived / cross-org / malformed flow binding. The runtime never breaks a live c
    BEFORE the `v*` tag (deploy never re-fetches the secret). Requires `GCP_PROJECT` (Vertex).
 2. Cut the tag. Bind an agent to a fully-supported flow and exercise a chat.
 
+**How to bind (important):** today the flow binding must be created via the VOICE
+`create-agent` / `update-agent` path (`response_engine: {type: conversation-flow, ...}`, Phase
+6c). The chat-agent API (`create-chat-agent`) still rejects a conversation-flow engine — binding
+a flow to a `channel='chat'` agent is the deferred **6c-chat** follow-up. The chat/SMS runtime
+fires whenever a chat/SMS session targets a flow-bound agent (chat session creation is not
+channel-gated, by the existing 4a/4b leniency), so bind via `create-agent` and start the chat
+against that `agent_id`. A chat agent with no flow binding silently runs the single-prompt path.
+
 ## Deferred (not honored)
 
 - The entire **voice** path (`6-runtime-voice`: the services/agent build sites + per-turn hook).

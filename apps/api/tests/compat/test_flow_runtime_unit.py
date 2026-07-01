@@ -178,6 +178,93 @@ async def test_no_edges_returns_none() -> None:
     assert dest is None
 
 
+async def test_satisfied_equation_beats_always_regardless_of_order(monkeypatch) -> None:
+    # A satisfied equation must win over an unconditional Always catch-all even when Always
+    # appears first in the array (equation = explicit condition; Always = fallback).
+    async def _boom(**_: Any) -> VertexTurn:
+        raise AssertionError("no classifier turn expected")
+
+    monkeypatch.setattr("usan_api.compat.flow_runtime.run_vertex_turn", _boom)
+    node = _convo_node(
+        "n1",
+        "hi",
+        [_prompt_edge("retry", "Always"), _equation_edge("pass", "{{score}}", ">=", "80")],
+    )
+    dest = await flow_runtime.evaluate_transition(
+        node, [], {"score": "90"}, model="m", settings=object()
+    )
+    assert dest == "pass"
+
+
+async def test_always_wins_when_equation_not_satisfied(monkeypatch) -> None:
+    async def _boom(**_: Any) -> VertexTurn:
+        raise AssertionError("no classifier turn expected")
+
+    monkeypatch.setattr("usan_api.compat.flow_runtime.run_vertex_turn", _boom)
+    node = _convo_node(
+        "n1",
+        "hi",
+        [_prompt_edge("retry", "Always"), _equation_edge("pass", "{{score}}", ">=", "80")],
+    )
+    dest = await flow_runtime.evaluate_transition(
+        node, [], {"score": "10"}, model="m", settings=object()
+    )
+    assert dest == "retry"
+
+
+async def test_classifier_none_prose_does_not_misparse_as_index(monkeypatch) -> None:
+    # The model is told to reply "none"; a verbose negative reply that happens to contain a digit
+    # ("None of the 3 conditions apply") must NOT be read as index 3 -> falls to Else, not edge 3.
+    async def _prose(**_: Any) -> VertexTurn:
+        return VertexTurn(text="None of the 3 conditions apply.")
+
+    monkeypatch.setattr("usan_api.compat.flow_runtime.run_vertex_turn", _prose)
+    node = _convo_node(
+        "n1",
+        "hi",
+        [
+            _prompt_edge("a", "wants sales"),
+            _prompt_edge("b", "wants support"),
+            _prompt_edge("c", "wants billing"),
+            _prompt_edge("z", "Else"),
+        ],
+    )
+    dest = await flow_runtime.evaluate_transition(
+        node, [_msg("user", "hmm")], {}, model="m", settings=object()
+    )
+    assert dest == "z"
+
+
+async def test_classifier_verbose_number_falls_to_else(monkeypatch) -> None:
+    # A non-conforming reply whose index is not anchored at the start ("I pick 0") is not trusted
+    # (could be misparsed) -> falls to Else rather than risk routing to a wrong-but-in-range node.
+    async def _verbose(**_: Any) -> VertexTurn:
+        return VertexTurn(text="I pick 0")
+
+    monkeypatch.setattr("usan_api.compat.flow_runtime.run_vertex_turn", _verbose)
+    node = _convo_node(
+        "n1",
+        "hi",
+        [_prompt_edge("a", "wants sales"), _prompt_edge("z", "Else")],
+    )
+    dest = await flow_runtime.evaluate_transition(
+        node, [_msg("user", "hmm")], {}, model="m", settings=object()
+    )
+    assert dest == "z"
+
+
+async def test_classifier_bare_index_still_routes(monkeypatch) -> None:
+    async def _idx(**_: Any) -> VertexTurn:
+        return VertexTurn(text="0")
+
+    monkeypatch.setattr("usan_api.compat.flow_runtime.run_vertex_turn", _idx)
+    node = _convo_node("n1", "hi", [_prompt_edge("a", "wants sales"), _prompt_edge("z", "Else")])
+    dest = await flow_runtime.evaluate_transition(
+        node, [_msg("user", "sales please")], {}, model="m", settings=object()
+    )
+    assert dest == "a"
+
+
 # ---- speak ------------------------------------------------------------------
 
 
