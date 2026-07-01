@@ -19,13 +19,15 @@ WEBHOOK_EVENTS = ("call_started", "call_ended", "call_analyzed")
 
 
 class ResponseEngine(BaseModel):
-    """``response_engine`` on an agent — the Retell-LLM (or other engine) it speaks through.
-    ``llm_id`` decodes to the SAME AgentProfile as the agent (data-model §5)."""
+    """``response_engine`` on an agent — the Retell-LLM or conversation-flow it speaks through.
+    ``llm_id`` decodes to the SAME AgentProfile as the agent (data-model §5);
+    ``conversation_flow_id`` decodes to a separate ``conversation_flows`` row (Phase 6a)."""
 
     model_config = ConfigDict(extra="allow")
 
     type: str = "retell-llm"
     llm_id: str | None = None
+    conversation_flow_id: str | None = None
     version: int | None = None
 
 
