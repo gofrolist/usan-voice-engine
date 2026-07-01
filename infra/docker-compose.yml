@@ -353,6 +353,10 @@ services:
       KB_INGESTION_BATCH_SIZE: ${KB_INGESTION_BATCH_SIZE:-10}
       KB_INGESTION_LEASE_SECONDS: ${KB_INGESTION_LEASE_SECONDS:-300}
       KB_INGESTION_MAX_ATTEMPTS: ${KB_INGESTION_MAX_ATTEMPTS:-3}
+      # Conversation-flow DAG runtime for chat/SMS (Phase 6-runtime-chat). SHIP-INERT:
+      # default OFF, so merging changes no runtime behavior until a deploy sets this
+      # AND the VM infra/.env BEFORE cutting the v* tag (deploy does not re-fetch the secret).
+      FLOW_RUNTIME_ENABLED: ${FLOW_RUNTIME_ENABLED:-false}
     # The API is stateless: no on-disk writes outside /tmp, so run the root
     # filesystem read-only and block privilege escalation. /tmp is a tmpfs for
     # any transient scratch (e.g. signed-URL staging).

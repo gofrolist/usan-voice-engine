@@ -286,6 +286,11 @@ class Settings(BaseSettings):
     # max_context_chars / kb_embedding_* (one tuning set for both channels).
     kb_retrieval_voice_enabled: bool = Field(default=False, alias="KB_RETRIEVAL_VOICE_ENABLED")
 
+    # Conversation-flow DAG runtime for chat/SMS (Phase 6-runtime-chat). When on, a chat/SMS
+    # agent bound to a RUNNABLE conversation flow executes the flow turn-by-turn instead of the
+    # single system-prompt turn; a non-runnable flow falls back to the single-prompt path.
+    flow_runtime_enabled: bool = Field(default=False, alias="FLOW_RUNTIME_ENABLED")
+
     # --- Clara Care Parity (feature 002): three new poller phases + inbound-SMS
     # verification + Spanish callback. All ship-inert: every new poller defaults OFF,
     # so merging changes NO runtime behavior until a deploy explicitly enables them

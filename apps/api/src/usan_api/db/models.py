@@ -1302,6 +1302,10 @@ class ChatSession(Base, TenantScoped):
     chat_type: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'api_chat'"))
     from_number: Mapped[str | None] = mapped_column(Text)
     to_number: Mapped[str | None] = mapped_column(Text)
+    # Phase 6-runtime-chat: the conversation-flow DAG cursor (the id of the node that produced
+    # the last agent turn). NULL = not entered / flag-off / unbound / non-runnable. Internal
+    # only — never echoed by serialize_chat.
+    flow_current_node_id: Mapped[str | None] = mapped_column(Text)
     dynamic_vars: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
     )
