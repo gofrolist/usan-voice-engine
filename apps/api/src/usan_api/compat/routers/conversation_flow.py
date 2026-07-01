@@ -80,7 +80,15 @@ async def update_conversation_flow(
     row = await flows_repo.get(db, flow_id)
     if row is None:
         raise CompatError(404, "conversation flow not found")
-    merged = {**row.config, **_provided(body)}  # top-level shallow merge
+    # Top-level shallow merge: a sent non-null field overwrites; a sent explicit null CLEARS the
+    # field (removed -> omitted from the echo, matching the oracle's omit-nulls responses); an
+    # omitted field is preserved. body.model_dump() carries the extra='allow' fields incl nulls.
+    merged = dict(row.config)
+    for _key, _value in body.model_dump().items():
+        if _value is None:
+            merged.pop(_key, None)
+        else:
+            merged[_key] = _value
     updated = await flows_repo.update(db, flow_id, config=merged, version=row.version + 1)
     if updated is None:
         raise CompatError(404, "conversation flow not found")

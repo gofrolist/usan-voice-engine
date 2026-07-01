@@ -28,9 +28,9 @@ def test_create_conforms(compat_client, compat_headers) -> None:
 
 
 def test_get_update_list_conform(compat_client, compat_headers) -> None:
-    cid = compat_client.post(
-        "/create-conversation-flow", json=_FLOW, headers=compat_headers
-    ).json()["conversation_flow_id"]
+    r = compat_client.post("/create-conversation-flow", json=_FLOW, headers=compat_headers)
+    assert r.status_code == 201, r.text
+    cid = r.json()["conversation_flow_id"]
 
     g = compat_client.get(f"/get-conversation-flow/{cid}", headers=compat_headers)
     assert g.status_code == 200

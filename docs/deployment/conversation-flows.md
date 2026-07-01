@@ -14,6 +14,9 @@ ships with the next `v*` tag and is owner-DDL (runs as the `usan` owner via the 
 path). No new env keys, no feature flag.
 
 ## Posture (documented deviations)
+- **PATCH null-clears:** on update, an explicitly-sent `null` for a field clears it (the field is
+  removed and omitted from subsequent responses, matching the oracle's omit-nulls responses); an
+  omitted field is left unchanged; a sent non-null value overwrites.
 - **Accept-and-echo:** only `start_speaker`, `model_choice`, `nodes` are presence-checked on
   create (422 if absent). Node graphs, `model_choice.model` (RetellAI's OpenAI/Anthropic/Gemini
   enum - which we do not run), and edges are stored opaquely and never validated or interpreted.

@@ -116,3 +116,39 @@ def test_update_missing_id_is_404(compat_client, compat_headers) -> None:
         f"/update-conversation-flow/{missing}", json={"global_prompt": "x"}, headers=compat_headers
     )
     assert r.status_code == 404
+
+
+def test_update_null_clears_field(compat_client, compat_headers) -> None:
+    cid = _create(compat_client, compat_headers, global_prompt="SECRET")["conversation_flow_id"]
+    u = compat_client.patch(
+        f"/update-conversation-flow/{cid}", json={"global_prompt": None}, headers=compat_headers
+    )
+    assert u.status_code == 200
+    body = u.json()
+    assert body["version"] == 1
+    assert "global_prompt" not in body  # explicit null cleared it -> omitted from the echo
+    # a subsequent GET also no longer carries it
+    g = compat_client.get(f"/get-conversation-flow/{cid}", headers=compat_headers).json()
+    assert "global_prompt" not in g
+
+
+def test_client_cannot_spoof_server_fields(compat_client, compat_headers) -> None:
+    body = _create(
+        compat_client,
+        compat_headers,
+        version=999,
+        conversation_flow_id="conversation_flow_deadbeef",
+        last_modification_timestamp=1,
+    )
+    assert body["version"] == 0  # server wins, not the client's 999
+    assert body["conversation_flow_id"].startswith("conversation_flow_")
+    assert body["conversation_flow_id"] != "conversation_flow_deadbeef"
+    cid = body["conversation_flow_id"]
+    u = compat_client.patch(
+        f"/update-conversation-flow/{cid}",
+        json={"version": 999, "global_prompt": "x"},
+        headers=compat_headers,
+    )
+    assert u.status_code == 200
+    assert u.json()["version"] == 1  # server bump, not 999
+    assert u.json()["conversation_flow_id"] == cid

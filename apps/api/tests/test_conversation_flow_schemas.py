@@ -21,6 +21,8 @@ def test_create_request_requires_three_fields() -> None:
         CreateConversationFlowRequest(model_choice=_MODEL, nodes=[])  # missing start_speaker
     with pytest.raises(ValidationError):
         CreateConversationFlowRequest(start_speaker="agent", nodes=[])  # missing model_choice
+    with pytest.raises(ValidationError):
+        CreateConversationFlowRequest(start_speaker="agent", model_choice=_MODEL)  # missing nodes
 
 
 def test_create_request_captures_extras() -> None:
