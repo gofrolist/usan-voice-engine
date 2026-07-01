@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 from typing import Any
 
@@ -263,6 +264,45 @@ async def test_classifier_bare_index_still_routes(monkeypatch) -> None:
         node, [_msg("user", "sales please")], {}, model="m", settings=object()
     )
     assert dest == "a"
+
+
+# ---- shared flow-binding helpers --------------------------------------------
+
+
+def test_bound_flow_id_decodes_conversation_flow_engine() -> None:
+    from usan_api.compat import ids
+
+    fid = uuid.uuid4()
+    raw = {
+        "compat_response_engine": {
+            "type": "conversation-flow",
+            "conversation_flow_id": ids.encode_conversation_flow_id(fid),
+        }
+    }
+    assert flow_runtime.bound_flow_id(raw) == fid
+
+
+def test_bound_flow_id_none_when_unbound_or_malformed() -> None:
+    assert flow_runtime.bound_flow_id({}) is None
+    assert flow_runtime.bound_flow_id({"compat_response_engine": {"type": "retell-llm"}}) is None
+    assert (
+        flow_runtime.bound_flow_id(
+            {"compat_response_engine": {"type": "conversation-flow", "conversation_flow_id": "bad"}}
+        )
+        is None
+    )
+
+
+def test_flow_model_prefers_flow_choice_then_fallback() -> None:
+    assert flow_runtime.flow_model({"model_choice": {"model": "gemini-x"}}, "fb") == "gemini-x"
+    assert flow_runtime.flow_model({}, "fb") == "fb"
+    assert flow_runtime.flow_model({"model_choice": {}}, "fb") == "fb"
+
+
+def test_node_instruction_text_reads_prompt() -> None:
+    node = {"id": "n1", "type": "conversation", "instruction": {"type": "prompt", "text": "Hi"}}
+    assert flow_runtime.node_instruction_text(node) == "Hi"
+    assert flow_runtime.node_instruction_text({"id": "n2", "type": "end"}) is None
 
 
 # ---- speak ------------------------------------------------------------------

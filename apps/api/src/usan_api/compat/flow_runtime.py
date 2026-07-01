@@ -11,9 +11,12 @@ services/agent import. Never logs PHI; the functions here raise only if Vertex i
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from usan_api.compat import ids
+from usan_api.compat.errors import CompatError
 from usan_api.prompt_substitution import substitute
 from usan_api.settings import Settings
 from usan_api.vertex_test import run_vertex_turn
@@ -33,12 +36,37 @@ def node_by_id(config: Mapping[str, Any], node_id: str | None) -> dict[str, Any]
     return None
 
 
-def _instruction_text(node: Mapping[str, Any]) -> str | None:
+def node_instruction_text(node: Mapping[str, Any]) -> str | None:
     instr = node.get("instruction")
     if isinstance(instr, dict):
         text = instr.get("text")
         return text if isinstance(text, str) else None
     return None
+
+
+def bound_flow_id(raw: Mapping[str, Any]) -> uuid.UUID | None:
+    """The conversation_flow uuid this published agent config is bound to (Phase 6c
+    compat_response_engine), or None if unbound / non-flow / malformed. Never raises."""
+    engine = raw.get("compat_response_engine")
+    if not isinstance(engine, dict) or engine.get("type") != "conversation-flow":
+        return None
+    token = engine.get("conversation_flow_id")
+    if not isinstance(token, str) or not token:
+        return None
+    try:
+        return ids.decode_conversation_flow_id(token)
+    except CompatError:
+        return None
+
+
+def flow_model(flow_config: Mapping[str, Any], fallback_model: str) -> str:
+    """The flow's own model governs its execution; fall back to the agent's llm model."""
+    mc = flow_config.get("model_choice")
+    if isinstance(mc, dict):
+        model = mc.get("model")
+        if isinstance(model, str) and model:
+            return model
+    return fallback_model
 
 
 def flow_is_runnable(config: Any) -> bool:
@@ -64,7 +92,7 @@ def flow_is_runnable(config: Any) -> bool:
     if not isinstance(start, str) or start not in ids_seen:
         return False
     for node in nodes:
-        if node.get("type") == "conversation" and _instruction_text(node) is None:
+        if node.get("type") == "conversation" and node_instruction_text(node) is None:
             return False
         for edge in node.get("edges") or []:
             if not isinstance(edge, dict):
@@ -224,7 +252,7 @@ async def speak(
 ) -> str:
     """Run one Vertex turn for the node: system = global_prompt + node instruction (both
     var-substituted), contents = the role-mapped history. Returns the reply text."""
-    node_instruction = substitute(_instruction_text(node) or "", values)
+    node_instruction = substitute(node_instruction_text(node) or "", values)
     global_prompt = substitute(str(flow_config.get("global_prompt") or ""), values)
     system_instruction = f"{global_prompt}\n\n{node_instruction}".strip()
     turn = await run_vertex_turn(
