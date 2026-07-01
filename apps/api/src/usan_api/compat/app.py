@@ -21,6 +21,7 @@ from usan_api.compat.routers import calls as compat_calls
 from usan_api.compat.routers import catalog as compat_catalog
 from usan_api.compat.routers import chat_agents as compat_chat_agents
 from usan_api.compat.routers import chats as compat_chats
+from usan_api.compat.routers import conversation_flow as compat_conversation_flow
 from usan_api.compat.routers import export_requests as compat_export_requests
 from usan_api.compat.routers import knowledge_bases as compat_knowledge_bases
 from usan_api.compat.routers import phone_numbers as compat_phone_numbers
@@ -64,5 +65,6 @@ def build_compat_app(settings: Settings) -> FastAPI:
     app.include_router(compat_phone_numbers.router)
     app.include_router(compat_export_requests.router)
     app.include_router(compat_knowledge_bases.router)
+    app.include_router(compat_conversation_flow.router)
     app.include_router(compat_unsupported.router)
     return app

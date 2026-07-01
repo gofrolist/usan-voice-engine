@@ -23,6 +23,7 @@ _CHAT_PREFIX = "chat_"
 _MESSAGE_PREFIX = "message_"
 _KB_PREFIX = "knowledge_base_"
 _KB_SOURCE_PREFIX = "source_"
+_CONVERSATION_FLOW_PREFIX = "conversation_flow_"
 
 
 def encode_call_id(call_id: uuid.UUID) -> str:
@@ -85,25 +86,52 @@ def encode_message_id(message_id: uuid.UUID) -> str:
     return _MESSAGE_PREFIX + message_id.hex
 
 
-def encode_phone_number_cursor(created_at: datetime, pid: uuid.UUID) -> str:
-    """Opaque self-contained cursor encoding (created_at, id) — no row lookup needed on decode."""
-    raw = f"{created_at.isoformat()}|{pid.hex}".encode()
+def encode_conversation_flow_id(flow_id: uuid.UUID) -> str:
+    return _CONVERSATION_FLOW_PREFIX + flow_id.hex
+
+
+def decode_conversation_flow_id(token: str) -> uuid.UUID:
+    return _decode_hex(token, prefix=_CONVERSATION_FLOW_PREFIX, kind="conversation_flow_id")
+
+
+def _encode_keyset_cursor(created_at: datetime, eid: uuid.UUID) -> str:
+    """Opaque (created_at, id) keyset cursor shared by the v2 list endpoints."""
+    raw = f"{created_at.isoformat()}|{eid.hex}".encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def decode_phone_number_cursor(token: str) -> tuple[datetime, uuid.UUID]:
-    """Decode a cursor token back to (created_at, id). Raises CompatError(422) on any bad input."""
+def _decode_keyset_cursor(token: str) -> tuple[datetime, uuid.UUID]:
+    """Decode a keyset cursor to (created_at, id). Raises CompatError(422) on any bad input."""
     try:
-        # Re-pad to a multiple of 4 before decoding.
         padding = 4 - len(token) % 4
         padded = token + "=" * (padding % 4)
         raw = base64.urlsafe_b64decode(padded).decode()
         ts_part, hex_part = raw.split("|", 1)
         created_at = datetime.fromisoformat(ts_part)
-        pid = uuid.UUID(hex=hex_part)
+        eid = uuid.UUID(hex=hex_part)
     except (ValueError, binascii.Error, UnicodeDecodeError) as exc:
         raise CompatError(422, "invalid pagination_key") from exc
-    return created_at, pid
+    return created_at, eid
+
+
+def encode_conversation_flow_cursor(created_at: datetime, fid: uuid.UUID) -> str:
+    """Opaque (created_at, id) keyset cursor (delegates to the shared helper)."""
+    return _encode_keyset_cursor(created_at, fid)
+
+
+def decode_conversation_flow_cursor(token: str) -> tuple[datetime, uuid.UUID]:
+    """Decode a cursor token back to (created_at, id). Raises CompatError(422) on any bad input."""
+    return _decode_keyset_cursor(token)
+
+
+def encode_phone_number_cursor(created_at: datetime, pid: uuid.UUID) -> str:
+    """Opaque self-contained cursor encoding (created_at, id) — no row lookup needed on decode."""
+    return _encode_keyset_cursor(created_at, pid)
+
+
+def decode_phone_number_cursor(token: str) -> tuple[datetime, uuid.UUID]:
+    """Decode a cursor token back to (created_at, id). Raises CompatError(422) on any bad input."""
+    return _decode_keyset_cursor(token)
 
 
 def _decode_hex(token: str, *, prefix: str, kind: str) -> uuid.UUID:

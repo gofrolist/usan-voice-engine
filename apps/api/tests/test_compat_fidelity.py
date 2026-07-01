@@ -113,7 +113,7 @@ def test_get_concurrency_shape_and_values(compat_client, compat_headers):
 @pytest.mark.parametrize(
     ("method", "path"),
     [
-        ("post", "/create-conversation-flow"),
+        ("post", "/create-conversation-flow-component"),
         ("post", "/clone-voice"),
         ("get", "/get-mcp-tools/some-agent-id"),
         ("post", "/agent-playground-completion/some-agent-id"),
@@ -139,7 +139,7 @@ def test_out_of_scope_with_path_param_returns_501(compat_client, compat_headers)
 
 def test_unsupported_still_requires_key(compat_client):
     # The app-level auth gate runs before the stub: no key → 401, not 501.
-    assert compat_client.post("/create-conversation-flow", json={}).status_code == 401
+    assert compat_client.post("/create-conversation-flow-component", json={}).status_code == 401
 
 
 # --- id consistency (SC-006) -----------------------------------------------------------
