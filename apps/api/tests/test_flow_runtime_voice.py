@@ -214,8 +214,7 @@ def test_stale_cursor_reenters_start(client, async_database_url, flow_voice_on) 
     assert resp.json()["node_id"] == "n1"
 
 
-def test_unbound_call_returns_unbound(client, async_database_url, monkeypatch) -> None:
-    monkeypatch.setenv("FLOW_RUNTIME_VOICE_ENABLED", "true")
+def test_unbound_call_returns_unbound(client, async_database_url, flow_voice_on) -> None:
     seeded = _run(_seed(async_database_url, flow_config=_two_node_flow(), bind=False))
     resp = client.post(
         "/v1/runtime/flow-advance",
@@ -225,8 +224,7 @@ def test_unbound_call_returns_unbound(client, async_database_url, monkeypatch) -
     assert resp.json()["bound"] is False
 
 
-def test_unrunnable_flow_returns_unbound(client, async_database_url, monkeypatch) -> None:
-    monkeypatch.setenv("FLOW_RUNTIME_VOICE_ENABLED", "true")
+def test_unrunnable_flow_returns_unbound(client, async_database_url, flow_voice_on) -> None:
     flow = _two_node_flow()
     flow["nodes"][0]["type"] = "function"  # unsupported node type -> not runnable
     seeded = _run(_seed(async_database_url, flow_config=flow, bind=True))
