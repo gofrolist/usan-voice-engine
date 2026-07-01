@@ -430,6 +430,24 @@ def serialize_agent_version(
     )
 
 
+def _response_engine(profile: AgentProfile) -> dict[str, Any]:
+    """Derive the oracle ``response_engine`` oneOf variant from stored state.
+
+    A flow-bound agent stores ``compat_response_engine`` (Phase 6c); absent ⇒ the
+    retell-llm self-view (``llm_id`` == this profile, data-model §5). ``version`` is
+    omitted when null (oracle omit-nulls)."""
+    stored = (profile.draft_config or {}).get("compat_response_engine")
+    if stored and stored.get("type") == "conversation-flow":
+        engine: dict[str, Any] = {
+            "type": "conversation-flow",
+            "conversation_flow_id": stored["conversation_flow_id"],
+        }
+        if stored.get("version") is not None:
+            engine["version"] = stored["version"]
+        return engine
+    return {"type": "retell-llm", "llm_id": ids.encode_llm_id(profile.id)}
+
+
 def serialize_agent(profile: AgentProfile, *, webhook_secret: str | None = None) -> AgentResponse:
     config = profile.draft_config or {}
     extras = (config.get(_EXTRAS_KEY) or {}).get("agent") or {}
@@ -439,7 +457,7 @@ def serialize_agent(profile: AgentProfile, *, webhook_secret: str | None = None)
         {
             "agent_id": ids.encode_agent_id(profile.id),
             "agent_name": profile.name,
-            "response_engine": {"type": "retell-llm", "llm_id": ids.encode_llm_id(profile.id)},
+            "response_engine": _response_engine(profile),
             "voice_id": voice_map.to_retell_voice_id(cartesia),
             **_version_fields(profile),
         }
