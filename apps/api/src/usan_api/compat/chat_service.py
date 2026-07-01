@@ -8,14 +8,16 @@ exceptions re-raise as CompatError from None; the global handler logs type(exc).
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Any
 
 from loguru import logger
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api import chat_analysis, telnyx_messaging
-from usan_api.compat import ids
+from usan_api.compat import flow_runtime, ids
 from usan_api.compat.errors import CompatError
 from usan_api.compat.kb_retrieval import RetrievedContext, retrieve_context
 from usan_api.compat.schemas.chats import (
@@ -32,11 +34,12 @@ from usan_api.compat.serialization import (
     unpack_dynamic_vars,
 )
 from usan_api.db.base import ChatStatus
-from usan_api.db.models import ChatMessage, ChatSession
+from usan_api.db.models import AgentProfileVersion, ChatMessage, ChatSession
 from usan_api.phone import to_e164
 from usan_api.prompt_substitution import build_vars, substitute
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import chats as chats_repo
+from usan_api.repositories import conversation_flows as conversation_flows_repo
 from usan_api.repositories import phone_numbers as phone_numbers_repo
 from usan_api.schemas.agent_config import AgentConfig
 from usan_api.settings import Settings
@@ -181,14 +184,128 @@ async def rerun_chat_analysis(db: AsyncSession, settings: Settings, chat_id: str
     return session
 
 
-async def _load_published_config(db: AsyncSession, profile_id: uuid.UUID) -> AgentConfig:
+async def _load_published_version(db: AsyncSession, profile_id: uuid.UUID) -> AgentProfileVersion:
     profile = await agent_profiles_repo.get_profile(db, profile_id)
     version = (
         await agent_profiles_repo.get_published_config(db, profile) if profile is not None else None
     )
     if version is None:
         raise CompatError(422, "agent is not available")
+    return version
+
+
+async def _load_published_config(db: AsyncSession, profile_id: uuid.UUID) -> AgentConfig:
+    version = await _load_published_version(db, profile_id)
     return AgentConfig.model_validate(version.config)
+
+
+def _flow_model(flow_config: dict[str, Any], cfg: AgentConfig) -> str:
+    """The flow's own model governs its execution; fall back to the agent's llm model."""
+    mc = flow_config.get("model_choice")
+    if isinstance(mc, dict):
+        model = mc.get("model")
+        if isinstance(model, str) and model:
+            return model
+    return cfg.llm.model
+
+
+def _bound_flow_id(raw: Mapping[str, Any]) -> uuid.UUID | None:
+    """The conversation_flow uuid this published agent config is bound to (Phase 6c
+    compat_response_engine), or None if unbound / non-flow / malformed. Never raises."""
+    engine = raw.get("compat_response_engine")
+    if not isinstance(engine, dict) or engine.get("type") != "conversation-flow":
+        return None
+    token = engine.get("conversation_flow_id")
+    if not isinstance(token, str) or not token:
+        return None
+    try:
+        return ids.decode_conversation_flow_id(token)
+    except CompatError:
+        return None
+
+
+def _cursor_for_flow(stored: str | None, flow_uuid: uuid.UUID) -> str | None:
+    """The node id from a stored ``"<flow_uuid>:<node_id>"`` cursor, but ONLY if it belongs to
+    the currently-bound flow; otherwise None (re-enter at start). This guards against an agent
+    being repointed to a DIFFERENT flow mid-session (a Phase 6c update-agent op): a stale cursor
+    from the old flow must not resolve against a same-named node in the new one."""
+    if not stored:
+        return None
+    prefix, sep, node_id = stored.partition(":")
+    if not sep or prefix != str(flow_uuid):
+        return None
+    return node_id or None
+
+
+async def _advance_flow(
+    flow_config: Mapping[str, Any],
+    cursor: str | None,
+    history: list[ChatMessage],
+    values: Mapping[str, str],
+    *,
+    model: str,
+    settings: Settings,
+) -> dict[str, Any] | None:
+    """Resolve the node to speak this turn: enter at start_node_id on the first turn (or when the
+    cursor no longer resolves in the current flow), else evaluate the current node's edges and
+    advance to the destination (or remain on the current node when nothing matches)."""
+    start_id = flow_config.get("start_node_id")
+    if cursor is None:
+        return flow_runtime.node_by_id(flow_config, start_id)
+    current = flow_runtime.node_by_id(flow_config, cursor)
+    if current is None:
+        return flow_runtime.node_by_id(flow_config, start_id)
+    dest = await flow_runtime.evaluate_transition(
+        current, history, values, model=model, settings=settings
+    )
+    return flow_runtime.node_by_id(flow_config, dest) if dest else current
+
+
+async def _try_flow_reply(
+    db: AsyncSession, settings: Settings, session: ChatSession, raw: Mapping[str, Any]
+) -> str | None:
+    """Execute ONE conversation-flow turn when the agent is bound to a RUNNABLE flow; return the
+    reply text, or None to signal whole-session fallback to the single-prompt path. Never raises
+    on a bad binding (unbound / missing / archived / cross-org / malformed / non-runnable all
+    return None) — a live chat must not break because a flow changed. ``raw`` is the already-loaded
+    published version.config (AgentConfig(extra="ignore") would strip compat_response_engine)."""
+    flow_uuid = _bound_flow_id(raw)
+    if flow_uuid is None:
+        return None
+    flow_row = await conversation_flows_repo.get(db, flow_uuid)
+    if flow_row is None:
+        return None
+    flow_config = flow_row.config or {}
+    if not flow_runtime.flow_is_runnable(flow_config):
+        return None
+
+    cfg = AgentConfig.model_validate(raw)
+    bare_vars, _ = unpack_dynamic_vars(session.dynamic_vars)
+    flow_defaults = flow_config.get("default_dynamic_variables")
+    merged_custom: dict[str, object] = {}
+    if isinstance(flow_defaults, dict):
+        merged_custom.update(flow_defaults)
+    merged_custom.update(bare_vars)
+    values = build_vars({}, merged_custom, timezone="", now=datetime.now(UTC))
+    history = await chats_repo.list_messages(db, session.id)
+    model = _flow_model(flow_config, cfg)
+
+    cursor = _cursor_for_flow(session.flow_current_node_id, flow_uuid)
+    node = await _advance_flow(flow_config, cursor, history, values, model=model, settings=settings)
+    if node is None:
+        return None  # defensive: start node unresolved despite the runnable guard -> fallback
+
+    reply = await flow_runtime.speak(
+        flow_config,
+        node,
+        values,
+        history,
+        model=model,
+        temperature=cfg.llm.temperature,
+        settings=settings,
+    )
+    session.flow_current_node_id = f"{flow_uuid}:{node.get('id')}"
+    return reply
 
 
 async def generate_agent_reply(db: AsyncSession, settings: Settings, session: ChatSession) -> str:
@@ -197,7 +314,13 @@ async def generate_agent_reply(db: AsyncSession, settings: Settings, session: Ch
     must have already persisted+flushed the latest user/sms turn so it appears in history.
     Raises on Vertex failure (the caller owns rollback). The role map sends "agent" turns as
     genai "model" and every other role ("user"/"sms") as "user"."""
-    cfg = await _load_published_config(db, session.agent_profile_id)
+    version = await _load_published_version(db, session.agent_profile_id)
+    raw = version.config or {}
+    if settings.flow_runtime_enabled:
+        flow_reply = await _try_flow_reply(db, settings, session, raw)
+        if flow_reply is not None:
+            return flow_reply
+    cfg = AgentConfig.model_validate(raw)
     bare_vars, _ = unpack_dynamic_vars(session.dynamic_vars)
     values = build_vars({}, bare_vars, timezone="", now=datetime.now(UTC))
     system_instruction = substitute(cfg.prompts.system_prompt, values)
@@ -231,10 +354,7 @@ async def generate_agent_reply(db: AsyncSession, settings: Settings, session: Ch
                 + "\n\nUse the above context to answer when relevant."
             )
 
-    contents = [
-        {"role": "model" if m.role == "agent" else "user", "parts": [{"text": m.content}]}
-        for m in history
-    ]
+    contents = flow_runtime.history_to_contents(history)
     turn = await run_vertex_turn(
         model=cfg.llm.model,
         temperature=cfg.llm.temperature,
