@@ -179,6 +179,22 @@ async def test_no_edges_returns_none() -> None:
     assert dest is None
 
 
+async def test_end_node_never_routes_even_with_always_edge(monkeypatch) -> None:
+    # A terminal end node must never route onward, even if authored with a stray Always edge.
+    async def _boom(**_: Any) -> VertexTurn:
+        raise AssertionError("classifier must not run for a terminal end node")
+
+    monkeypatch.setattr("usan_api.compat.flow_runtime.run_vertex_turn", _boom)
+    node = {
+        "id": "n2",
+        "type": "end",
+        "instruction": {"type": "prompt", "text": "bye"},
+        "edges": [_prompt_edge("n3", "Always")],
+    }
+    dest = await flow_runtime.evaluate_transition(node, [], {}, model="m", settings=object())
+    assert dest is None
+
+
 async def test_satisfied_equation_beats_always_regardless_of_order(monkeypatch) -> None:
     # A satisfied equation must win over an unconditional Always catch-all even when Always
     # appears first in the array (equation = explicit condition; Always = fallback).

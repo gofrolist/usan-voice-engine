@@ -73,6 +73,4 @@ async def flow_advance(
     runnable flow (the agent then takes the single-prompt path). Raises only if Vertex raises."""
     if not settings.flow_runtime_voice_enabled:
         return FlowAdvanceResponse(bound=False)
-    return await flow_runtime_voice.advance(
-        db, settings, body.call_id, body.current_node_id, body.turns
-    )
+    return await flow_runtime_voice.advance(db, settings, body.call_id, body.cursor, body.turns)

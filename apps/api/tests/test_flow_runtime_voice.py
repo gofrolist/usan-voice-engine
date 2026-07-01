@@ -105,6 +105,7 @@ async def _seed(async_url: str, *, flow_config: dict, bind: bool, same_org: bool
     """
     engine = create_async_engine(async_url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
+    flow_id: str | None = None
     try:
         async with factory() as db:
             profile = await repo.create_profile(
@@ -128,6 +129,7 @@ async def _seed(async_url: str, *, flow_config: dict, bind: bool, same_org: bool
                     db.add(flow)
                     await db.flush()
                     await db.refresh(flow)
+                flow_id = str(flow.id)
                 cfg["compat_response_engine"] = {
                     "type": "conversation-flow",
                     "conversation_flow_id": ids.encode_conversation_flow_id(flow.id),
@@ -151,7 +153,7 @@ async def _seed(async_url: str, *, flow_config: dict, bind: bool, same_org: bool
             await db.flush()
             call_id = str(call.id)
             await db.commit()
-            return {"call_id": call_id}
+            return {"call_id": call_id, "flow_id": flow_id}
     finally:
         await engine.dispose()
 
@@ -165,7 +167,7 @@ def test_flag_off_returns_unbound(client, async_database_url, monkeypatch) -> No
     seeded = _run(_seed(async_database_url, flow_config=_two_node_flow(), bind=True))
     resp = client.post(
         "/v1/runtime/flow-advance",
-        json={"call_id": seeded["call_id"], "current_node_id": None, "turns": []},
+        json={"call_id": seeded["call_id"], "cursor": None, "turns": []},
         headers=_wauth(),
     )
     assert resp.status_code == 200
@@ -176,12 +178,14 @@ def test_bound_enters_start_node(client, async_database_url, flow_voice_on) -> N
     seeded = _run(_seed(async_database_url, flow_config=_two_node_flow(), bind=True))
     resp = client.post(
         "/v1/runtime/flow-advance",
-        json={"call_id": seeded["call_id"], "current_node_id": None, "turns": []},
+        json={"call_id": seeded["call_id"], "cursor": None, "turns": []},
         headers=_wauth(),
     )
     body = resp.json()
     assert body["bound"] is True
     assert body["node_id"] == "n1"
+    # cursor is the opaque, flow-qualified token the agent must round-trip next turn.
+    assert body["cursor"] == f"{seeded['flow_id']}:n1"
     assert "Greet the caller." in body["instruction"]
     assert "You are Ann's assistant." in body["instruction"]
     assert body["is_end"] is False
@@ -193,7 +197,7 @@ def test_always_edge_advances_to_end(client, async_database_url, flow_voice_on) 
         "/v1/runtime/flow-advance",
         json={
             "call_id": seeded["call_id"],
-            "current_node_id": "n1",
+            "cursor": f"{seeded['flow_id']}:n1",
             "turns": [{"role": "user", "content": "ok bye"}],
         },
         headers=_wauth(),
@@ -201,6 +205,7 @@ def test_always_edge_advances_to_end(client, async_database_url, flow_voice_on) 
     body = resp.json()
     assert body["bound"] is True
     assert body["node_id"] == "n2"
+    assert body["cursor"] == f"{seeded['flow_id']}:n2"
     assert body["is_end"] is True
 
 
@@ -208,17 +213,41 @@ def test_stale_cursor_reenters_start(client, async_database_url, flow_voice_on) 
     seeded = _run(_seed(async_database_url, flow_config=_two_node_flow(), bind=True))
     resp = client.post(
         "/v1/runtime/flow-advance",
-        json={"call_id": seeded["call_id"], "current_node_id": "ghost", "turns": []},
+        json={"call_id": seeded["call_id"], "cursor": f"{seeded['flow_id']}:ghost", "turns": []},
         headers=_wauth(),
     )
-    assert resp.json()["node_id"] == "n1"
+    body = resp.json()
+    assert body["node_id"] == "n1"
+    assert body["cursor"] == f"{seeded['flow_id']}:n1"
+
+
+def test_repoint_to_different_flow_reenters_start_not_colliding_node(
+    client, async_database_url, flow_voice_on
+) -> None:
+    # A cursor carrying a DIFFERENT flow uuid than the currently-bound flow, but a node id that
+    # also exists in the current flow, must NOT resolve against the colliding node — it must
+    # re-enter start_node_id. This guards against a repoint (Phase 6c update-agent) leaving a
+    # stale same-named-node cursor from the old flow.
+    seeded = _run(_seed(async_database_url, flow_config=_two_node_flow(), bind=True))
+    other_flow_uuid = uuid.uuid4()
+    stale_cursor = f"{other_flow_uuid}:n2"  # "n2" collides with a real node in the bound flow
+    resp = client.post(
+        "/v1/runtime/flow-advance",
+        json={"call_id": seeded["call_id"], "cursor": stale_cursor, "turns": []},
+        headers=_wauth(),
+    )
+    body = resp.json()
+    assert body["bound"] is True
+    assert body["node_id"] == "n1"
+    assert body["cursor"] == f"{seeded['flow_id']}:n1"
+    assert body["is_end"] is False
 
 
 def test_unbound_call_returns_unbound(client, async_database_url, flow_voice_on) -> None:
     seeded = _run(_seed(async_database_url, flow_config=_two_node_flow(), bind=False))
     resp = client.post(
         "/v1/runtime/flow-advance",
-        json={"call_id": seeded["call_id"], "current_node_id": None, "turns": []},
+        json={"call_id": seeded["call_id"], "cursor": None, "turns": []},
         headers=_wauth(),
     )
     assert resp.json()["bound"] is False
@@ -230,7 +259,7 @@ def test_unrunnable_flow_returns_unbound(client, async_database_url, flow_voice_
     seeded = _run(_seed(async_database_url, flow_config=flow, bind=True))
     resp = client.post(
         "/v1/runtime/flow-advance",
-        json={"call_id": seeded["call_id"], "current_node_id": None, "turns": []},
+        json={"call_id": seeded["call_id"], "cursor": None, "turns": []},
         headers=_wauth(),
     )
     assert resp.json()["bound"] is False
@@ -278,7 +307,7 @@ def test_missing_call_returns_unbound(client, async_database_url, monkeypatch) -
     monkeypatch.setenv("FLOW_RUNTIME_VOICE_ENABLED", "true")
     resp = client.post(
         "/v1/runtime/flow-advance",
-        json={"call_id": str(uuid.uuid4()), "current_node_id": None, "turns": []},
+        json={"call_id": str(uuid.uuid4()), "cursor": None, "turns": []},
         headers=_wauth(),
     )
     assert resp.json()["bound"] is False
@@ -287,6 +316,6 @@ def test_missing_call_returns_unbound(client, async_database_url, monkeypatch) -
 def test_requires_worker_token(client, async_database_url) -> None:
     resp = client.post(
         "/v1/runtime/flow-advance",
-        json={"call_id": str(uuid.uuid4()), "current_node_id": None, "turns": []},
+        json={"call_id": str(uuid.uuid4()), "cursor": None, "turns": []},
     )
     assert resp.status_code == 401
