@@ -1,15 +1,28 @@
-"""Voice-RAG agent (Phase 5c).
+"""Voice-RAG + flow-steering agent (Phase 5c, extended Phase 6-runtime-voice).
 
-A thin Agent subclass that, on each completed user turn, fetches knowledge-base context
-from the API (server re-derives org + kb_ids — we send only call_id + query) and injects it
-into the turn's chat context before the LLM responds. Ephemeral: the context is added to the
-turn context for this generation only, not persisted into running history.
+A thin Agent subclass that hooks ``on_user_turn_completed`` to do two independent things,
+each behind its own settings flag:
 
-Everything is gated and exception-guarded: an exception raised in on_user_turn_completed
-would ABORT the turn, so a retrieval failure must never escape this method.
+1. KB context injection (Phase 5c): fetches knowledge-base context from the API (server
+   re-derives org + kb_ids — we send only call_id + query) and injects it into the turn's
+   chat context before the LLM responds. Ephemeral: the context is added to the turn
+   context for this generation only, not persisted into running history. Gated by
+   ``settings.kb_retrieval_voice_enabled``.
 
-The enabled flag is derived from ``settings.kb_retrieval_voice_enabled`` — pass ``settings``
-to control it; there is no separate ``enabled`` constructor parameter.
+2. Conversation-flow steering (Phase 6-runtime-voice): on each completed user turn, calls
+   the stateless flow-advance endpoint with the agent-held cursor (current node id) and a
+   recent turn window, then applies the returned instruction via ``update_instructions``
+   and advances the cursor. Once an advance definitively reports the call is not
+   flow-bound, the agent latches off for the rest of the call (no more per-turn calls on
+   the common non-flow path); a transient failure does not latch. Gated by
+   ``settings.flow_runtime_voice_enabled``.
+
+Both hooks are independently exception-guarded: an exception raised in
+on_user_turn_completed would ABORT the turn, so a failure in either hook must never
+escape that method.
+
+Both enabled flags are derived from the ``settings`` constructor parameter — pass
+``settings`` to control them; there are no separate ``enabled`` constructor parameters.
 """
 
 from __future__ import annotations
