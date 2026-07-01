@@ -436,11 +436,15 @@ async def get_published_config(
 
 async def _resolved_from_profile(
     db: AsyncSession, profile: AgentProfile | None
-) -> ResolvedAgentConfig | None:
-    """Resolve a single profile to a published, valid config — or None to fall through.
+) -> tuple[AgentProfile, AgentProfileVersion, AgentConfig] | None:
+    """Resolve a single profile to a published, valid (profile, version, config) triple — or
+    None to fall through to the next precedence tier.
 
     Returns None (so the caller tries the next precedence tier) when the profile is
-    missing, archived, unpublished, or its stored JSON fails validation. Never raises.
+    missing, archived, not a voice profile, unpublished, or its stored JSON fails
+    validation. Never raises. Returning the raw ``version`` row (not just the parsed
+    config) lets :func:`resolve_published_version` reuse this exact walk without a
+    second profile/version load.
     """
     if profile is None or profile.status != ProfileStatus.ACTIVE or profile.channel != "voice":
         return None
@@ -460,9 +464,33 @@ async def _resolved_from_profile(
             version=version.version,
         ).warning("Published agent config failed validation; falling through to next tier")
         return None
-    return ResolvedAgentConfig(
-        source="resolved", profile_id=profile.id, version=version.version, config=config
-    )
+    return profile, version, config
+
+
+async def _resolve_winning_version(
+    db: AsyncSession,
+    *,
+    profile_override: uuid.UUID | None,
+    contact_profile_id: uuid.UUID | None,
+    direction: Literal["inbound", "outbound"],
+) -> tuple[AgentProfile, AgentProfileVersion, AgentConfig] | None:
+    """The single precedence walk shared by :func:`resolve_agent_config` and
+    :func:`resolve_published_version`: profile_override -> contact_profile_id -> direction
+    default (:func:`get_default_profile`). Each candidate is resolved via
+    :func:`_resolved_from_profile` (ACTIVE, voice, published, valid config); a candidate that
+    fails any of those checks falls through to the next tier. Returns None when nothing
+    resolves. Factoring the walk here (instead of in each caller) means the "pick a profile"
+    logic exists in exactly one place.
+    """
+    for candidate_id in (profile_override, contact_profile_id):
+        if candidate_id is None:
+            continue
+        profile = await get_profile(db, candidate_id)
+        resolved = await _resolved_from_profile(db, profile)
+        if resolved is not None:
+            return resolved
+    default_profile = await get_default_profile(db, direction)
+    return await _resolved_from_profile(db, default_profile)
 
 
 async def resolve_agent_config(
@@ -478,15 +506,42 @@ async def resolve_agent_config(
     walk falls through. Returns None when nothing resolves (the router then returns
     DEFAULT_AGENT_CONFIG).
     """
-    for candidate_id in (profile_override, contact_profile_id):
-        if candidate_id is None:
-            continue
-        profile = await get_profile(db, candidate_id)
-        resolved = await _resolved_from_profile(db, profile)
-        if resolved is not None:
-            return resolved
-    default_profile = await get_default_profile(db, direction)
-    return await _resolved_from_profile(db, default_profile)
+    winner = await _resolve_winning_version(
+        db,
+        profile_override=profile_override,
+        contact_profile_id=contact_profile_id,
+        direction=direction,
+    )
+    if winner is None:
+        return None
+    profile, version, config = winner
+    return ResolvedAgentConfig(
+        source="resolved", profile_id=profile.id, version=version.version, config=config
+    )
+
+
+async def resolve_published_version(
+    db: AsyncSession,
+    *,
+    profile_override: uuid.UUID | None,
+    contact_profile_id: uuid.UUID | None,
+    direction: Literal["inbound", "outbound"],
+) -> AgentProfileVersion | None:
+    """The published AgentProfileVersion the SAME precedence walk as :func:`resolve_agent_config`
+    selects (profile_override -> contact_profile_id -> direction default), WITHOUT parsing to
+    AgentConfig — so callers that need the RAW ``version.config`` (e.g. flow_runtime_voice's
+    compat_response_engine binding, which AgentConfig(extra="ignore") would strip) don't have to
+    re-fetch profile + published version a second time. Delegates to the same private
+    :func:`_resolve_winning_version` walk resolve_agent_config uses, so the two can never select
+    different winners.
+    """
+    winner = await _resolve_winning_version(
+        db,
+        profile_override=profile_override,
+        contact_profile_id=contact_profile_id,
+        direction=direction,
+    )
+    return winner[1] if winner is not None else None
 
 
 @dataclass(frozen=True)

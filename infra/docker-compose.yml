@@ -357,6 +357,9 @@ services:
       # default OFF, so merging changes no runtime behavior until a deploy sets this
       # AND the VM infra/.env BEFORE cutting the v* tag (deploy does not re-fetch the secret).
       FLOW_RUNTIME_ENABLED: ${FLOW_RUNTIME_ENABLED:-false}
+      # Conversation-flow DAG runtime for VOICE calls (Phase 6-runtime-voice). SHIP-INERT:
+      # default OFF; the classifier runs api-side (worker-token-gated /v1/runtime/flow-advance).
+      FLOW_RUNTIME_VOICE_ENABLED: ${FLOW_RUNTIME_VOICE_ENABLED:-false}
     # The API is stateless: no on-disk writes outside /tmp, so run the root
     # filesystem read-only and block privilege escalation. /tmp is a tmpfs for
     # any transient scratch (e.g. signed-URL staging).
@@ -406,6 +409,9 @@ services:
       API_BASE_URL: ${API_BASE_URL}
       # Recording (Plan 4b): blank disables egress; set to the recordings bucket.
       GCS_BUCKET: ${GCS_BUCKET:-}
+      # Conversation-flow DAG runtime for VOICE calls (Phase 6-runtime-voice). SHIP-INERT:
+      # default OFF; gates whether the agent steers via /v1/runtime/flow-advance calls.
+      FLOW_RUNTIME_VOICE_ENABLED: ${FLOW_RUNTIME_VOICE_ENABLED:-false}
     # Block privilege escalation + drop all caps (the worker binds no privileged
     # ports). read_only is intentionally NOT set: the agent needs writable
     # model/turn-detector caches and tmp scratch at runtime.

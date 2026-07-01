@@ -199,44 +199,6 @@ async def _load_published_config(db: AsyncSession, profile_id: uuid.UUID) -> Age
     return AgentConfig.model_validate(version.config)
 
 
-def _flow_model(flow_config: dict[str, Any], cfg: AgentConfig) -> str:
-    """The flow's own model governs its execution; fall back to the agent's llm model."""
-    mc = flow_config.get("model_choice")
-    if isinstance(mc, dict):
-        model = mc.get("model")
-        if isinstance(model, str) and model:
-            return model
-    return cfg.llm.model
-
-
-def _bound_flow_id(raw: Mapping[str, Any]) -> uuid.UUID | None:
-    """The conversation_flow uuid this published agent config is bound to (Phase 6c
-    compat_response_engine), or None if unbound / non-flow / malformed. Never raises."""
-    engine = raw.get("compat_response_engine")
-    if not isinstance(engine, dict) or engine.get("type") != "conversation-flow":
-        return None
-    token = engine.get("conversation_flow_id")
-    if not isinstance(token, str) or not token:
-        return None
-    try:
-        return ids.decode_conversation_flow_id(token)
-    except CompatError:
-        return None
-
-
-def _cursor_for_flow(stored: str | None, flow_uuid: uuid.UUID) -> str | None:
-    """The node id from a stored ``"<flow_uuid>:<node_id>"`` cursor, but ONLY if it belongs to
-    the currently-bound flow; otherwise None (re-enter at start). This guards against an agent
-    being repointed to a DIFFERENT flow mid-session (a Phase 6c update-agent op): a stale cursor
-    from the old flow must not resolve against a same-named node in the new one."""
-    if not stored:
-        return None
-    prefix, sep, node_id = stored.partition(":")
-    if not sep or prefix != str(flow_uuid):
-        return None
-    return node_id or None
-
-
 async def _advance_flow(
     flow_config: Mapping[str, Any],
     cursor: str | None,
@@ -269,7 +231,7 @@ async def _try_flow_reply(
     on a bad binding (unbound / missing / archived / cross-org / malformed / non-runnable all
     return None) — a live chat must not break because a flow changed. ``raw`` is the already-loaded
     published version.config (AgentConfig(extra="ignore") would strip compat_response_engine)."""
-    flow_uuid = _bound_flow_id(raw)
+    flow_uuid = flow_runtime.bound_flow_id(raw)
     if flow_uuid is None:
         return None
     flow_row = await conversation_flows_repo.get(db, flow_uuid)
@@ -281,16 +243,11 @@ async def _try_flow_reply(
 
     cfg = AgentConfig.model_validate(raw)
     bare_vars, _ = unpack_dynamic_vars(session.dynamic_vars)
-    flow_defaults = flow_config.get("default_dynamic_variables")
-    merged_custom: dict[str, object] = {}
-    if isinstance(flow_defaults, dict):
-        merged_custom.update(flow_defaults)
-    merged_custom.update(bare_vars)
-    values = build_vars({}, merged_custom, timezone="", now=datetime.now(UTC))
+    values = flow_runtime.merge_flow_values(flow_config, bare_vars)
     history = await chats_repo.list_messages(db, session.id)
-    model = _flow_model(flow_config, cfg)
+    model = flow_runtime.flow_model(flow_config, cfg.llm.model)
 
-    cursor = _cursor_for_flow(session.flow_current_node_id, flow_uuid)
+    cursor = flow_runtime.cursor_for_flow(session.flow_current_node_id, flow_uuid)
     node = await _advance_flow(flow_config, cursor, history, values, model=model, settings=settings)
     if node is None:
         return None  # defensive: start node unresolved despite the runnable guard -> fallback
@@ -304,7 +261,7 @@ async def _try_flow_reply(
         temperature=cfg.llm.temperature,
         settings=settings,
     )
-    session.flow_current_node_id = f"{flow_uuid}:{node.get('id')}"
+    session.flow_current_node_id = flow_runtime.make_cursor(flow_uuid, node.get("id"))
     return reply
 
 

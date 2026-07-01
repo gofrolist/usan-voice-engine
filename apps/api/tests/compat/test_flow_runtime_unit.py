@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 from typing import Any
 
@@ -178,6 +179,22 @@ async def test_no_edges_returns_none() -> None:
     assert dest is None
 
 
+async def test_end_node_never_routes_even_with_always_edge(monkeypatch) -> None:
+    # A terminal end node must never route onward, even if authored with a stray Always edge.
+    async def _boom(**_: Any) -> VertexTurn:
+        raise AssertionError("classifier must not run for a terminal end node")
+
+    monkeypatch.setattr("usan_api.compat.flow_runtime.run_vertex_turn", _boom)
+    node = {
+        "id": "n2",
+        "type": "end",
+        "instruction": {"type": "prompt", "text": "bye"},
+        "edges": [_prompt_edge("n3", "Always")],
+    }
+    dest = await flow_runtime.evaluate_transition(node, [], {}, model="m", settings=object())
+    assert dest is None
+
+
 async def test_satisfied_equation_beats_always_regardless_of_order(monkeypatch) -> None:
     # A satisfied equation must win over an unconditional Always catch-all even when Always
     # appears first in the array (equation = explicit condition; Always = fallback).
@@ -263,6 +280,45 @@ async def test_classifier_bare_index_still_routes(monkeypatch) -> None:
         node, [_msg("user", "sales please")], {}, model="m", settings=object()
     )
     assert dest == "a"
+
+
+# ---- shared flow-binding helpers --------------------------------------------
+
+
+def test_bound_flow_id_decodes_conversation_flow_engine() -> None:
+    from usan_api.compat import ids
+
+    fid = uuid.uuid4()
+    raw = {
+        "compat_response_engine": {
+            "type": "conversation-flow",
+            "conversation_flow_id": ids.encode_conversation_flow_id(fid),
+        }
+    }
+    assert flow_runtime.bound_flow_id(raw) == fid
+
+
+def test_bound_flow_id_none_when_unbound_or_malformed() -> None:
+    assert flow_runtime.bound_flow_id({}) is None
+    assert flow_runtime.bound_flow_id({"compat_response_engine": {"type": "retell-llm"}}) is None
+    assert (
+        flow_runtime.bound_flow_id(
+            {"compat_response_engine": {"type": "conversation-flow", "conversation_flow_id": "bad"}}
+        )
+        is None
+    )
+
+
+def test_flow_model_prefers_flow_choice_then_fallback() -> None:
+    assert flow_runtime.flow_model({"model_choice": {"model": "gemini-x"}}, "fb") == "gemini-x"
+    assert flow_runtime.flow_model({}, "fb") == "fb"
+    assert flow_runtime.flow_model({"model_choice": {}}, "fb") == "fb"
+
+
+def test_node_instruction_text_reads_prompt() -> None:
+    node = {"id": "n1", "type": "conversation", "instruction": {"type": "prompt", "text": "Hi"}}
+    assert flow_runtime.node_instruction_text(node) == "Hi"
+    assert flow_runtime.node_instruction_text({"id": "n2", "type": "end"}) is None
 
 
 # ---- speak ------------------------------------------------------------------

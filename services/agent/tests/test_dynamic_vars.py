@@ -181,3 +181,69 @@ async def test_receiver_ignores_wrong_topic() -> None:
     await asyncio.sleep(0)
 
     agent.update_instructions.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_receiver_skips_update_when_flow_active() -> None:
+    """#2 fix: on a flow-active RagAgent, the flow owns the prompt — a mid-call var
+    update must NOT clobber it via update_instructions."""
+    from usan_agent.rag_agent import RagAgent
+    from usan_agent.settings import Settings
+
+    settings = Settings(
+        LIVEKIT_API_KEY="k",
+        LIVEKIT_API_SECRET="s" * 32,
+        LIVEKIT_URL="wss://example.com",
+        CARTESIA_API_KEY="c",
+        GCP_PROJECT="proj",
+        DEFAULT_CARTESIA_VOICE_ID="v",
+        API_BASE_URL="https://api.example.com",
+        JWT_SIGNING_KEY="j" * 32,
+        FLOW_RUNTIME_VOICE_ENABLED=True,
+    )
+    agent = RagAgent(instructions="base", call_id="c-1", settings=settings)
+    agent.update_instructions = AsyncMock()  # type: ignore[method-assign]
+    # Simulate a call that has bound to a flow (flow_active reads these three fields).
+    agent._flow_ever_bound = True
+    assert agent.flow_active is True
+
+    ctx, callbacks = _make_fake_ctx()
+    _register_dynamic_vars_receiver(ctx, agent, {"first_name": "there"}, "Hello {{first_name}}")
+
+    pkt = _make_packet(DYNAMIC_VARS_TOPIC, json.dumps({"first_name": "Ada"}).encode())
+    callbacks[0](pkt)
+    await asyncio.sleep(0)
+
+    agent.update_instructions.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_receiver_applies_update_when_flow_not_active() -> None:
+    """A RagAgent that never bound a flow (flow_active False) still gets mid-call var
+    updates applied normally — the skip is specific to flow-active calls."""
+    from usan_agent.rag_agent import RagAgent
+    from usan_agent.settings import Settings
+
+    settings = Settings(
+        LIVEKIT_API_KEY="k",
+        LIVEKIT_API_SECRET="s" * 32,
+        LIVEKIT_URL="wss://example.com",
+        CARTESIA_API_KEY="c",
+        GCP_PROJECT="proj",
+        DEFAULT_CARTESIA_VOICE_ID="v",
+        API_BASE_URL="https://api.example.com",
+        JWT_SIGNING_KEY="j" * 32,
+        FLOW_RUNTIME_VOICE_ENABLED=False,
+    )
+    agent = RagAgent(instructions="base", call_id="c-1", settings=settings)
+    agent.update_instructions = AsyncMock()  # type: ignore[method-assign]
+    assert agent.flow_active is False
+
+    ctx, callbacks = _make_fake_ctx()
+    _register_dynamic_vars_receiver(ctx, agent, {"first_name": "there"}, "Hello {{first_name}}")
+
+    pkt = _make_packet(DYNAMIC_VARS_TOPIC, json.dumps({"first_name": "Ada"}).encode())
+    callbacks[0](pkt)
+    await asyncio.sleep(0)
+
+    agent.update_instructions.assert_awaited_once_with("Hello Ada")

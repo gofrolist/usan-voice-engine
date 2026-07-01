@@ -30,6 +30,7 @@ from usan_agent.ids import validate_call_id
 from usan_agent.logging_config import configure_logging
 from usan_agent.metrics_hooks import register_metrics_flush
 from usan_agent.pipeline import build_agent, build_session, greet, say_recording_disclosure
+from usan_agent.rag_agent import RagAgent
 from usan_agent.recording import start_call_recording
 from usan_agent.settings import Settings, get_settings
 from usan_agent.transcript import register_transcript_flush
@@ -453,6 +454,15 @@ def _register_dynamic_vars_receiver(
             return
 
         async def _apply(new_instructions: str) -> None:
+            # On a flow-active call the flow owns the system prompt (it is rebuilt each turn
+            # from the bound flow node's instruction text); applying a mid-call var override
+            # here would fight the flow's next advance. Consistent with the already-documented
+            # "mid-call var updates not reflected in flow" limitation.
+            if isinstance(agent, RagAgent) and agent.flow_active:
+                logger.bind(room=room_name).debug(
+                    "dynamic-vars: instructions update skipped (flow active)"
+                )
+                return
             await agent.update_instructions(new_instructions)
             logger.bind(room=room_name).debug("dynamic-vars: instructions updated mid-call")
 

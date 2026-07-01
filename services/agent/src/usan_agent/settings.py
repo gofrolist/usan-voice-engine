@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     # kb_retrieval_timeout_s bounds the per-turn retrieval HTTP call so a slow lookup can't
     # stall turn-taking; on timeout the worker speaks without injected context.
     kb_retrieval_voice_enabled: bool = Field(default=False, alias="KB_RETRIEVAL_VOICE_ENABLED")
+    flow_runtime_voice_enabled: bool = Field(default=False, alias="FLOW_RUNTIME_VOICE_ENABLED")
     kb_retrieval_timeout_s: float = Field(default=3.0, alias="KB_RETRIEVAL_TIMEOUT_S")
     # The outbound answer timeout is now driven by the published agent config
     # (agent_config.TimingConfig.answer_timeout_s), resolved per call at start.

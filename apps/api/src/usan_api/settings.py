@@ -291,6 +291,12 @@ class Settings(BaseSettings):
     # single system-prompt turn; a non-runnable flow falls back to the single-prompt path.
     flow_runtime_enabled: bool = Field(default=False, alias="FLOW_RUNTIME_ENABLED")
 
+    # Conversation-flow DAG runtime for VOICE calls (Phase 6-runtime-voice). When on, a voice
+    # agent bound to a RUNNABLE conversation flow is steered node-by-node via
+    # POST /v1/runtime/flow-advance; a non-runnable/absent binding falls back to the single
+    # static prompt. Independent of flow_runtime_enabled (chat) so voice and chat enable separately.
+    flow_runtime_voice_enabled: bool = Field(default=False, alias="FLOW_RUNTIME_VOICE_ENABLED")
+
     # --- Clara Care Parity (feature 002): three new poller phases + inbound-SMS
     # verification + Spanish callback. All ship-inert: every new poller defaults OFF,
     # so merging changes NO runtime behavior until a deploy explicitly enables them

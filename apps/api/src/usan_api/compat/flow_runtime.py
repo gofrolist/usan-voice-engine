@@ -11,10 +11,14 @@ services/agent import. Never logs PHI; the functions here raise only if Vertex i
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
-from usan_api.prompt_substitution import substitute
+from usan_api.compat import ids
+from usan_api.compat.errors import CompatError
+from usan_api.prompt_substitution import build_vars, substitute
 from usan_api.settings import Settings
 from usan_api.vertex_test import run_vertex_turn
 
@@ -33,12 +37,83 @@ def node_by_id(config: Mapping[str, Any], node_id: str | None) -> dict[str, Any]
     return None
 
 
-def _instruction_text(node: Mapping[str, Any]) -> str | None:
+def node_instruction_text(node: Mapping[str, Any]) -> str | None:
     instr = node.get("instruction")
     if isinstance(instr, dict):
         text = instr.get("text")
         return text if isinstance(text, str) else None
     return None
+
+
+def bound_flow_id(raw: Mapping[str, Any]) -> uuid.UUID | None:
+    """The conversation_flow uuid this published agent config is bound to (Phase 6c
+    compat_response_engine), or None if unbound / non-flow / malformed. Never raises."""
+    engine = raw.get("compat_response_engine")
+    if not isinstance(engine, dict) or engine.get("type") != "conversation-flow":
+        return None
+    token = engine.get("conversation_flow_id")
+    if not isinstance(token, str) or not token:
+        return None
+    try:
+        return ids.decode_conversation_flow_id(token)
+    except CompatError:
+        return None
+
+
+def make_cursor(flow_uuid: uuid.UUID, node_id: str | None) -> str:
+    """Encode the opaque, flow-qualified cursor token round-tripped by chat and voice
+    callers: ``"<flow_uuid>:<node_id>"``. The caller never interprets it."""
+    return f"{flow_uuid}:{node_id}"
+
+
+def cursor_for_flow(stored: str | None, flow_uuid: uuid.UUID) -> str | None:
+    """The node id from a stored ``"<flow_uuid>:<node_id>"`` cursor, but ONLY if it belongs to
+    the currently-bound flow; otherwise None (re-enter at start). This guards against an agent
+    being repointed to a DIFFERENT flow mid-session (a Phase 6c update-agent op): a stale cursor
+    from the old flow must not resolve against a same-named node in the new one."""
+    if not stored:
+        return None
+    prefix, sep, node_id = stored.partition(":")
+    if not sep or prefix != str(flow_uuid):
+        return None
+    return node_id or None
+
+
+def assemble_instruction(
+    flow_config: Mapping[str, Any], node: Mapping[str, Any], values: Mapping[str, str]
+) -> str:
+    """The system instruction for one node: global_prompt + node instruction, both
+    var-substituted and joined by a blank line, stripped. Shared by chat's ``speak`` and the
+    voice resolver so the two paths can never diverge on prompt assembly."""
+    global_prompt = substitute(str(flow_config.get("global_prompt") or ""), values)
+    node_text = substitute(node_instruction_text(node) or "", values)
+    return f"{global_prompt}\n\n{node_text}".strip()
+
+
+def merge_flow_values(
+    flow_config: Mapping[str, Any], dynamic_vars: Mapping[str, object]
+) -> dict[str, str]:
+    """The rendered var map for a flow turn: the flow's own ``default_dynamic_variables`` (when
+    present) updated by the caller's ``dynamic_vars`` (session/call personalization wins),
+    rendered via :func:`build_vars` with an empty timezone and "now" (flows are text/voice
+    context, not clock-rendering SMS greetings). Shared by chat's ``_try_flow_reply`` and the
+    voice resolver so the merge order can never diverge."""
+    merged_custom: dict[str, object] = {}
+    flow_defaults = flow_config.get("default_dynamic_variables")
+    if isinstance(flow_defaults, dict):
+        merged_custom.update(flow_defaults)
+    merged_custom.update(dynamic_vars)
+    return build_vars({}, merged_custom, timezone="", now=datetime.now(UTC))
+
+
+def flow_model(flow_config: Mapping[str, Any], fallback_model: str) -> str:
+    """The flow's own model governs its execution; fall back to the agent's llm model."""
+    mc = flow_config.get("model_choice")
+    if isinstance(mc, dict):
+        model = mc.get("model")
+        if isinstance(model, str) and model:
+            return model
+    return fallback_model
 
 
 def flow_is_runnable(config: Any) -> bool:
@@ -64,7 +139,7 @@ def flow_is_runnable(config: Any) -> bool:
     if not isinstance(start, str) or start not in ids_seen:
         return False
     for node in nodes:
-        if node.get("type") == "conversation" and _instruction_text(node) is None:
+        if node.get("type") == "conversation" and node_instruction_text(node) is None:
             return False
         for edge in node.get("edges") or []:
             if not isinstance(edge, dict):
@@ -191,7 +266,12 @@ async def evaluate_transition(
 
     Equation edges are evaluated BEFORE Always: an equation is an explicit condition, whereas an
     Always edge is an unconditional catch-all, so a satisfied condition must win over the
-    fallback even when the Always edge appears first in the array."""
+    fallback even when the Always edge appears first in the array.
+
+    A terminal ``end`` node never routes onward, even if authored with a stray edge: guard first
+    so a misconfigured Always/equation edge on an end node can never advance the flow."""
+    if node.get("type") == "end":
+        return None
     edges = [e for e in (node.get("edges") or []) if isinstance(e, dict)]
     for edge in edges:
         if _cond(edge).get("type") == "equation" and _equation_condition_true(_cond(edge), values):
@@ -224,9 +304,7 @@ async def speak(
 ) -> str:
     """Run one Vertex turn for the node: system = global_prompt + node instruction (both
     var-substituted), contents = the role-mapped history. Returns the reply text."""
-    node_instruction = substitute(_instruction_text(node) or "", values)
-    global_prompt = substitute(str(flow_config.get("global_prompt") or ""), values)
-    system_instruction = f"{global_prompt}\n\n{node_instruction}".strip()
+    system_instruction = assemble_instruction(flow_config, node, values)
     turn = await run_vertex_turn(
         model=model,
         temperature=temperature,
