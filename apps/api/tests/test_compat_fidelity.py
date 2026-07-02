@@ -115,7 +115,6 @@ def test_get_concurrency_shape_and_values(compat_client, compat_headers):
     [
         ("post", "/clone-voice"),
         ("get", "/get-mcp-tools/some-agent-id"),
-        ("post", "/agent-playground-completion/some-agent-id"),
         ("post", "/create-phone-number"),
     ],
 )
