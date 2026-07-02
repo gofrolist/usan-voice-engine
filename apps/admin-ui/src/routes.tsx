@@ -20,6 +20,8 @@ import { AcceptInvitePage } from "./features/invites/AcceptInvitePage";
 import { HomeLanding } from "./components/HomeLanding";
 import { RequireAdmin, RequireSuperAdmin } from "./auth/RequireTier";
 import { CompatKeysPage } from "./features/compat-keys/CompatKeysPage";
+import { KnowledgeBasesPage } from "./features/knowledgeBases/KnowledgeBasesPage";
+import { KnowledgeBaseDetailPage } from "./features/knowledgeBases/KnowledgeBaseDetailPage";
 
 // All routes are gated by RequireAuth and rendered inside AppLayout. The api
 // wrapper handles 401 with a full-page redirect to /v1/auth/login.
@@ -87,6 +89,8 @@ export const router = createBrowserRouter([
             path: "custom-variables",
             element: <CustomVariablesPage />,
           },
+          { path: "knowledge-bases", element: <KnowledgeBasesPage /> },
+          { path: "knowledge-bases/:id", element: <KnowledgeBaseDetailPage /> },
           {
             path: "audit",
             element: (

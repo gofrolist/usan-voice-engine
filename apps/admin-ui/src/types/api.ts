@@ -581,3 +581,41 @@ export interface CompatKey {
 export interface CompatKeyCreated extends CompatKey {
   token: string;
 }
+
+// ---------------------------------------------------------------------------
+// Knowledge bases — admin self-service (admin_knowledge_bases.py).
+// ---------------------------------------------------------------------------
+
+export interface KbSummary {
+  id: string;
+  name: string;
+  status: string;
+  source_count: number;
+  updated_at: string;
+}
+
+export interface KbSourceOut {
+  id: string;
+  title: string | null;
+  status: string; // "pending" | "embedded"
+  created_at: string;
+}
+
+export interface KbDetail {
+  id: string;
+  name: string;
+  status: string;
+  error_detail: string | null;
+  sources: KbSourceOut[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KbCreate {
+  name: string;
+}
+
+export interface KbSourceCreate {
+  title: string;
+  text: string;
+}
