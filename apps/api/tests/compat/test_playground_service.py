@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 from usan_api.compat.errors import CompatError
 from usan_api.compat.ids import encode_agent_id
@@ -45,6 +48,68 @@ def _settings(project: str | None):
 
 async def _current_org(db) -> uuid.UUID:
     return (await db.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
+
+
+def _super_url(app_async_database_url: str) -> str:
+    """The superuser (RLS-bypassing) async DSN, derived from the usan_app one.
+
+    Canonical idiom reused from tests/test_rls_p2_isolation.py::_super_url /
+    tests/test_compat_rls_isolation.py — a raw superuser engine is required to seed a
+    row directly into a *specific* org regardless of the reading session's tenant
+    context, since the app-role WITH CHECK policy only allows inserts matching the
+    session's own current org.
+    """
+    return app_async_database_url.replace("usan_app:usan_app@", "usan:usan@", 1)
+
+
+async def _seed_published_profile_in_org(super_async_url: str, org_id: uuid.UUID) -> uuid.UUID:
+    """Insert a published agent_profile + its version straight into ``org_id`` via the
+    superuser engine (RLS bypassed), mirroring
+    tests/test_rls_p2_isolation.py::_seed_profile_in_org — so the seeded row genuinely
+    belongs to a different org than whatever the reading session is scoped to.
+    """
+    profile_id = uuid.uuid4()
+    engine = create_async_engine(super_async_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO agent_profiles "
+                    "(id, organization_id, name, status, draft_config, published_version) "
+                    "VALUES (:id, :org, :name, 'active', CAST(:cfg AS jsonb), 1)"
+                ),
+                {
+                    "id": profile_id,
+                    "org": org_id,
+                    "name": f"PG Cross-Org Agent {uuid.uuid4().hex[:8]}",
+                    "cfg": json.dumps(_CONFIG),
+                },
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO agent_profile_versions (profile_id, version, config) "
+                    "VALUES (:pid, 1, CAST(:cfg AS jsonb))"
+                ),
+                {"pid": profile_id, "cfg": json.dumps(_CONFIG)},
+            )
+    finally:
+        await engine.dispose()
+    return profile_id
+
+
+async def _delete_profile(super_async_url: str, profile_id: uuid.UUID) -> None:
+    engine = create_async_engine(super_async_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM agent_profile_versions WHERE profile_id = :pid"),
+                {"pid": profile_id},
+            )
+            await conn.execute(
+                text("DELETE FROM agent_profiles WHERE id = :pid"), {"pid": profile_id}
+            )
+    finally:
+        await engine.dispose()
 
 
 async def test_happy_path_single_turn(app_session, monkeypatch) -> None:
@@ -169,6 +234,7 @@ async def test_unknown_agent_raises_422(app_session) -> None:
             request=PlaygroundCompletionRequest(messages=[{"role": "user", "content": "hi"}]),
         )
     assert ei.value.status_code == 422
+    assert ei.value.message == "agent is not available"
 
 
 async def test_malformed_agent_id_raises_422(app_session) -> None:
@@ -183,6 +249,33 @@ async def test_malformed_agent_id_raises_422(app_session) -> None:
             request=PlaygroundCompletionRequest(messages=[{"role": "user", "content": "hi"}]),
         )
     assert ei.value.status_code == 422
+    assert ei.value.message == "invalid agent_id"
+
+
+async def test_cross_org_agent_raises_422(app_session, app_async_database_url, two_orgs) -> None:
+    """Spec §7/§9 cross-org isolation: an agent published under a DIFFERENT org must be
+    indistinguishable from not-found — 422 "agent is not available", never 200 — so no
+    config/PHI leaks across orgs. Runs on the real usan_app/RLS-enforcing ``app_session``
+    (not a superuser session, which would bypass RLS and pass vacuously); only the seed
+    of org A's row uses the superuser engine idiom (see ``_seed_published_profile_in_org``).
+    """
+    org_a, org_b = two_orgs
+    super_url = _super_url(app_async_database_url)
+    profile_id = await _seed_published_profile_in_org(super_url, org_a)
+    try:
+        await set_tenant_context(app_session, org_b)
+        with pytest.raises(CompatError) as ei:
+            await run_playground_completion(
+                app_session,
+                _settings("proj"),
+                agent_id=encode_agent_id(profile_id),
+                version=None,
+                request=PlaygroundCompletionRequest(messages=[{"role": "user", "content": "hi"}]),
+            )
+        assert ei.value.status_code == 422
+        assert ei.value.message == "agent is not available"
+    finally:
+        await _delete_profile(super_url, profile_id)
 
 
 async def test_no_gcp_project_raises_503(app_session) -> None:
