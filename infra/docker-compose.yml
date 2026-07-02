@@ -246,6 +246,11 @@ services:
       TELNYX_FROM_NUMBER: ${TELNYX_FROM_NUMBER:-}
       TELNYX_MESSAGING_API_URL: ${TELNYX_MESSAGING_API_URL:-https://api.telnyx.com/v2}
       TELNYX_MESSAGING_TIMEOUT_S: ${TELNYX_MESSAGING_TIMEOUT_S:-10}
+      # Inbound two-way SMS engine (Phase 4b-2 reply / 4b-3 auto-create). SHIP-INERT:
+      # each gates its half independently and needs TELNYX_MESSAGING_ENABLED + the
+      # messaging secret/from-number + TELNYX_INBOUND_PUBLIC_KEY + GCP_PROJECT (Vertex reply).
+      TELNYX_INBOUND_SMS_REPLY_ENABLED: ${TELNYX_INBOUND_SMS_REPLY_ENABLED:-false}
+      TELNYX_INBOUND_SMS_AUTOCREATE_ENABLED: ${TELNYX_INBOUND_SMS_AUTOCREATE_ENABLED:-false}
       # Admin UI / Google SSO (Plan admin-3 code; admin-5 wires it through here so
       # the settings actually reach the container). All optional — SSO is off until
       # the client id + secret + redirect are all set; SESSION_COOKIE_SECURE defaults
@@ -324,6 +329,10 @@ services:
       VERTEX_LOCATION: ${VERTEX_LOCATION:-global}
       SUMMARIZATION_ENABLED: ${SUMMARIZATION_ENABLED:-false}
       SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL:-gemini-2.5-flash}
+      # Post-chat analysis (Phase 4c-2 rerun-chat-analysis). SHIP-INERT: default OFF, so no
+      # Vertex call (spend or PHI egress) until enabled AND GCP_PROJECT is set. Vertex ADC only.
+      CHAT_ANALYSIS_ENABLED: ${CHAT_ANALYSIS_ENABLED:-false}
+      CHAT_ANALYSIS_MODEL: ${CHAT_ANALYSIS_MODEL:-gemini-2.5-flash}
       # Invite email via Google Workspace (spec 2026-06-19). SHIP-INERT: default OFF, so
       # invites stay copy-link-only until a deploy flips the flag AFTER the one-time
       # domain-wide-delegation setup (Admin console + gmail.send scope on the VM SA).
@@ -353,6 +362,15 @@ services:
       KB_INGESTION_BATCH_SIZE: ${KB_INGESTION_BATCH_SIZE:-10}
       KB_INGESTION_LEASE_SECONDS: ${KB_INGESTION_LEASE_SECONDS:-300}
       KB_INGESTION_MAX_ATTEMPTS: ${KB_INGESTION_MAX_ATTEMPTS:-3}
+      # KB retrieval / RAG (Phase 5b chat, 5c voice). SHIP-INERT: default OFF, so no query
+      # embed until enabled AND GCP_PROJECT is set. MAX_DISTANCE is a cosine-distance ceiling
+      # (0=identical..2=opposite) — the 0.7 default is permissive and MUST be tuned against
+      # real KB content. kb_retrieval_voice_enabled is the api-side embed/search gate for voice.
+      KB_RETRIEVAL_ENABLED: ${KB_RETRIEVAL_ENABLED:-false}
+      KB_RETRIEVAL_VOICE_ENABLED: ${KB_RETRIEVAL_VOICE_ENABLED:-false}
+      KB_RETRIEVAL_TOP_K: ${KB_RETRIEVAL_TOP_K:-5}
+      KB_RETRIEVAL_MAX_DISTANCE: ${KB_RETRIEVAL_MAX_DISTANCE:-0.7}
+      KB_RETRIEVAL_MAX_CONTEXT_CHARS: ${KB_RETRIEVAL_MAX_CONTEXT_CHARS:-8000}
       # Conversation-flow DAG runtime for chat/SMS (Phase 6-runtime-chat). SHIP-INERT:
       # default OFF, so merging changes no runtime behavior until a deploy sets this
       # AND the VM infra/.env BEFORE cutting the v* tag (deploy does not re-fetch the secret).
@@ -412,6 +430,12 @@ services:
       # Conversation-flow DAG runtime for VOICE calls (Phase 6-runtime-voice). SHIP-INERT:
       # default OFF; gates whether the agent steers via /v1/runtime/flow-advance calls.
       FLOW_RUNTIME_VOICE_ENABLED: ${FLOW_RUNTIME_VOICE_ENABLED:-false}
+      # Voice-RAG (Phase 5c). The worker-side gate for the per-turn retrieve_kb_context call;
+      # a true no-op when off. The api has its own KB_RETRIEVAL_VOICE_ENABLED (the real
+      # embed/search gate). Timeout bounds the per-turn HTTP call so a slow lookup can't
+      # stall turn-taking (on timeout the worker speaks without injected context).
+      KB_RETRIEVAL_VOICE_ENABLED: ${KB_RETRIEVAL_VOICE_ENABLED:-false}
+      KB_RETRIEVAL_TIMEOUT_S: ${KB_RETRIEVAL_TIMEOUT_S:-3.0}
     # Block privilege escalation + drop all caps (the worker binds no privileged
     # ports). read_only is intentionally NOT set: the agent needs writable
     # model/turn-detector caches and tmp scratch at runtime.
