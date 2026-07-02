@@ -1,12 +1,12 @@
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import time
+from datetime import datetime, time
 from typing import Any, Literal
 
 from loguru import logger
 from pydantic import ValidationError
-from sqlalchemy import func, select, tuple_, update
+from sqlalchemy import and_, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.db.base import CallStatus, ProfileStatus
@@ -650,3 +650,48 @@ async def is_live_profile(
         and profile.published_version is not None
         and (channel is None or profile.channel == channel)
     )
+
+
+async def list_profiles_keyset(
+    db: AsyncSession,
+    *,
+    limit: int,
+    descending: bool,
+    after: tuple[datetime, uuid.UUID] | None,
+) -> list[AgentProfile]:
+    """Keyset-paginate non-archived profiles over (created_at, id) — v2 list-retell-llms.
+
+    Channel-agnostic on purpose (a Retell-LLM is channel-agnostic infra, 4c-1). RLS scopes
+    to the caller's org. Fetches limit+1 so the caller computes has_more without a COUNT.
+    """
+    stmt = select(AgentProfile).where(AgentProfile.status != ProfileStatus.ARCHIVED)
+    if after is not None:
+        after_created_at, after_id = after
+        if descending:
+            stmt = stmt.where(
+                or_(
+                    AgentProfile.created_at < after_created_at,
+                    and_(
+                        AgentProfile.created_at == after_created_at,
+                        AgentProfile.id < after_id,
+                    ),
+                )
+            )
+        else:
+            stmt = stmt.where(
+                or_(
+                    AgentProfile.created_at > after_created_at,
+                    and_(
+                        AgentProfile.created_at == after_created_at,
+                        AgentProfile.id > after_id,
+                    ),
+                )
+            )
+    order = (
+        (AgentProfile.created_at.desc(), AgentProfile.id.desc())
+        if descending
+        else (AgentProfile.created_at.asc(), AgentProfile.id.asc())
+    )
+    stmt = stmt.order_by(*order).limit(limit + 1)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())

@@ -240,6 +240,28 @@ def chat_analysis_on(compat_client: TestClient):
 
 
 @pytest.fixture
+def summarization_on(compat_client: TestClient):
+    """Override get_settings on the compat sub-app: summarization enabled + gcp_project.
+
+    Same dependency_overrides key as gcp_project_set/chat_analysis_on — never combine
+    two of these fixtures in one test.
+    """
+    from usan_api.settings import get_settings as _get_settings
+
+    compat_app = _get_compat_app(compat_client)
+    base = _get_settings()
+
+    def _override() -> Settings:
+        return base.model_copy(
+            update={"summarization_enabled": True, "gcp_project": "test-project"}
+        )
+
+    compat_app.dependency_overrides[_get_settings] = _override
+    yield
+    compat_app.dependency_overrides.pop(_get_settings, None)
+
+
+@pytest.fixture
 def flow_runtime_on(compat_client: TestClient):
     """Override get_settings on the compat sub-app so the flow runtime runs (flag on +
     gcp_project set). Mirrors chat_analysis_on / gcp_project_set."""

@@ -143,14 +143,21 @@ def _parse_summary(text: str) -> _ParsedSummary:
 
 
 async def summarize_call_with(
-    db: AsyncSession, call_id: uuid.UUID, settings: Settings
+    db: AsyncSession, call_id: uuid.UUID, settings: Settings, *, force: bool = False
 ) -> ConversationSummary | None:
     """Summarize one call and persist the recap + extracted facts. Returns the summary
-    row, or None when there is nothing to do (already summarized / no transcript)."""
-    if await summaries_repo.get_for_call(db, call_id) is not None:
+    row, or None when there is nothing to do (already summarized / no transcript).
+
+    ``force=True`` (compat rerun-call-analysis) recomputes even when a summary already
+    exists (upsert-replace), covers contact-less web calls (contact_id NULL, 0051), skips
+    personal-fact extraction (a rerun must never duplicate facts), and is FLUSH-ONLY —
+    the caller owns the commit. ``force=False`` keeps the original background-trigger
+    behavior unchanged, including the internal commit.
+    """
+    if not force and await summaries_repo.get_for_call(db, call_id) is not None:
         return None  # idempotent: a prior trigger already summarized this call
     call = await calls_repo.get_call(db, call_id)
-    if call is None or call.contact_id is None:
+    if call is None or (call.contact_id is None and not force):
         return None
     segments = await transcripts_repo.list_for_call(db, call_id)
     transcript_text = _render_transcript(segments)
@@ -167,35 +174,50 @@ async def summarize_call_with(
     )
     parsed = _parse_summary(turn.text)
 
-    summary_row = await summaries_repo.create(
-        db,
-        call_id=call_id,
-        contact_id=call.contact_id,
-        summary=parsed.summary,
-        open_plans=parsed.open_plans,
-        model_version=settings.summarization_model,
-    )
+    if force:
+        summary_row: ConversationSummary | None = await summaries_repo.upsert(
+            db,
+            call_id=call_id,
+            contact_id=call.contact_id,
+            summary=parsed.summary,
+            open_plans=parsed.open_plans,
+            model_version=settings.summarization_model,
+        )
+    else:
+        assert call.contact_id is not None  # guaranteed above: `not force` bailed out earlier
+        summary_row = await summaries_repo.create(
+            db,
+            call_id=call_id,
+            contact_id=call.contact_id,
+            summary=parsed.summary,
+            open_plans=parsed.open_plans,
+            model_version=settings.summarization_model,
+        )
     if summary_row is None:
         # Lost a race to a concurrent trigger — it owns the facts too; don't double-write.
         return None
 
-    # Extracted facts, skipping ones already active for this contact (avoid re-adding the
-    # same fact every call). source='extracted' — never forge an contact_stated fact here.
-    # Dedup against the FULL active key set (uncapped) — list_active's 50-row injection cap
-    # would let a duplicate beyond row 50 be re-inserted every call (unbounded growth).
-    existing = await personal_facts_repo.list_active_keys(db, contact_id=call.contact_id)
-    for fact in parsed.facts:
-        if (fact.category, fact.content) in existing:
-            continue
-        existing.add((fact.category, fact.content))
-        await personal_facts_repo.create(
-            db,
-            contact_id=call.contact_id,
-            category=fact.category,
-            content=fact.content,
-            structured=fact.structured or None,
-            source="extracted",
-        )
+    if not force:
+        # Extracted facts, skipping ones already active for this contact (avoid re-adding
+        # the same fact every call). source='extracted' — never forge a contact_stated fact
+        # here. Dedup against the FULL active key set (uncapped) — list_active's 50-row
+        # injection cap would let a duplicate beyond row 50 be re-inserted every call
+        # (unbounded growth). Skipped entirely on force: a rerun re-extracting facts would
+        # duplicate them, and a contact-less call has no fact target.
+        assert call.contact_id is not None  # guaranteed above: `not force` bailed out earlier
+        existing = await personal_facts_repo.list_active_keys(db, contact_id=call.contact_id)
+        for fact in parsed.facts:
+            if (fact.category, fact.content) in existing:
+                continue
+            existing.add((fact.category, fact.content))
+            await personal_facts_repo.create(
+                db,
+                contact_id=call.contact_id,
+                category=fact.category,
+                content=fact.content,
+                structured=fact.structured or None,
+                source="extracted",
+            )
     # Feature 003 / US2: the summary IS the 'analyzed' signal — emit a compat call_analyzed
     # webhook for an agent with a subscription (no-op otherwise), in the SAME transaction as
     # the recap so a rolled-back summarize emits nothing. Local import avoids a compat
@@ -203,6 +225,10 @@ async def summarize_call_with(
     from usan_api.compat.lifecycle import enqueue_compat_call_event
 
     await enqueue_compat_call_event(db, call, event="call_analyzed")
+    if force:
+        # Flush-only on the rerun path: the compat router owns the transaction.
+        logger.bind(call_id=str(call_id)).info("Reran call analysis")
+        return summary_row
     await db.commit()
     logger.bind(call_id=str(call_id), facts=len(parsed.facts)).info("Summarized call")
     return summary_row

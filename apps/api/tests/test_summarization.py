@@ -337,3 +337,186 @@ async def test_summarize_call_wrapper_skips_when_disabled(monkeypatch):
 
     await summarization.summarize_call(uuid.uuid4())  # must not raise, must not call Vertex
     assert spy.await_count == 0
+
+
+async def test_contact_id_is_nullable(session_factory):
+    """Migration 0051 pin: a contact-less (web-call) summary row must be insertable."""
+    async with session_factory() as db:
+        nullable = (
+            await db.execute(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_name = 'conversation_summaries' AND column_name = 'contact_id'"
+                )
+            )
+        ).scalar_one()
+    assert nullable == "YES"
+
+
+async def test_upsert_inserts_then_replaces(client, session_factory, mock_dispatch):
+    from usan_api.repositories import conversation_summaries as summaries_repo
+
+    contact_id = await _make_contact(session_factory)
+    call_id = uuid.UUID(_enqueue_call(client, contact_id))
+
+    async with session_factory() as db:
+        first = await summaries_repo.upsert(
+            db,
+            call_id=call_id,
+            contact_id=uuid.UUID(contact_id),
+            summary="first",
+            open_plans=["plan a"],
+            model_version="m1",
+        )
+        await db.commit()
+    assert first.summary == "first"
+
+    async with session_factory() as db:
+        second = await summaries_repo.upsert(
+            db,
+            call_id=call_id,
+            contact_id=uuid.UUID(contact_id),
+            summary="second",
+            open_plans=[],
+            model_version="m2",
+        )
+        await db.commit()
+    assert second.summary == "second"
+    assert second.open_plans == []
+    assert second.model_version == "m2"
+
+    async with session_factory() as db:
+        row = await summaries_repo.get_for_call(db, call_id)
+    assert row is not None
+    assert row.summary == "second"
+
+
+async def _seeded_call(client, session_factory) -> tuple[str, str]:
+    """A queued call with a transcript; returns (call_id, contact_id) as strings."""
+    contact_id = await _make_contact(session_factory)
+    call_id = _enqueue_call(client, contact_id)
+    await _add_transcript(
+        session_factory, call_id, [("user", "I feel great"), ("agent", "Wonderful!")]
+    )
+    return call_id, contact_id
+
+
+async def test_force_recomputes_and_replaces(client, session_factory, mock_dispatch, monkeypatch):
+    call_id, _contact_id = await _seeded_call(client, session_factory)
+    settings = get_settings()
+
+    monkeypatch.setattr(
+        summarization,
+        "run_vertex_turn",
+        _vertex_returning(
+            {
+                "summary": "v1",
+                "open_plans": [],
+                "facts": [{"category": "preference", "content": "likes tea"}],
+            }
+        ),
+    )
+    async with session_factory() as db:
+        row = await summarization.summarize_call_with(db, uuid.UUID(call_id), settings)
+    assert row is not None
+    assert row.summary == "v1"
+
+    # Non-force is idempotent: a second normal run is a no-op.
+    async with session_factory() as db:
+        assert await summarization.summarize_call_with(db, uuid.UUID(call_id), settings) is None
+
+    monkeypatch.setattr(
+        summarization,
+        "run_vertex_turn",
+        _vertex_returning(
+            {
+                "summary": "v2",
+                "open_plans": ["call the doctor"],
+                "facts": [{"category": "preference", "content": "likes coffee"}],
+            }
+        ),
+    )
+    async with session_factory() as db:
+        forced = await summarization.summarize_call_with(
+            db, uuid.UUID(call_id), settings, force=True
+        )
+        await db.commit()  # force is flush-only; the caller commits
+    assert forced is not None
+    assert forced.summary == "v2"
+    assert forced.open_plans == ["call the doctor"]
+
+    # Facts are NOT persisted on force: only the v1 fact exists.
+    async with session_factory() as db:
+        contents = (await db.execute(text("SELECT content FROM personal_facts"))).scalars().all()
+    assert "likes tea" in contents
+    assert "likes coffee" not in contents
+
+
+async def test_force_is_flush_only(client, session_factory, mock_dispatch, monkeypatch):
+    call_id, _ = await _seeded_call(client, session_factory)
+    monkeypatch.setattr(
+        summarization,
+        "run_vertex_turn",
+        _vertex_returning({"summary": "uncommitted", "open_plans": [], "facts": []}),
+    )
+
+    async with session_factory() as db:
+        await summarization.summarize_call_with(db, uuid.UUID(call_id), get_settings(), force=True)
+        # NO commit — the row must not be visible from another session.
+        async with session_factory() as other:
+            from usan_api.repositories import conversation_summaries as summaries_repo
+
+            assert await summaries_repo.get_for_call(other, uuid.UUID(call_id)) is None
+
+
+async def test_force_contactless_call(client, session_factory, mock_dispatch, monkeypatch):
+    call_id, _ = await _seeded_call(client, session_factory)
+    async with session_factory() as db:
+        await db.execute(
+            text("UPDATE calls SET contact_id = NULL WHERE id = CAST(:c AS uuid)"),
+            {"c": call_id},
+        )
+        await db.commit()
+
+    monkeypatch.setattr(
+        summarization,
+        "run_vertex_turn",
+        _vertex_returning({"summary": "web recap", "open_plans": [], "facts": []}),
+    )
+    async with session_factory() as db:
+        row = await summarization.summarize_call_with(
+            db, uuid.UUID(call_id), get_settings(), force=True
+        )
+        await db.commit()
+    assert row is not None
+    assert row.summary == "web recap"
+    assert row.contact_id is None
+
+    # And the non-force path still bails on contact-less calls (unchanged behavior).
+    async with session_factory() as db:
+        await db.execute(
+            text("DELETE FROM conversation_summaries WHERE call_id = CAST(:c AS uuid)"),
+            {"c": call_id},
+        )
+        await db.commit()
+    async with session_factory() as db:
+        assert (
+            await summarization.summarize_call_with(db, uuid.UUID(call_id), get_settings()) is None
+        )
+
+
+async def test_force_reenqueues_call_analyzed(client, session_factory, mock_dispatch, monkeypatch):
+    """The rerun re-fires the compat call_analyzed webhook event (oracle-faithful)."""
+    call_id, _ = await _seeded_call(client, session_factory)
+    monkeypatch.setattr(
+        summarization,
+        "run_vertex_turn",
+        _vertex_returning({"summary": "s", "open_plans": [], "facts": []}),
+    )
+    enqueued = AsyncMock()
+    monkeypatch.setattr("usan_api.compat.lifecycle.enqueue_compat_call_event", enqueued)
+    async with session_factory() as db:
+        await summarization.summarize_call_with(db, uuid.UUID(call_id), get_settings(), force=True)
+        await db.commit()
+    enqueued.assert_awaited_once()
+    assert enqueued.await_args.kwargs["event"] == "call_analyzed"

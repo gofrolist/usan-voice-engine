@@ -63,3 +63,45 @@ async def create(
         return None
     await db.flush()
     return await get_for_call(db, call_id)
+
+
+async def upsert(
+    db: AsyncSession,
+    *,
+    call_id: uuid.UUID,
+    contact_id: uuid.UUID | None,
+    summary: str,
+    open_plans: list[Any],
+    model_version: str,
+) -> ConversationSummary:
+    """Insert-or-replace the call's summary (compat rerun-call-analysis force path).
+
+    ON CONFLICT (call_id) DO UPDATE replaces summary/open_plans/model_version and leaves
+    call_id/contact_id/organization_id untouched on an existing row, so a rerun can never
+    relink a summary. ``contact_id`` is None for contact-less web calls (0051). Flush-only;
+    the caller commits.
+    """
+    stmt = (
+        pg_insert(ConversationSummary)
+        .values(
+            call_id=call_id,
+            contact_id=contact_id,
+            summary=summary,
+            open_plans=open_plans,
+            model_version=model_version,
+        )
+        .on_conflict_do_update(
+            index_elements=[ConversationSummary.call_id],
+            set_={
+                "summary": summary,
+                "open_plans": open_plans,
+                "model_version": model_version,
+            },
+        )
+    )
+    await db.execute(stmt)
+    await db.flush()
+    row = await get_for_call(db, call_id)
+    if row is None:  # pragma: no cover - the upsert above guarantees the row exists
+        raise RuntimeError("conversation summary upsert did not persist")
+    return row
