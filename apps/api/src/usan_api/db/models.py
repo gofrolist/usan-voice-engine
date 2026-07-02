@@ -342,8 +342,10 @@ class ConversationSummary(Base, TenantScoped):
         nullable=False,
         unique=True,
     )
-    contact_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
+    # Nullable since 0051: a compat rerun-call-analysis of a contact-less web call stores
+    # a summary with no contact; get_latest(contact_id=...) never surfaces NULL rows.
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=True
     )
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     open_plans: Mapped[list[Any]] = mapped_column(

@@ -337,3 +337,17 @@ async def test_summarize_call_wrapper_skips_when_disabled(monkeypatch):
 
     await summarization.summarize_call(uuid.uuid4())  # must not raise, must not call Vertex
     assert spy.await_count == 0
+
+
+async def test_contact_id_is_nullable(session_factory):
+    """Migration 0051 pin: a contact-less (web-call) summary row must be insertable."""
+    async with session_factory() as db:
+        nullable = (
+            await db.execute(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_name = 'conversation_summaries' AND column_name = 'contact_id'"
+                )
+            )
+        ).scalar_one()
+    assert nullable == "YES"
