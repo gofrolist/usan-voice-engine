@@ -47,8 +47,6 @@ _UNSUPPORTED: tuple[tuple[str, str], ...] = (
     ("GET", "/v2/list-retell-llms"),
     # --- Agent versioning ---
     ("POST", "/create-agent-version/{agent_id}"),
-    # --- Analysis re-run ---
-    ("PUT", "/rerun-call-analysis/{call_id}"),
 )
 
 

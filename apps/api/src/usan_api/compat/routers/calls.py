@@ -19,7 +19,7 @@ from loguru import logger
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api import livekit_dispatch
+from usan_api import livekit_dispatch, summarization
 from usan_api.client_ip import client_ip
 from usan_api.compat import call_create, call_serializer, ids, status_map
 from usan_api.compat.auth import get_compat_db
@@ -111,6 +111,42 @@ async def get_call(
 ) -> CompatCall:
     call = await _load_call(db, call_id)
     _audit(request, "get-call", call_id)
+    return await call_serializer.serialize_call(db, call, settings, client_host=client_ip(request))
+
+
+@router.put(
+    "/rerun-call-analysis/{call_id}",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CompatCall,
+    response_model_exclude_none=True,
+)
+async def rerun_call_analysis(
+    call_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_compat_db),
+    settings: Settings = Depends(get_settings),
+) -> CompatCall:
+    """PUT /rerun-call-analysis — recompute the call's analysis, return the call (201).
+
+    Best-effort (mirrors rerun-chat-analysis): 404 only for a missing/archived call.
+    Unconfigured summarization, a transcript-less call, or a Vertex failure all leave the
+    prior analysis in place and still answer 201. The recompute (summary upsert +
+    call_analyzed enqueue) is flush-only; this handler owns the commit, and a failure
+    rolls the whole recompute back (the after_begin listener re-applies the org RLS
+    context on the next transaction, so the serialization below still reads real rows).
+    """
+    call = await _load_call(db, call_id)
+    if settings.summarization_enabled and settings.gcp_project:
+        try:
+            await summarization.summarize_call_with(db, call.id, settings, force=True)
+            await db.commit()
+        except Exception as exc:  # noqa: BLE001 - never break the rerun; log TYPE only
+            logger.bind(call_id=call_id, err=type(exc).__name__).error(
+                "call analysis rerun crashed"
+            )
+            await db.rollback()
+    _audit(request, "rerun-call-analysis", call_id)
+    call = await _load_call(db, call_id)  # re-read after commit/rollback (expired state)
     return await call_serializer.serialize_call(db, call, settings, client_host=client_ip(request))
 
 
