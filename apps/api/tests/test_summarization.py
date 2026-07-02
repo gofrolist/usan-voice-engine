@@ -351,3 +351,41 @@ async def test_contact_id_is_nullable(session_factory):
             )
         ).scalar_one()
     assert nullable == "YES"
+
+
+async def test_upsert_inserts_then_replaces(client, session_factory, mock_dispatch):
+    from usan_api.repositories import conversation_summaries as summaries_repo
+
+    contact_id = await _make_contact(session_factory)
+    call_id = uuid.UUID(_enqueue_call(client, contact_id))
+
+    async with session_factory() as db:
+        first = await summaries_repo.upsert(
+            db,
+            call_id=call_id,
+            contact_id=uuid.UUID(contact_id),
+            summary="first",
+            open_plans=["plan a"],
+            model_version="m1",
+        )
+        await db.commit()
+    assert first.summary == "first"
+
+    async with session_factory() as db:
+        second = await summaries_repo.upsert(
+            db,
+            call_id=call_id,
+            contact_id=uuid.UUID(contact_id),
+            summary="second",
+            open_plans=[],
+            model_version="m2",
+        )
+        await db.commit()
+    assert second.summary == "second"
+    assert second.open_plans == []
+    assert second.model_version == "m2"
+
+    async with session_factory() as db:
+        row = await summaries_repo.get_for_call(db, call_id)
+    assert row is not None
+    assert row.summary == "second"
