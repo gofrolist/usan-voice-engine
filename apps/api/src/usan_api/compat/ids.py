@@ -157,6 +157,16 @@ def decode_phone_number_cursor(token: str) -> tuple[datetime, uuid.UUID]:
     return _decode_keyset_cursor(token)
 
 
+def encode_retell_llm_cursor(created_at: datetime, pid: uuid.UUID) -> str:
+    """Opaque (created_at, id) keyset cursor (delegates to the shared helper)."""
+    return _encode_keyset_cursor(created_at, pid)
+
+
+def decode_retell_llm_cursor(token: str) -> tuple[datetime, uuid.UUID]:
+    """Decode a cursor token back to (created_at, id). Raises CompatError(422) on any bad input."""
+    return _decode_keyset_cursor(token)
+
+
 def _decode_hex(token: str, *, prefix: str, kind: str) -> uuid.UUID:
     if not token.startswith(prefix):
         raise CompatError(422, f"invalid {kind}")
