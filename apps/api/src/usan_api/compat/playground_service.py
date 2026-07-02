@@ -51,10 +51,14 @@ async def run_playground_completion(
     values = build_vars({}, request.dynamic_variables or {}, timezone="", now=datetime.now(UTC))
     system_instruction = substitute(cfg.prompts.system_prompt, values)
 
+    # Only spoken turns reach the model: map agent->model / user->user. The other
+    # ChatMessageInput oneOf variants (injected, sms, tool_call_*, transitions) carry
+    # content but are "not spoken by either party" per the oracle — folding them into a
+    # user turn would misattribute injected/tool context as caller speech, so skip them.
     contents = [
         {"role": "model" if m.role == "agent" else "user", "parts": [{"text": m.content}]}
         for m in request.messages
-        if m.content
+        if m.role in ("agent", "user") and m.content
     ]
 
     if not settings.gcp_project:

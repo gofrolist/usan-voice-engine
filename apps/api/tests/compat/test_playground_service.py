@@ -171,6 +171,42 @@ async def test_multi_turn_role_mapping(app_session, monkeypatch) -> None:
     assert [c["role"] for c in captured["contents"]] == ["user", "model", "user"]
 
 
+async def test_non_spoken_variants_are_excluded(app_session, monkeypatch) -> None:
+    """injected/sms/tool_call_result carry content but are "not spoken by either party"
+    per the oracle — they must NOT be folded into user turns sent to Vertex."""
+    org = await _current_org(app_session)
+    await set_tenant_context(app_session, org)
+    profile = await _seed_published_profile(app_session)
+    captured: dict = {}
+
+    async def fake_turn(**kwargs):
+        captured.update(kwargs)
+        return VertexTurn(text="ok")
+
+    monkeypatch.setattr("usan_api.compat.playground_service.run_vertex_turn", fake_turn)
+    req = PlaygroundCompletionRequest(
+        messages=[
+            {"role": "user", "content": "hello"},
+            {"role": "injected", "content": "Customer just opened a billing ticket."},
+            {"role": "sms", "content": "text transcript"},
+            {"role": "tool_call_result", "content": '{"balance": 500}'},
+            {"role": "agent", "content": "hi there"},
+        ]
+    )
+    await run_playground_completion(
+        app_session,
+        _settings("proj"),
+        agent_id=encode_agent_id(profile.id),
+        version=None,
+        request=req,
+    )
+    # only the spoken user + agent turns reach Vertex; the three non-spoken variants dropped
+    assert captured["contents"] == [
+        {"role": "user", "parts": [{"text": "hello"}]},
+        {"role": "model", "parts": [{"text": "hi there"}]},
+    ]
+
+
 async def test_dynamic_variables_substituted(app_session, monkeypatch) -> None:
     org = await _current_org(app_session)
     await set_tenant_context(app_session, org)
