@@ -29,6 +29,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # SET NOT NULL fails if any NULL-contact rows exist (written by web-call reruns);
+    # purge them first: DELETE FROM conversation_summaries WHERE contact_id IS NULL.
     op.alter_column(
         "conversation_summaries",
         "contact_id",
