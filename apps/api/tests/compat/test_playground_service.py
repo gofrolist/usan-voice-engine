@@ -198,3 +198,36 @@ async def test_no_gcp_project_raises_503(app_session) -> None:
             request=PlaygroundCompletionRequest(messages=[{"role": "user", "content": "hi"}]),
         )
     assert ei.value.status_code == 503
+
+
+async def test_content_less_messages_are_skipped(app_session, monkeypatch) -> None:
+    org = await _current_org(app_session)
+    await set_tenant_context(app_session, org)
+    profile = await _seed_published_profile(app_session)
+    captured: dict = {}
+
+    async def fake_turn(**kwargs):
+        captured.update(kwargs)
+        return VertexTurn(text="ok")
+
+    monkeypatch.setattr("usan_api.compat.playground_service.run_vertex_turn", fake_turn)
+    req = PlaygroundCompletionRequest(
+        messages=[
+            {"role": "user", "content": "one"},
+            {"role": "tool_call_invocation", "tool_call_id": "t1"},
+            {"role": "user", "content": "two"},
+        ]
+    )
+    await run_playground_completion(
+        app_session,
+        _settings("proj"),
+        agent_id=encode_agent_id(profile.id),
+        version=None,
+        request=req,
+    )
+    # Verify that only the two messages with content were included in contents
+    assert len(captured["contents"]) == 2
+    assert captured["contents"] == [
+        {"role": "user", "parts": [{"text": "one"}]},
+        {"role": "user", "parts": [{"text": "two"}]},
+    ]
