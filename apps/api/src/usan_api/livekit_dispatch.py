@@ -452,13 +452,23 @@ async def dial_and_classify(call_id: uuid.UUID, settings: Settings) -> None:
         logger.bind(call_id=str(call_id), err=type(exc).__name__).error("dial_and_classify crashed")
         try:
             factory = get_session_factory()
+            room: str | None = None
             async with factory() as db:
+                call = await calls_repo.get_call(db, call_id)
+                # If the callee already answered before the crash, the SIP leg is live
+                # (dial uses wait_until_answered=True). Do NOT schedule a retry — that would
+                # dial the same contact again while the original call may still be up. Mark
+                # FAILED and best-effort tear down the room so no zombie leg is left behind.
+                already_answered = call is not None and call.answered_at is not None
+                room = call.livekit_room if call is not None else None
                 failed = await calls_repo.mark_failed_if_active(
                     db, call_id, end_reason="internal_error"
                 )
-                if failed is not None:
+                if failed is not None and not already_answered:
                     await calls_repo.schedule_retry(db, call_id)
                 await db.commit()
+            if room:
+                await _delete_room(room, settings)
         except Exception:
             logger.bind(call_id=str(call_id)).warning("Could not mark call FAILED after crash")
 
@@ -669,12 +679,20 @@ async def dispatch_and_dial(call_id: uuid.UUID, settings: Settings) -> None:
         # Type name only (see dial_and_classify): the traceback message can carry PHI.
         logger.bind(call_id=str(call_id), err=type(exc).__name__).error("dispatch_and_dial crashed")
         try:
+            teardown_room: str | None = None
             async with factory() as db:
+                crashed_call = await calls_repo.get_call(db, call_id)
+                # Same answered-then-crash guard as dial_and_classify: never retry a call
+                # that already went live, and tear down any room left behind.
+                already_answered = crashed_call is not None and crashed_call.answered_at is not None
+                teardown_room = crashed_call.livekit_room if crashed_call is not None else None
                 failed = await calls_repo.mark_failed_if_active(
                     db, call_id, end_reason="internal_error"
                 )
-                if failed is not None:
+                if failed is not None and not already_answered:
                     await calls_repo.schedule_retry(db, call_id)
                 await db.commit()
+            if teardown_room:
+                await _delete_room(teardown_room, settings)
         except Exception:
             logger.bind(call_id=str(call_id)).warning("Could not mark retry FAILED after crash")

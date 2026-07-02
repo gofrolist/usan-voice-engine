@@ -223,7 +223,9 @@ async def register_compat_call(
         contact = await upsert_contact_for_number(db, settings, phone, body.metadata)
     else:
         # No to_number: synthesize a placeholder contact keyed on a unique sentinel.
-        sentinel = f"+1000{str(uuid.uuid4().int % 10**7).zfill(7)}"
+        # Wide entropy (~10^11) so a register-call never collides onto an unrelated prior
+        # placeholder contact (upsert_contact_for_number reuses any existing same-phone row).
+        sentinel = f"+1000{uuid.uuid4().int % 10**11:011d}"
         contact = await upsert_contact_for_number(db, settings, sentinel, body.metadata)
 
     direction = CallDirection.INBOUND if body.direction == "inbound" else CallDirection.OUTBOUND

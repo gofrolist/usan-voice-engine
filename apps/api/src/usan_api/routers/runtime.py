@@ -1,7 +1,9 @@
+import asyncio
 import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.auth import require_worker_token
@@ -16,6 +18,10 @@ from usan_api.schemas.runtime import FlowAdvanceRequest, FlowAdvanceResponse
 from usan_api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/v1/runtime", tags=["runtime"])
+
+# Upper bound on one flow-advance (up to two sequential Vertex calls). A hang or error must
+# not 500 a live call — the agent falls back to the single-prompt path on bound=False.
+_FLOW_ADVANCE_TIMEOUT_S = 20.0
 
 
 @router.get("/agent-config", response_model=ResolvedAgentConfig)
@@ -73,4 +79,16 @@ async def flow_advance(
     runnable flow (the agent then takes the single-prompt path). Raises only if Vertex raises."""
     if not settings.flow_runtime_voice_enabled:
         return FlowAdvanceResponse(bound=False)
-    return await flow_runtime_voice.advance(db, settings, body.call_id, body.cursor, body.turns)
+    try:
+        return await asyncio.wait_for(
+            flow_runtime_voice.advance(db, settings, body.call_id, body.cursor, body.turns),
+            timeout=_FLOW_ADVANCE_TIMEOUT_S,
+        )
+    except Exception as exc:
+        # advance() is read-only (resolve + Vertex classify; the cursor lives agent-side), so a
+        # timeout/error leaves no partial DB state. Fall back to the single-prompt path rather
+        # than 500 the live call. Type name only — a Vertex error can embed prompt text.
+        logger.bind(call_id=str(body.call_id), err=type(exc).__name__).warning(
+            "flow-advance failed; falling back to single-prompt"
+        )
+        return FlowAdvanceResponse(bound=False)

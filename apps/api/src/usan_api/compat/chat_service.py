@@ -247,7 +247,7 @@ async def _try_flow_reply(
     history = await chats_repo.list_messages(db, session.id)
     model = flow_runtime.flow_model(flow_config, cfg.llm.model)
 
-    cursor = flow_runtime.cursor_for_flow(session.flow_current_node_id, flow_uuid)
+    cursor = flow_runtime.cursor_for_flow(session.flow_current_node_id, flow_uuid, flow_row.version)
     node = await _advance_flow(flow_config, cursor, history, values, model=model, settings=settings)
     if node is None:
         return None  # defensive: start node unresolved despite the runnable guard -> fallback
@@ -261,7 +261,9 @@ async def _try_flow_reply(
         temperature=cfg.llm.temperature,
         settings=settings,
     )
-    session.flow_current_node_id = flow_runtime.make_cursor(flow_uuid, node.get("id"))
+    session.flow_current_node_id = flow_runtime.make_cursor(
+        flow_uuid, flow_row.version, node.get("id")
+    )
     return reply
 
 
@@ -412,8 +414,12 @@ async def delete_chat(db: AsyncSession, chat_id: str) -> None:
 async def list_chats(
     db: AsyncSession, body: ListChatsRequest
 ) -> tuple[list[ChatSession], str | None, bool, int | None]:
-    sessions = await chats_repo.query_sessions(db, body)
+    # Fetch one extra row to tell a full page from a truncated one (has_more), without
+    # leaking the +1 into the repo primitive (which honors the requested limit exactly).
+    probe = body.model_copy(update={"limit": body.limit + 1})
+    rows = await chats_repo.query_sessions(db, probe)
+    has_more = len(rows) > body.limit
+    sessions = rows[: body.limit]
     pagination_key = ids.encode_chat_id(sessions[-1].id) if sessions else None
-    has_more = len(sessions) == body.limit
     total = await chats_repo.count_sessions(db, body) if body.include_total else None
     return sessions, pagination_key, has_more, total

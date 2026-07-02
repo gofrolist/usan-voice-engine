@@ -187,6 +187,12 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
         settings=settings,
     )
     await session.start(agent=agent, room=ctx.room)
+    # Arm the crisis safety net whenever we have a call_id, even for an unknown caller: a
+    # human expressing a crisis phrase must still trigger deterministic escalation
+    # (US1 / FR-002), regardless of whether we recognized the number.
+    _unknown_call_id = str(info["call_id"]) if info and info.get("call_id") else None
+    if _unknown_call_id:
+        _arm_crisis_safety_net(session, call_id=_unknown_call_id, settings=settings)
     # Arm the max-duration guard on this path too (it backstops the cost/safety cap on
     # every answered call). Hold a reference so the fire-and-forget task is not GC'd.
     _guard_task = asyncio.create_task(_max_duration_guard(ctx, cfg.timing.max_call_duration_s))
@@ -452,6 +458,15 @@ def _register_dynamic_vars_receiver(
     def _on_data(data_packet: Any) -> None:
         if data_packet.topic != DYNAMIC_VARS_TOPIC:
             return
+        # Only trust server-originated broadcasts: the API sends var updates via
+        # RoomService.SendData, which arrive with participant=None. A packet from a room
+        # participant (e.g. a web_call browser client holding canPublishData) must not be
+        # able to rewrite the live system prompt.
+        if getattr(data_packet, "participant", None) is not None:
+            logger.bind(room=room_name).warning(
+                "dynamic-vars: ignored packet from a room participant (not server-origin)"
+            )
+            return
 
         async def _apply(new_instructions: str) -> None:
             # On a flow-active call the flow owns the system prompt (it is rebuilt each turn
@@ -466,11 +481,18 @@ def _register_dynamic_vars_receiver(
             await agent.update_instructions(new_instructions)
             logger.bind(room=room_name).debug("dynamic-vars: instructions updated mid-call")
 
+        def _spawn(new_instructions: str) -> None:
+            # Hold a strong reference: a bare create_task/ensure_future can be GC-collected
+            # mid-flight (see _BACKGROUND_TASKS note), silently dropping the instruction update.
+            task = asyncio.create_task(_apply(new_instructions))
+            _BACKGROUND_TASKS.add(task)
+            task.add_done_callback(_BACKGROUND_TASKS.discard)
+
         apply_dynamic_vars(
             data_packet.data,
             current_vars=current_vars,
             template=template,
-            on_update=lambda new_instructions: asyncio.ensure_future(_apply(new_instructions)),
+            on_update=_spawn,
         )
 
     ctx.room.on("data_received", _on_data)

@@ -292,6 +292,20 @@ def require_super_admin(
     return principal
 
 
+async def require_active_org(
+    principal: AdminPrincipal = Depends(require_admin_session),
+) -> AdminPrincipal:
+    """Require an active org context, returning 409 (like get_tenant_db) when none is set.
+
+    For endpoints gated on require_admin_role(VIEWER) alone with no get_tenant_db (the
+    catalog routers): without this, require_admin_role(VIEWER) is a no-op and an org-less
+    session reaches them. A super-admin with no active org gets "pick an org", not access.
+    """
+    if principal.active_org_id is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="no active organization")
+    return principal
+
+
 def require_admin_role(
     required: AdminRole,
 ) -> Callable[..., Coroutine[Any, Any, AdminPrincipal]]:

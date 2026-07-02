@@ -21,8 +21,16 @@ async def is_blocked(db: AsyncSession, phone_e164: str) -> bool:
     return result.scalar_one_or_none() is not None
 
 
+async def _get_for_org(db: AsyncSession, phone_e164: str) -> DNCEntry | None:
+    # RLS scopes this to the current org, so a phone another org already suppressed
+    # is invisible here. db.get() can't be used now that the PK is composite
+    # (phone_e164, organization_id) and organization_id is RLS-injected, not known here.
+    result = await db.execute(select(DNCEntry).where(DNCEntry.phone_e164 == phone_e164))
+    return result.scalar_one_or_none()
+
+
 async def add_entry(db: AsyncSession, phone_e164: str, reason: str | None) -> DNCEntry:
-    entry = await db.get(DNCEntry, phone_e164)
+    entry = await _get_for_org(db, phone_e164)
     if entry is None:
         entry = DNCEntry(phone_e164=phone_e164, reason=reason)
         db.add(entry)
@@ -34,7 +42,7 @@ async def add_entry(db: AsyncSession, phone_e164: str, reason: str | None) -> DN
 
 
 async def remove_entry(db: AsyncSession, phone_e164: str) -> bool:
-    entry = await db.get(DNCEntry, phone_e164)
+    entry = await _get_for_org(db, phone_e164)
     if entry is None:
         return False
     await db.delete(entry)

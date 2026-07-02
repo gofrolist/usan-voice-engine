@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    PrimaryKeyConstraint,
     SmallInteger,
     Text,
     Time,
@@ -110,8 +111,13 @@ class Contact(Base, TenantScoped):
 
 class DNCEntry(Base, TenantScoped):
     __tablename__ = "dnc_list"
+    # Composite PK (phone_e164, organization_id): the same number may be suppressed
+    # independently by different orgs. Without organization_id in the PK, org B's
+    # INSERT of a number org A already holds collides on the sole-phone PK — RLS hides
+    # A's row so the upsert-check misses it, then the INSERT 500s (migration 0052).
+    __table_args__ = (PrimaryKeyConstraint("phone_e164", "organization_id", name="dnc_list_pkey"),)
 
-    phone_e164: Mapped[str] = mapped_column(Text, primary_key=True)
+    phone_e164: Mapped[str] = mapped_column(Text)
     reason: Mapped[str | None] = mapped_column(Text)
     added_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

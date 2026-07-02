@@ -244,7 +244,9 @@ async def _query_calls(db: AsyncSession, body: ListCallsRequest) -> list[Call]:
         stmt = stmt.order_by(Call.created_at.asc(), Call.id.asc())
     if body.skip:
         stmt = stmt.offset(body.skip)
-    stmt = stmt.limit(body.limit)
+    # Fetch one extra row so the caller can tell "exactly a full page" from "more pages
+    # exist" — len(rows) == limit alone reports a false has_more on an exact multiple.
+    stmt = stmt.limit(body.limit + 1)
     return list((await db.execute(stmt)).scalars().all())
 
 
@@ -267,7 +269,9 @@ async def list_calls(
     db: AsyncSession = Depends(get_compat_db),
     settings: Settings = Depends(get_settings),
 ) -> ListCallsResponse:
-    calls = await _query_calls(db, body)
+    rows = await _query_calls(db, body)
+    has_more = len(rows) > body.limit
+    calls = rows[: body.limit]
     _audit(request, "list-calls")
     host = client_ip(request)
     # Lighter per-row serialization (no transcript/recording) to avoid N IAM signings;
@@ -281,7 +285,7 @@ async def list_calls(
     return ListCallsResponse(
         items=items,
         pagination_key=ids.encode_call_id(calls[-1].id) if calls else None,
-        has_more=len(calls) == body.limit,
+        has_more=has_more,
         total=await _count_calls(db, body) if body.include_total else None,
     )
 
