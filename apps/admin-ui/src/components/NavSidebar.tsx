@@ -3,9 +3,8 @@ import { NavLink } from "react-router-dom";
 import { cn } from "../lib/cn";
 import { useSession, useIsAdmin } from "../auth/useSession";
 import { api } from "../lib/api";
-import { Button } from "./ui/button";
-import { ThemeToggle } from "./ui/ThemeToggle";
 import { OrgSwitcher } from "./OrgSwitcher";
+import { UserMenu } from "./UserMenu";
 import {
   AuditIcon,
   CallsIcon,
@@ -145,31 +144,15 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
           );
         })}
       </nav>
-      <div className="border-t border-line px-4 py-3">
+      <div className="border-t border-line px-3 py-3">
         <OrgSwitcher />
-        <div className="mb-2.5 flex items-center justify-between">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">
-            Appearance
-          </span>
-          <ThemeToggle />
+        <UserMenu me={me} onLogout={logout} />
+        <div
+          className="mt-2.5 text-right text-[10px] font-medium tracking-wide text-faint tabular-nums"
+          title={`Deployed API version${me?.version ? ` ${me.version}` : ""}`}
+        >
+          {me?.version ?? ""}
         </div>
-        <div className="truncate text-sm text-ink" title={me?.email}>
-          {me?.email}
-        </div>
-        {me?.active_org ? (
-          <div
-            className="truncate text-xs text-faint"
-            title={me.active_org.name}
-          >
-            {me.active_org.name}
-            {me.active_org.role ? (
-              <span className="uppercase tracking-wide"> · {me.active_org.role}</span>
-            ) : null}
-          </div>
-        ) : null}
-        <Button variant="ghost" className="mt-1 px-0" onClick={logout}>
-          Log out
-        </Button>
       </div>
     </div>
   );

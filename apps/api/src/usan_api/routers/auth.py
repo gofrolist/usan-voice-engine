@@ -393,6 +393,7 @@ async def logout(
 async def me(
     principal: AdminPrincipal = Depends(require_admin_session),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> MeResponse:
     """The caller's identity: their memberships (orgs + role), the active org, and the
     super/act-as flags. Super-admin org browsing for act-as is served separately by
@@ -422,6 +423,7 @@ async def me(
         acting_as=principal.acting_as,
         active_org=active,
         orgs=summaries,
+        version=settings.app_version,
     )
 
 
@@ -473,6 +475,7 @@ async def switch_org(
             role=role.value if not acting_as else None,
         ),
         orgs=[],  # client refetches /me for the full list
+        version=settings.app_version,
     )
     resp = JSONResponse(out.model_dump(mode="json"))
     set_session_cookie(

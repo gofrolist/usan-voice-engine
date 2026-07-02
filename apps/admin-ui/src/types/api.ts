@@ -322,6 +322,7 @@ export interface Me {
   acting_as: boolean;
   active_org: OrgSummary | null;
   orgs: OrgSummary[];
+  version: string; // deployed API build version (git tag, e.g. "v0.12.0"; "dev" locally)
 }
 
 export interface SwitchOrgRequest {

@@ -43,6 +43,7 @@ function superAdmin(): Me {
     acting_as: false,
     active_org: null,
     orgs: [],
+    version: "dev",
   };
 }
 
