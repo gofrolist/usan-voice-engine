@@ -37,6 +37,7 @@ from usan_api.routers import (
     admin_dnc,
     admin_family,
     admin_invites,
+    admin_knowledge_bases,
     admin_members,
     admin_model_catalog,
     admin_organizations,
@@ -257,6 +258,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_organizations.router)
     app.include_router(admin_audit.router)
     app.include_router(admin_contacts.router)
+    app.include_router(admin_knowledge_bases.router)
     app.include_router(admin_schedules.router)
     app.include_router(admin_family.router)
     app.include_router(admin_invites.router)
