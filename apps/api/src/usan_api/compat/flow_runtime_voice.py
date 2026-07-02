@@ -27,7 +27,7 @@ from usan_api.settings import Settings
 
 async def resolve_bound_flow(
     db: AsyncSession, settings: Settings, call_id: uuid.UUID
-) -> tuple[dict[str, Any], dict[str, str], str, uuid.UUID] | None:
+) -> tuple[dict[str, Any], dict[str, str], str, uuid.UUID, int] | None:
     """(flow_config, values, model, flow_uuid) for the call's bound RUNNABLE flow, else None.
 
     Resolves the call -> its winning published agent version (same precedence the
@@ -72,7 +72,7 @@ async def resolve_bound_flow(
     # mirroring the chat flow path. Mid-call agent-side var updates are NOT reflected (deferred).
     values = flow_runtime.merge_flow_values(flow_config, call.dynamic_vars or {})
     model = flow_runtime.flow_model(flow_config, cfg.llm.model)
-    return flow_config, values, model, flow_uuid
+    return flow_config, values, model, flow_uuid, flow_row.version
 
 
 async def advance(
@@ -89,8 +89,8 @@ async def advance(
     resolved = await resolve_bound_flow(db, settings, call_id)
     if resolved is None:
         return FlowAdvanceResponse(bound=False)
-    flow_config, values, model, flow_uuid = resolved
-    node_id = flow_runtime.cursor_for_flow(cursor, flow_uuid)
+    flow_config, values, model, flow_uuid, flow_version = resolved
+    node_id = flow_runtime.cursor_for_flow(cursor, flow_uuid, flow_version)
     current = flow_runtime.node_by_id(flow_config, node_id)
     if current is None:
         node = flow_runtime.node_by_id(flow_config, flow_config.get("start_node_id"))
@@ -105,7 +105,7 @@ async def advance(
     return FlowAdvanceResponse(
         bound=True,
         node_id=node.get("id"),
-        cursor=flow_runtime.make_cursor(flow_uuid, node.get("id")),
+        cursor=flow_runtime.make_cursor(flow_uuid, flow_version, node.get("id")),
         instruction=flow_runtime.assemble_instruction(flow_config, node, values),
         is_end=node.get("type") == "end",
     )

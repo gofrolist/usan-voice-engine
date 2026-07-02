@@ -153,10 +153,17 @@ async def deliver_one(
             ) as response:
                 response_code = response.status_code
                 drained = 0
+                # httpx read timeout resets on every chunk, so a receiver that trickles
+                # bytes just under it (never crossing the byte cap) could hold this slot open
+                # far past the configured timeout, delaying every other row for this endpoint.
+                # Enforce a wall-clock deadline; TimeoutError settles via the OSError branch.
+                deadline = time.monotonic() + settings.webhook_delivery_timeout_s
                 async for chunk in response.aiter_bytes():
                     drained += len(chunk)
                     if drained >= settings.webhook_delivery_max_response_bytes:
                         break
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("webhook response exceeded delivery timeout")
                 response.raise_for_status()
         except (httpx.HTTPError, OSError, ValueError, SsrfBlocked) as exc:
             # OSError covers socket.gaierror (NXDOMAIN — the most common

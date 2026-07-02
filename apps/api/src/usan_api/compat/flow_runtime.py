@@ -60,21 +60,27 @@ def bound_flow_id(raw: Mapping[str, Any]) -> uuid.UUID | None:
         return None
 
 
-def make_cursor(flow_uuid: uuid.UUID, node_id: str | None) -> str:
+def make_cursor(flow_uuid: uuid.UUID, flow_version: int, node_id: str | None) -> str:
     """Encode the opaque, flow-qualified cursor token round-tripped by chat and voice
-    callers: ``"<flow_uuid>:<node_id>"``. The caller never interprets it."""
-    return f"{flow_uuid}:{node_id}"
+    callers: ``"<flow_uuid>:<flow_version>:<node_id>"``. The caller never interprets it."""
+    return f"{flow_uuid}:{flow_version}:{node_id}"
 
 
-def cursor_for_flow(stored: str | None, flow_uuid: uuid.UUID) -> str | None:
-    """The node id from a stored ``"<flow_uuid>:<node_id>"`` cursor, but ONLY if it belongs to
-    the currently-bound flow; otherwise None (re-enter at start). This guards against an agent
-    being repointed to a DIFFERENT flow mid-session (a Phase 6c update-agent op): a stale cursor
-    from the old flow must not resolve against a same-named node in the new one."""
+def cursor_for_flow(stored: str | None, flow_uuid: uuid.UUID, flow_version: int) -> str | None:
+    """The node id from a stored ``"<flow_uuid>:<flow_version>:<node_id>"`` cursor, but ONLY if it
+    belongs to the currently-bound flow AT THE SAME VERSION; otherwise None (re-enter at start).
+
+    Qualifying by flow uuid alone is not enough: conversation_flows.update() mutates the flow row
+    in place and bumps ``version``, so a node id valid before an edit may point at a semantically
+    different node after it. A version mismatch (or a legacy 2-part cursor written before this
+    change) safely re-enters at start rather than resuming on the wrong node."""
     if not stored:
         return None
-    prefix, sep, node_id = stored.partition(":")
-    if not sep or prefix != str(flow_uuid):
+    parts = stored.split(":", 2)
+    if len(parts) != 3:
+        return None
+    prefix, version, node_id = parts
+    if prefix != str(flow_uuid) or version != str(flow_version):
         return None
     return node_id or None
 
@@ -172,6 +178,14 @@ def _equation_true(eq: Mapping[str, Any], values: Mapping[str, str]) -> bool:
         return left != right
     if op == "contains":
         return right in left
+    if op == "not_contains":
+        return right not in left
+    # exists / not_exist test presence of a value. substitute() renders a missing var to "",
+    # so a non-empty substituted `left` means the referenced variable resolved to a value.
+    if op == "exists":
+        return bool(left.strip())
+    if op == "not_exist":
+        return not left.strip()
     left_num, right_num = _coerce_number(left), _coerce_number(right)
     if left_num is None or right_num is None:
         return False

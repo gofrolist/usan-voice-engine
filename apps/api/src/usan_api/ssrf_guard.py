@@ -108,6 +108,10 @@ def validate_webhook_url(url: str) -> str:
     return url
 
 
+# upper bound on delivery-time getaddrinfo; a hung resolve must not stall the poller
+_DNS_TIMEOUT_S = 5.0
+
+
 async def _resolve(host: str) -> list[str]:
     """Resolution seam — delivery-time tests monkeypatch this.
 
@@ -128,7 +132,15 @@ async def resolve_public_or_raise(host: str) -> list[str]:
     PIN the connection to a vetted IP (see ``pin_to_ip``), closing the
     resolve-then-connect TOCTOU instead of letting httpx re-resolve at connect.
     """
-    addrs = await _resolve(host)
+    try:
+        # Bound DNS: getaddrinfo has no inherent timeout, so a blackholed host (dropped
+        # packets, not NXDOMAIN) would hang here indefinitely — and because the delivery
+        # poller awaits all groups together, a single hung resolve stalls the whole cycle
+        # (housekeeping, gauges, every other endpoint). TimeoutError subclasses OSError, so
+        # the delivery worker's except tuple settles it as a normal retry/failure.
+        addrs = await asyncio.wait_for(_resolve(host), timeout=_DNS_TIMEOUT_S)
+    except TimeoutError as exc:
+        raise SsrfBlocked("DNS resolution timed out") from exc
     if not addrs:
         # Fail-closed on empty resolution: all(...) over [] is vacuously true,
         # so non-emptiness must be checked first (spec §8.2 review fix).
@@ -139,7 +151,10 @@ async def resolve_public_or_raise(host: str) -> list[str]:
             # Explicit IPv4-mapped unwrap: ::ffff:a.b.c.d is judged as its
             # IPv4 self regardless of runtime is_global semantics (spec §8.2).
             ip = ip.ipv4_mapped
-        if not ip.is_global:
+        # is_global is True for IPv4 multicast (224.0.0.0/4) on this interpreter, so the
+        # routability check alone is not sufficient; reject the non-unicast/reserved ranges
+        # explicitly to hold the "globally routable unicast" invariant.
+        if not ip.is_global or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
             raise SsrfBlocked("resolved address is not globally routable")
     return addrs
 

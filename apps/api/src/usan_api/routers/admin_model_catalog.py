@@ -7,14 +7,14 @@ curated ``LLMSection``/``STTSection`` selects in the editor.
 
 from fastapi import APIRouter, Depends
 
-from usan_api.auth import require_admin_role
+from usan_api.auth import require_active_org, require_admin_role
 from usan_api.db.base import AdminRole
 from usan_api.schemas.model_catalog import MODEL_CATALOG, ModelCatalogResponse
 
 router = APIRouter(
     prefix="/v1/admin/model-catalog",
     tags=["admin-model-catalog"],
-    dependencies=[Depends(require_admin_role(AdminRole.VIEWER))],
+    dependencies=[Depends(require_admin_role(AdminRole.VIEWER)), Depends(require_active_org)],
 )
 
 

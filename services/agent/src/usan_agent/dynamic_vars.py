@@ -19,6 +19,10 @@ from collections.abc import Callable, Mapping
 from loguru import logger
 
 from usan_agent import prompt_vars
+from usan_agent.sanitize import sanitize_prompt_value
+
+# Cap on each injected value; mirrors prompt_vars._INJECTED_VALUE_MAX_LEN.
+_INJECTED_VALUE_MAX_LEN = 300
 
 # Wire-contract constant — mirrors ``livekit_dispatch.DYNAMIC_VARS_TOPIC`` in
 # apps/api. The two services share no Python imports, so this value is intentionally
@@ -62,5 +66,13 @@ def apply_dynamic_vars(
     if not isinstance(incoming, dict) or not incoming:
         return
 
-    merged = {**current_vars, **{str(k): str(v) for k, v in incoming.items()}}
+    # Sanitize every incoming value before it reaches the live prompt (strip control
+    # chars / format-slot braces, cap length), mirroring how prompt_vars sanitizes
+    # resolved built-ins. The worker gates this on server-origin packets only, but
+    # sanitizing here is defense-in-depth nearest the LLM regardless of the sender.
+    sanitized_incoming = {
+        str(k): sanitize_prompt_value(v, max_len=_INJECTED_VALUE_MAX_LEN)
+        for k, v in incoming.items()
+    }
+    merged = {**current_vars, **sanitized_incoming}
     on_update(prompt_vars.substitute(template, merged))

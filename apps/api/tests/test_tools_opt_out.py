@@ -95,7 +95,11 @@ def _query(url, coro_factory):
 
 
 def _dnc_entry(url, phone: str) -> DNCEntry | None:
-    return _query(url, lambda db: db.get(DNCEntry, phone))
+    async def _q(db):
+        result = await db.execute(select(DNCEntry).where(DNCEntry.phone_e164 == phone))
+        return result.scalar_one_or_none()
+
+    return _query(url, _q)
 
 
 def _opt_out_acks(url, to_number: str) -> list[SmsMessage]:

@@ -134,10 +134,14 @@ def _make_fake_ctx() -> tuple[MagicMock, list]:
     return ctx, callbacks
 
 
-def _make_packet(topic: str, data: bytes) -> MagicMock:
+def _make_packet(topic: str, data: bytes, participant: object = None) -> MagicMock:
     pkt = MagicMock()
     pkt.topic = topic
     pkt.data = data
+    # Server-originated broadcasts (RoomService.SendData) arrive with participant=None,
+    # which is what the receiver trusts. Tests pass a non-None participant to simulate a
+    # room participant publishing directly (which must be ignored).
+    pkt.participant = participant
     return pkt
 
 
@@ -165,6 +169,27 @@ async def test_receiver_awaits_update_instructions_with_full_template() -> None:
     agent.update_instructions.assert_awaited_once_with(
         "Hello Ada, time for your check-in.\n\nSMS suffix here."
     )
+
+
+@pytest.mark.asyncio
+async def test_receiver_ignores_packet_from_room_participant() -> None:
+    """A packet published by a room participant (participant is not None) must be ignored:
+    only server-origin broadcasts (participant=None) may rewrite the live prompt."""
+    ctx, callbacks = _make_fake_ctx()
+    agent = MagicMock()
+    agent.update_instructions = AsyncMock()
+
+    _register_dynamic_vars_receiver(ctx, agent, {"first_name": "there"}, "Hello {{first_name}}")
+
+    pkt = _make_packet(
+        DYNAMIC_VARS_TOPIC,
+        json.dumps({"first_name": "Ada"}).encode(),
+        participant=MagicMock(),  # a real participant publishing directly
+    )
+    callbacks[0](pkt)
+    await asyncio.sleep(0)
+
+    agent.update_instructions.assert_not_called()
 
 
 @pytest.mark.asyncio

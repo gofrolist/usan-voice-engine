@@ -185,7 +185,7 @@ def test_bound_enters_start_node(client, async_database_url, flow_voice_on) -> N
     assert body["bound"] is True
     assert body["node_id"] == "n1"
     # cursor is the opaque, flow-qualified token the agent must round-trip next turn.
-    assert body["cursor"] == f"{seeded['flow_id']}:n1"
+    assert body["cursor"] == f"{seeded['flow_id']}:0:n1"
     assert "Greet the caller." in body["instruction"]
     assert "You are Ann's assistant." in body["instruction"]
     assert body["is_end"] is False
@@ -197,7 +197,7 @@ def test_always_edge_advances_to_end(client, async_database_url, flow_voice_on) 
         "/v1/runtime/flow-advance",
         json={
             "call_id": seeded["call_id"],
-            "cursor": f"{seeded['flow_id']}:n1",
+            "cursor": f"{seeded['flow_id']}:0:n1",
             "turns": [{"role": "user", "content": "ok bye"}],
         },
         headers=_wauth(),
@@ -205,7 +205,7 @@ def test_always_edge_advances_to_end(client, async_database_url, flow_voice_on) 
     body = resp.json()
     assert body["bound"] is True
     assert body["node_id"] == "n2"
-    assert body["cursor"] == f"{seeded['flow_id']}:n2"
+    assert body["cursor"] == f"{seeded['flow_id']}:0:n2"
     assert body["is_end"] is True
 
 
@@ -213,12 +213,12 @@ def test_stale_cursor_reenters_start(client, async_database_url, flow_voice_on) 
     seeded = _run(_seed(async_database_url, flow_config=_two_node_flow(), bind=True))
     resp = client.post(
         "/v1/runtime/flow-advance",
-        json={"call_id": seeded["call_id"], "cursor": f"{seeded['flow_id']}:ghost", "turns": []},
+        json={"call_id": seeded["call_id"], "cursor": f"{seeded['flow_id']}:0:ghost", "turns": []},
         headers=_wauth(),
     )
     body = resp.json()
     assert body["node_id"] == "n1"
-    assert body["cursor"] == f"{seeded['flow_id']}:n1"
+    assert body["cursor"] == f"{seeded['flow_id']}:0:n1"
 
 
 def test_repoint_to_different_flow_reenters_start_not_colliding_node(
@@ -230,7 +230,7 @@ def test_repoint_to_different_flow_reenters_start_not_colliding_node(
     # stale same-named-node cursor from the old flow.
     seeded = _run(_seed(async_database_url, flow_config=_two_node_flow(), bind=True))
     other_flow_uuid = uuid.uuid4()
-    stale_cursor = f"{other_flow_uuid}:n2"  # "n2" collides with a real node in the bound flow
+    stale_cursor = f"{other_flow_uuid}:0:n2"  # "n2" collides with a real node in the bound flow
     resp = client.post(
         "/v1/runtime/flow-advance",
         json={"call_id": seeded["call_id"], "cursor": stale_cursor, "turns": []},
@@ -239,7 +239,7 @@ def test_repoint_to_different_flow_reenters_start_not_colliding_node(
     body = resp.json()
     assert body["bound"] is True
     assert body["node_id"] == "n1"
-    assert body["cursor"] == f"{seeded['flow_id']}:n1"
+    assert body["cursor"] == f"{seeded['flow_id']}:0:n1"
     assert body["is_end"] is False
 
 

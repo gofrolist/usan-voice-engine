@@ -4,6 +4,7 @@ cancel in-flight speech/LLM → speak the scripted leave-message → report the
 outcome to the API → delete the room (hangs up the SIP leg) → shut the job down.
 """
 
+import asyncio
 from typing import Any
 
 from loguru import logger
@@ -11,6 +12,9 @@ from loguru import logger
 from usan_agent.agent_config import DEFAULT_AGENT_CONFIG
 from usan_agent.api_client import report_voicemail_left
 from usan_agent.settings import Settings
+
+# Upper bound on the scripted voicemail playout before we force teardown regardless.
+_TEARDOWN_SAY_TIMEOUT_S = 15.0
 
 
 async def leave_voicemail(
@@ -25,10 +29,18 @@ async def leave_voicemail(
 
     session.interrupt(force=True)  # cancel the greeting / any in-flight reply
     handle = session.say(voicemail_message, allow_interruptions=False, add_to_chat_ctx=False)
-    await handle  # wait for full playout before hanging up
+    try:
+        # Bound the playout so a stalled TTS pipeline can't leave the call open until the
+        # max-duration guard fires.
+        await asyncio.wait_for(handle, timeout=_TEARDOWN_SAY_TIMEOUT_S)
+    except Exception:
+        log.warning("voicemail playout did not complete; tearing down")
 
     if call_id:
         await report_voicemail_left(call_id, settings)
 
-    await ctx.delete_room()  # disconnects the SIP/PSTN leg = hangup
+    try:
+        await ctx.delete_room()  # disconnects the SIP/PSTN leg = hangup
+    except Exception:
+        log.warning("delete_room failed leaving voicemail (best-effort)")
     ctx.shutdown(reason="voicemail_left")

@@ -48,7 +48,7 @@ async def create_retell_llm(
     profile = await agent_bridge.create_response_engine(db, settings, body)
     response.status_code = status.HTTP_201_CREATED
     _audit(request, "create-retell-llm", ids.encode_llm_id(profile.id))
-    return agent_bridge.serialize_llm(profile).model_dump()
+    return agent_bridge.serialize_llm(profile).model_dump(exclude_none=True)
 
 
 @router.get("/get-retell-llm/{llm_id}")
@@ -59,7 +59,7 @@ async def get_retell_llm(
 ) -> dict[str, Any]:
     profile = await agent_bridge.get_llm_profile(db, llm_id)
     _audit(request, "get-retell-llm", llm_id)
-    return agent_bridge.serialize_llm(profile).model_dump()
+    return agent_bridge.serialize_llm(profile).model_dump(exclude_none=True)
 
 
 @router.patch("/update-retell-llm/{llm_id}")
@@ -72,7 +72,7 @@ async def update_retell_llm(
 ) -> dict[str, Any]:
     profile = await agent_bridge.update_response_engine(db, settings, llm_id, body)
     _audit(request, "update-retell-llm", llm_id)
-    return agent_bridge.serialize_llm(profile).model_dump()
+    return agent_bridge.serialize_llm(profile).model_dump(exclude_none=True)
 
 
 @router.delete("/delete-retell-llm/{llm_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -96,7 +96,7 @@ async def list_retell_llms(
 ) -> list[dict[str, Any]]:
     profiles = await agent_bridge.list_agent_profiles(db)
     _audit(request, "list-retell-llms")
-    return [agent_bridge.serialize_llm(p).model_dump() for p in profiles[:limit]]
+    return [agent_bridge.serialize_llm(p).model_dump(exclude_none=True) for p in profiles[:limit]]
 
 
 @router.get("/v2/list-retell-llms")
@@ -125,7 +125,7 @@ async def list_retell_llms_v2(
     has_more = len(profiles) > limit
     page = profiles[:limit]
     out: dict[str, Any] = {
-        "items": [agent_bridge.serialize_llm(p).model_dump() for p in page],
+        "items": [agent_bridge.serialize_llm(p).model_dump(exclude_none=True) for p in page],
         "has_more": has_more,
     }
     if has_more:

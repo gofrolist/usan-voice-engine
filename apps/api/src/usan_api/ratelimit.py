@@ -16,6 +16,7 @@ Behind Caddy the real client arrives in X-Forwarded-For (Caddy overwrites it wit
 the direct peer — see infra/Caddyfile), so we key on its first hop, not the proxy.
 """
 
+import hashlib
 import time
 
 from limits import RateLimitItem, parse
@@ -77,12 +78,16 @@ def _is_compat_route(path: str) -> bool:
 
 
 def _compat_bucket_key(request: Request) -> str:
-    """Per-key bucket key from the Bearer prefix (falls back to client IP when absent)."""
+    """Per-key bucket key from a hash of the full Bearer token (falls back to client IP).
+
+    Hashing the whole token — not an 8-char prefix ("key_" + 4 real chars ≈ 24 bits) —
+    keeps distinct orgs' keys in distinct buckets so one busy key can't throttle another.
+    """
     auth = request.headers.get("Authorization", "")
     if auth[:7].lower() == "bearer ":
         token = auth[7:].strip()
         if token:
-            return "key:" + token[:8]
+            return "key:" + hashlib.sha256(token.encode()).hexdigest()[:16]
     return "ip:" + (request.client.host if request.client else "unknown")
 
 

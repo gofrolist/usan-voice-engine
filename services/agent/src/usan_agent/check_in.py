@@ -7,6 +7,7 @@ failure never crashes the call. end_call mirrors leave_voicemail: report → say
 goodbye → delete_room → shutdown.
 """
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -340,6 +341,10 @@ async def _do_set_spanish_callback(data: CheckInData) -> str:
     return "Of course — we'll call you back in Spanish soon. Take care."
 
 
+# Upper bound on goodbye/voicemail playout before we force teardown regardless.
+_TEARDOWN_SAY_TIMEOUT_S = 15.0
+
+
 async def _hang_up(data: CheckInData, session: Any) -> None:
     """Say goodbye and tear the room down. Makes NO api_client / network call.
 
@@ -347,8 +352,16 @@ async def _hang_up(data: CheckInData, session: Any) -> None:
     test-mode ``noop_end_call`` (which must hang up without any ``/v1/tools/*`` call).
     """
     handle = session.say(data.goodbye_message, allow_interruptions=False, add_to_chat_ctx=False)
-    await handle
-    await data.job_ctx.delete_room()
+    try:
+        # Bound the goodbye playout: a stalled TTS pipeline must not hold the call open
+        # until the max-duration guard eventually fires (up to max_call_duration_s).
+        await asyncio.wait_for(handle, timeout=_TEARDOWN_SAY_TIMEOUT_S)
+    except Exception:
+        logger.bind(call_id=data.call_id).warning("goodbye playout did not complete; tearing down")
+    try:
+        await data.job_ctx.delete_room()
+    except Exception:
+        logger.bind(call_id=data.call_id).warning("delete_room failed during hang-up (best-effort)")
     data.job_ctx.shutdown(reason="ended_by_agent")
 
 

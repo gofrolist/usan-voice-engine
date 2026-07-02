@@ -119,7 +119,8 @@ async def _make_contact_for_new_contact(session_factory, *, phone: str) -> str:
 
 async def _dnc_blocked(session_factory, phone: str) -> bool:
     async with session_factory() as db:
-        return (await db.get(DNCEntry, phone)) is not None
+        result = await db.execute(select(DNCEntry).where(DNCEntry.phone_e164 == phone))
+        return result.scalar_one_or_none() is not None
 
 
 async def _acks_to(session_factory, phone: str) -> list[SmsMessage]:
