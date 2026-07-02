@@ -35,6 +35,7 @@ function makeMe(over: Partial<Me> = {}): Me {
     acting_as: false,
     active_org: null,
     orgs: [],
+    version: "dev",
     ...over,
   };
 }

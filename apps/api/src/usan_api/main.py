@@ -63,6 +63,8 @@ from usan_api.settings import Settings, get_settings
 
 class HealthResponse(BaseModel):
     status: str
+    version: str
+    git_sha: str
 
 
 async def _seed_admin_allowlist(settings: Settings) -> None:
@@ -244,7 +246,9 @@ def create_app() -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
-        return HealthResponse(status="ok")
+        # `settings` is captured from the create_app closure — no DB, no auth, so the
+        # Docker/Caddy health probes stay dependency-free while also reporting build info.
+        return HealthResponse(status="ok", version=settings.app_version, git_sha=settings.git_sha)
 
     app.include_router(admin_profiles.router)
     app.include_router(admin_defaults.router)

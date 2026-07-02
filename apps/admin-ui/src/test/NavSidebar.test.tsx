@@ -58,6 +58,13 @@ describe("NavSidebar Operate group", () => {
     expect(screen.getByRole("link", { name: "Queues" })).toHaveAttribute("href", "/queues");
   });
 
+  it("renders the deployed version in the footer", async () => {
+    renderSidebar();
+    await screen.findByText("me@example.com");
+    // meFixture sets version "dev"; the footer surfaces me.version.
+    expect(screen.getByText("dev")).toBeInTheDocument();
+  });
+
   it("regression: Contacts stays hidden for the viewer", async () => {
     renderSidebar();
     await screen.findByText("me@example.com");

@@ -8,6 +8,7 @@ export function meFixture(role: AdminUserRole, over: Partial<Me> = {}): Me {
     email: "me@example.com",
     is_super_admin: false,
     acting_as: false,
+    version: "dev",
     active_org: {
       id: "00000000-0000-0000-0000-0000000000a1",
       name: "Acme Care",

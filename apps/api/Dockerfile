@@ -69,6 +69,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # (build.yml feeds GIT_SHA/VERSION; local builds default to "dev").
 ARG GIT_SHA=dev
 ARG VERSION=dev
+# Promote to ENV so the running process (Settings.app_version / git_sha) can report the
+# deployed version at runtime via /health and /v1/auth/me — not just as an OCI label.
+ENV APP_VERSION=${VERSION} \
+    GIT_SHA=${GIT_SHA}
 LABEL org.opencontainers.image.source="https://github.com/gofrolist/usan-voice-engine" \
       org.opencontainers.image.revision="${GIT_SHA}" \
       org.opencontainers.image.version="${VERSION}" \

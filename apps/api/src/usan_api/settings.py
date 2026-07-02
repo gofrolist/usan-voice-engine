@@ -15,6 +15,12 @@ _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ""})
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
+    # Build provenance, baked into the image as ENV by apps/api/Dockerfile (CI passes the
+    # git tag as VERSION and the commit as GIT_SHA). Surfaced via /health and /v1/auth/me
+    # so the admin UI can show the deployed version. Defaults "dev" for local/uncontainerized runs.
+    app_version: str = Field(default="dev", alias="APP_VERSION")
+    git_sha: str = Field(default="dev", alias="GIT_SHA")
+
     database_url: SecretStr = Field(..., min_length=1, alias="DATABASE_URL")
     # Slug of the implicit default organization (multi-tenant foundation P1). The
     # tenant-context resolver maps every request to this single seeded org until P2

@@ -212,6 +212,8 @@ def test_me_returns_orgs_active_and_flags(client, async_database_url):
     assert body["active_org"]["role"] == "admin"
     assert [o["id"] for o in body["orgs"]] == [str(org)]
     assert body["orgs"][0]["role"] == "admin"
+    # Deployed build version for the admin-UI footer; "dev" in the uncontainerized test env.
+    assert body["version"] == "dev"
 
 
 def test_me_super_admin_no_active_org(client, async_database_url):

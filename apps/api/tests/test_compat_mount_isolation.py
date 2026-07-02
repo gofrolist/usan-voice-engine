@@ -14,7 +14,7 @@ from usan_api.main import _assert_no_route_collisions
 def test_health_unaffected_by_mount(client):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    assert r.json()["status"] == "ok"
 
 
 def test_native_route_keeps_detail_envelope(client):
