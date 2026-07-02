@@ -250,7 +250,7 @@ async def create_response_engine(
         begin_message=body.begin_message,
         knowledge_base_ids=body.knowledge_base_ids,
     )
-    _merge_extras(config, "llm", body.model_dump())
+    _merge_extras(config, "llm", body.model_dump(exclude_none=True))
     _validate_config(config)
     # The provisional name is a uuid8 suffix (deduped), so create_profile's INSERT cannot
     # realistically collide — no IntegrityError guard needed on this path.
