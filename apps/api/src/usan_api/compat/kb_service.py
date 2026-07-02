@@ -4,14 +4,12 @@ reference (content lives in the DB; not publicly served in v1 — documented pos
 
 from __future__ import annotations
 
-import uuid
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.compat import ids
 from usan_api.compat.errors import CompatError
+from usan_api.compat.kb_sources import TextSource, add_text_sources
 from usan_api.compat.schemas.knowledge_bases import (
-    KbTextInput,
     ParsedKbAddSources,
     ParsedKbCreate,
 )
@@ -22,11 +20,6 @@ from usan_api.tenant_context import set_tenant_context
 _NAME_MAX = 40
 _CHUNK_MAX_LO, _CHUNK_MAX_HI = 600, 6000
 _CHUNK_MIN_LO, _CHUNK_MIN_HI = 200, 2000
-
-
-def _content_url(source_id: uuid.UUID) -> str:
-    # Internal reference; not publicly served in v1 (documented posture).
-    return f"https://knowledge-base.internal/source/{ids.encode_kb_source_id(source_id)}"
 
 
 def _reject_unsupported_sources(has_files: bool, has_urls: bool) -> None:
@@ -46,15 +39,6 @@ def _validate_create(p: ParsedKbCreate) -> None:
     _reject_unsupported_sources(p.has_files, p.has_urls)
 
 
-async def _persist_texts(db: AsyncSession, kb_id: uuid.UUID, texts: list[KbTextInput]) -> None:
-    for t in texts:
-        src = await repo.add_source(
-            db, kb_id, source_type="text", title=t.title, content=t.text, content_url=""
-        )
-        src.content_url = _content_url(src.id)
-    await db.flush()
-
-
 async def create_kb(db: AsyncSession, parsed: ParsedKbCreate) -> KnowledgeBase:
     _validate_create(parsed)
     kb = await repo.create_kb(
@@ -64,7 +48,9 @@ async def create_kb(db: AsyncSession, parsed: ParsedKbCreate) -> KnowledgeBase:
         min_chunk_size=parsed.min_chunk_size,
         enable_auto_refresh=parsed.enable_auto_refresh,
     )
-    await _persist_texts(db, kb.id, parsed.texts)
+    await add_text_sources(
+        db, kb.id, [TextSource(title=t.title, text=t.text) for t in parsed.texts]
+    )
     await db.commit()
     return kb
 
@@ -78,9 +64,9 @@ async def add_sources(
     if kb is None:
         raise CompatError(404, "knowledge base not found")
     org_id = kb.organization_id
-    await _persist_texts(db, kb_id, parsed.texts)
-    if parsed.texts:
-        await repo.mark_in_progress(db, kb_id)  # new sources are un-chunked -> re-claimed
+    await add_text_sources(
+        db, kb_id, [TextSource(title=t.title, text=t.text) for t in parsed.texts]
+    )
     await db.commit()
     # In prod the get_compat_db after_begin listener already re-applies app.current_org on the
     # new post-commit transaction, so the SELECT below is RLS-scoped. This explicit re-apply is
