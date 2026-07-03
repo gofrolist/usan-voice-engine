@@ -92,6 +92,19 @@ def test_delete_kb_with_sources_cascades(client, admin_session):
     assert client.get(f"/v1/admin/knowledge-bases/{kb_id}").status_code == 404
 
 
+def test_list_includes_roundtrippable_agent_ref(client, admin_session):
+    import uuid as _uuid
+
+    from usan_api.compat import ids
+
+    kb_id = client.post("/v1/admin/knowledge-bases", json={"name": "Refable"}).json()["id"]
+    rows = client.get("/v1/admin/knowledge-bases").json()
+    row = next(k for k in rows if k["id"] == kb_id)
+    assert row["agent_ref"] == ids.encode_kb_id(_uuid.UUID(kb_id))
+    # round-trips back to the raw id (this is the token the runtime decodes)
+    assert str(ids.decode_kb_id(row["agent_ref"])) == kb_id
+
+
 def test_get_unknown_kb_404(client, admin_session):
     assert (
         client.get("/v1/admin/knowledge-bases/00000000-0000-0000-0000-000000000000").status_code

@@ -14,6 +14,7 @@ TITLE_MAX = 200
 
 class KbSummary(BaseModel):
     id: uuid.UUID
+    agent_ref: str  # encoded knowledge_base_<hex> token — the id the agent config stores/binds
     name: str
     status: str
     source_count: int

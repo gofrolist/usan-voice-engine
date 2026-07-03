@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from usan_api.admin_actor import get_actor_email
 from usan_api.auth import get_tenant_db, require_admin_role, require_admin_session
+from usan_api.compat import ids
 from usan_api.compat.kb_sources import TextSource, add_text_sources
 from usan_api.db.base import AdminRole
 from usan_api.db.models import KnowledgeBase
@@ -63,6 +64,7 @@ async def list_knowledge_bases(db: AsyncSession = Depends(get_tenant_db)) -> lis
     return [
         KbSummary(
             id=k.id,
+            agent_ref=ids.encode_kb_id(k.id),
             name=k.name,
             status=k.status,
             source_count=len(by_kb.get(k.id, [])),
