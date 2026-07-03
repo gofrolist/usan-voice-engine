@@ -33,6 +33,7 @@ export interface VoiceConfig {
 export interface LLMConfig {
   model: string;
   temperature: number | null;
+  knowledge_base_ids: string[] | null;
 }
 
 export interface STTConfig {
@@ -588,6 +589,7 @@ export interface CompatKeyCreated extends CompatKey {
 
 export interface KbSummary {
   id: string;
+  agent_ref: string;
   name: string;
   status: string;
   source_count: number;

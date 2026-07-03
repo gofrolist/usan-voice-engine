@@ -12,6 +12,7 @@ export type SectionKey =
   | "prompts"
   | "voice"
   | "llm"
+  | "knowledge_base"
   | "stt"
   | "timing"
   | "tools"
@@ -23,6 +24,7 @@ export const SECTION_LABELS: Record<SectionKey, string> = {
   prompts: "Prompts",
   voice: "Voice",
   llm: "LLM",
+  knowledge_base: "Knowledge Base",
   stt: "STT",
   timing: "Timing",
   tools: "Tools",

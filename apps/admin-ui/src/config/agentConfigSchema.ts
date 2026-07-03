@@ -122,6 +122,9 @@ export const voiceSchema = z.object({
 export const llmSchema = z.object({
   model: z.string().min(1).max(200),
   temperature: z.number().gte(0.0).lte(2.0).nullable(),
+  // Bound KB tokens (knowledge_base_<hex>). preprocess coerces null/undefined (older
+  // drafts, or a server null) to [] so the field round-trips instead of being stripped.
+  knowledge_base_ids: z.preprocess((v) => v ?? [], z.array(z.string())),
 });
 
 export const sttSchema = z.object({

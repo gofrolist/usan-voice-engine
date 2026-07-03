@@ -44,7 +44,7 @@ const FALLBACK: AgentConfig = {
     inbound_personalization_template: "Speak with the caller.",
   },
   voice: { cartesia_voice_id: null, tts_model: null, speed: null, language: null },
-  llm: { model: "gemini-3.1-flash-lite", temperature: null },
+  llm: { model: "gemini-3.1-flash-lite", temperature: null, knowledge_base_ids: [] },
   stt: { model: "ink-whisper", language: null },
   timing: { answer_timeout_s: 50, max_call_duration_s: 1800 },
   tools: { enabled: ["log_wellness", "end_call"] },

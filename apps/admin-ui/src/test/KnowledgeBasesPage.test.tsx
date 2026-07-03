@@ -30,6 +30,7 @@ import { KnowledgeBasesPage } from "../features/knowledgeBases/KnowledgeBasesPag
 const rows: KbSummary[] = [
   {
     id: "aaaa1111-1111-1111-1111-111111111111",
+    agent_ref: "knowledge_base_aaaa1111111111111111111111111111",
     name: "Wellness FAQ",
     status: "complete",
     source_count: 2,

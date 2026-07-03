@@ -50,7 +50,7 @@ function baseConfig(): AgentConfig {
       inbound_personalization_template: "with {contact_name}",
     },
     voice: { cartesia_voice_id: null, tts_model: null, speed: null, language: null },
-    llm: { model: "gemini-3.1-flash-lite", temperature: null },
+    llm: { model: "gemini-3.1-flash-lite", temperature: null, knowledge_base_ids: [] },
     stt: { model: "ink-whisper", language: null },
     timing: { answer_timeout_s: 50, max_call_duration_s: 1800 },
     tools: { enabled: ["log_wellness", "end_call"] },
@@ -371,8 +371,8 @@ describe("ProfileEditorPage policy section (D11)", () => {
     await screen.findByRole("button", { name: "Publish" });
 
     const tabs = screen.getAllByRole("tab");
-    expect(tabs).toHaveLength(9);
-    expect(tabs[8]).toHaveAccessibleName("Policy");
+    expect(tabs).toHaveLength(10);
+    expect(tabs[9]).toHaveAccessibleName("Policy");
 
     await user.click(screen.getByRole("tab", { name: "Policy" }));
     expect(screen.getByRole("heading", { name: "Policy" })).toBeInTheDocument();
