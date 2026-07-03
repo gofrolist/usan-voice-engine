@@ -12,6 +12,7 @@ import {
   ContactsIcon,
   DefaultsIcon,
   DncIcon,
+  KnowledgeIcon,
   MembersIcon,
   OrganizationsIcon,
   ProfilesIcon,
@@ -46,6 +47,7 @@ const GROUPS: NavGroup[] = [
       // Org admins author their own org's defaults/variables; viewers read-only (RLS-scoped).
       { to: "/defaults", label: "Defaults", icon: DefaultsIcon },
       { to: "/custom-variables", label: "Variables", icon: VariablesIcon },
+      { to: "/knowledge-bases", label: "Knowledge", icon: KnowledgeIcon },
     ],
   },
   {

@@ -174,6 +174,28 @@ async def get_sources_for_kbs(
     return out
 
 
+async def get_sources_with_status(
+    db: AsyncSession, kb_id: uuid.UUID
+) -> list[tuple[KnowledgeBaseSource, bool]]:
+    """Sources for a KB paired with whether each already has chunks (embedded vs pending) —
+    one query via an EXISTS correlated subquery, so a caller rendering per-source status need
+    not separately fetch the unchunked subset."""
+    has_chunks = (
+        select(KnowledgeBaseChunk.source_id)
+        .where(KnowledgeBaseChunk.source_id == KnowledgeBaseSource.id)
+        .exists()
+        .label("has_chunks")
+    )
+    rows = (
+        await db.execute(
+            select(KnowledgeBaseSource, has_chunks)
+            .where(KnowledgeBaseSource.knowledge_base_id == kb_id)
+            .order_by(KnowledgeBaseSource.created_at)
+        )
+    ).all()
+    return [(r[0], bool(r[1])) for r in rows]
+
+
 async def get_unchunked_sources(db: AsyncSession, kb_id: uuid.UUID) -> list[KnowledgeBaseSource]:
     """Sources with no chunks yet (the ingestion work-list — handles create + add-sources)."""
     sub = select(KnowledgeBaseChunk.source_id).where(
