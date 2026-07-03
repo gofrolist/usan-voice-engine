@@ -9,6 +9,16 @@ from tests.test_rls_p2_isolation import (  # noqa: F401 (fixtures discovered by 
 )
 
 
+def test_source_create_trims_title_and_text():
+    # Both fields are normalized (trimmed) before persistence — text used to keep its
+    # surrounding whitespace while title was trimmed; they are now consistent.
+    from usan_api.schemas.admin_knowledge_bases import KbSourceCreate
+
+    s = KbSourceCreate(title="  Doc  ", text="  hello world  ")
+    assert s.title == "Doc"
+    assert s.text == "hello world"
+
+
 def test_create_then_get_detail(client, admin_session):
     r = client.post("/v1/admin/knowledge-bases", json={"name": "Wellness FAQ"})
     assert r.status_code == 201, r.text

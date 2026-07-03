@@ -17,10 +17,13 @@ async def test_add_text_sources_persists_and_marks_in_progress(two_orgs, app_ses
     # Simulate ingestion having completed so we can prove the helper resets it.
     await repo.set_status(app_session, kb.id, "complete")
 
-    await add_text_sources(app_session, kb.id, [TextSource(title="Doc A", text="hello world")])
+    created = await add_text_sources(
+        app_session, kb.id, [TextSource(title="Doc A", text="hello world")]
+    )
 
     sources = await repo.get_sources(app_session, kb.id)
     assert len(sources) == 1
+    assert created == [sources[0].id]  # helper returns the created source ids (for auditing)
     assert sources[0].title == "Doc A"
     assert sources[0].content == "hello world"
     assert sources[0].content_url  # non-empty internal reference set by the helper
@@ -38,7 +41,7 @@ async def test_add_text_sources_empty_is_noop(two_orgs, app_session):
     )
     await repo.set_status(app_session, kb.id, "complete")
 
-    await add_text_sources(app_session, kb.id, [])
+    assert await add_text_sources(app_session, kb.id, []) == []
 
     assert not await repo.get_sources(app_session, kb.id)
     refreshed = await repo.get_kb(app_session, kb.id)

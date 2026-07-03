@@ -69,6 +69,7 @@ class KbSourceCreate(BaseModel):
     @field_validator("text")
     @classmethod
     def _validate_text(cls, v: str) -> str:
-        if not v.strip():
+        v = v.strip()
+        if not v:
             raise ValueError("text must not be empty")
         return v

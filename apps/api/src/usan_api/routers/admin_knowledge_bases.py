@@ -36,8 +36,7 @@ router = APIRouter(
 
 
 async def _detail(db: AsyncSession, kb: KnowledgeBase) -> KbDetail:
-    sources = await repo.get_sources(db, kb.id)
-    unchunked = {s.id for s in await repo.get_unchunked_sources(db, kb.id)}
+    rows = await repo.get_sources_with_status(db, kb.id)
     return KbDetail(
         id=kb.id,
         name=kb.name,
@@ -47,10 +46,10 @@ async def _detail(db: AsyncSession, kb: KnowledgeBase) -> KbDetail:
             KbSourceOut(
                 id=s.id,
                 title=s.title,
-                status="pending" if s.id in unchunked else "embedded",
+                status="embedded" if has_chunks else "pending",
                 created_at=s.created_at,
             )
-            for s in sources
+            for s, has_chunks in rows
         ],
         created_at=kb.created_at,
         updated_at=kb.updated_at,
@@ -139,17 +138,18 @@ async def add_knowledge_base_source(
     kb = await repo.get_kb(db, kb_id)
     if kb is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
-    await add_text_sources(db, kb_id, [TextSource(title=body.title, text=body.text)])
+    created = await add_text_sources(db, kb_id, [TextSource(title=body.title, text=body.text)])
     await admin_audit.record(
         db,
         actor_email=actor,
         action="knowledge_base.add_source",
-        entity_type="knowledge_base",
-        entity_id=str(kb_id),
+        entity_type="knowledge_base_source",
+        entity_id=str(created[0]),
+        detail={"knowledge_base_id": str(kb_id)},
     )
     await db.commit()
-    kb = await repo.get_kb(db, kb_id)  # re-read: status is now in_progress
-    assert kb is not None
+    # refresh the instance already in hand (mark_in_progress mutated it) rather than re-query.
+    await db.refresh(kb)
     return await _detail(db, kb)
 
 
@@ -163,12 +163,15 @@ async def delete_knowledge_base_source(
 ) -> None:
     if await repo.get_source(db, kb_id, source_id) is None:
         raise HTTPException(status_code=404, detail="source not found")
-    await repo.delete_source(db, source_id)
+    if not await repo.delete_source(db, source_id):
+        # Pre-check passed but the row is gone (concurrent delete): 404, no phantom audit row.
+        raise HTTPException(status_code=404, detail="source not found")
     await admin_audit.record(
         db,
         actor_email=actor,
         action="knowledge_base.delete_source",
-        entity_type="knowledge_base",
-        entity_id=str(kb_id),
+        entity_type="knowledge_base_source",
+        entity_id=str(source_id),
+        detail={"knowledge_base_id": str(kb_id)},
     )
     await db.commit()
