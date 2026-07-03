@@ -80,4 +80,26 @@ describe("KnowledgeBaseSection", () => {
 
     expect(screen.getByText(/knowledge_base_orphan/)).toBeInTheDocument();
   });
+
+  it("does not flash bound KBs as removable 'unknown' rows while the list is loading", async () => {
+    // The KB list never resolves → useKnowledgeBases() stays isLoading. A bound token that
+    // IS a real KB (knowledge_base_aaa) must NOT be classified as an orphan during loading,
+    // or a Remove click in that window would silently drop a valid binding.
+    getMock.mockImplementation((u: string) =>
+      u === "/v1/admin/knowledge-bases"
+        ? new Promise(() => {}) // pending forever
+        : Promise.reject(new Error(u)),
+    );
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <Harness bound={["knowledge_base_aaa"]} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/Loading knowledge bases/)).toBeInTheDocument();
+    expect(screen.queryByText("Unknown knowledge base")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+  });
 });

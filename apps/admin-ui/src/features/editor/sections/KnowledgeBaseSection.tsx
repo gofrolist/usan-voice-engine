@@ -2,6 +2,7 @@ import { Controller, type UseFormReturn } from "react-hook-form";
 import { Link } from "react-router-dom";
 import type { AgentConfigForm } from "../../../config/agentConfigSchema";
 import { useKnowledgeBases } from "../../knowledgeBases/hooks";
+import { statusBadge } from "../../knowledgeBases/KnowledgeBasesPage";
 
 // Binds knowledge bases to this agent. The config stores encoded knowledge_base_<hex>
 // tokens (KbSummary.agent_ref); this section toggles those tokens in
@@ -30,7 +31,10 @@ export function KnowledgeBaseSection({ form }: { form: UseFormReturn<AgentConfig
           const bound = new Set(field.value ?? []);
           const list = kbs ?? [];
           const knownRefs = new Set(list.map((k) => k.agent_ref));
-          const orphans = [...bound].filter((ref) => !knownRefs.has(ref));
+          // While the list is still loading, `knownRefs` is empty — do NOT classify bound
+          // tokens as orphans yet, or every valid binding would flash as a removable
+          // "Unknown knowledge base" row (and a click during that window would drop it).
+          const orphans = isLoading ? [] : [...bound].filter((ref) => !knownRefs.has(ref));
 
           function toggle(ref: string, on: boolean): void {
             const next = new Set(bound);
@@ -63,7 +67,7 @@ export function KnowledgeBaseSection({ form }: { form: UseFormReturn<AgentConfig
                     <span className="mt-0.5 block text-xs text-slate-500">
                       {kb.status === "complete"
                         ? `${kb.source_count} source${kb.source_count === 1 ? "" : "s"}`
-                        : kb.status.replace("_", " ")}
+                        : statusBadge(kb.status)}
                     </span>
                   </label>
                   <input
