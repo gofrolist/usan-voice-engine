@@ -89,7 +89,7 @@ export function KnowledgeBaseDetailPage() {
           <div className="flex items-center gap-3">
             {statusBadge(data.status)}
             {isAdmin ? (
-              <Button variant="secondary" onClick={() => setConfirmDeleteKb(true)}>
+              <Button variant="danger" onClick={() => setConfirmDeleteKb(true)}>
                 Delete
               </Button>
             ) : null}
@@ -127,7 +127,7 @@ export function KnowledgeBaseDetailPage() {
                 {isAdmin ? (
                   <Td>
                     <Button
-                      variant="secondary"
+                      variant="danger"
                       onClick={() => deleteSource.mutate(s.id)}
                       disabled={deleteSource.isPending}
                     >

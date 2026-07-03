@@ -22,6 +22,9 @@ class KbSummary(BaseModel):
 
 class KbSourceOut(BaseModel):
     id: uuid.UUID
+    # Nullable: native create requires a title, but this table is shared with the
+    # RetellAI-compat surface (where title is optional), so compat-created sources
+    # can appear here too. Mirrors the nullable DB column.
     title: str | None
     status: str  # derived: "pending" (no chunks yet) | "embedded"
     created_at: datetime

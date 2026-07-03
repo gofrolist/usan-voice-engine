@@ -70,6 +70,18 @@ def test_delete_source_then_delete_kb(client, admin_session):
     assert client.get(f"/v1/admin/knowledge-bases/{kb_id}").status_code == 404
 
 
+def test_delete_kb_with_sources_cascades(client, admin_session):
+    kb_id = client.post("/v1/admin/knowledge-bases", json={"name": "KB"}).json()["id"]
+    r = client.post(
+        f"/v1/admin/knowledge-bases/{kb_id}/sources",
+        json={"title": "Doc", "text": "x"},
+    )
+    assert r.status_code == 201, r.text
+    # Source is left in place; deleting the KB directly must cascade.
+    assert client.delete(f"/v1/admin/knowledge-bases/{kb_id}").status_code == 204
+    assert client.get(f"/v1/admin/knowledge-bases/{kb_id}").status_code == 404
+
+
 def test_get_unknown_kb_404(client, admin_session):
     assert (
         client.get("/v1/admin/knowledge-bases/00000000-0000-0000-0000-000000000000").status_code
