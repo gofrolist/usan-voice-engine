@@ -69,4 +69,15 @@ describe("KnowledgeBaseSection", () => {
     // The orphan token has no matching KB row but must still be surfaced, not dropped.
     expect(await screen.findByText(/knowledge_base_orphan/)).toBeInTheDocument();
   });
+
+  it("keeps an unknown token when a different KB is toggled", async () => {
+    renderSection(["knowledge_base_orphan"]);
+    expect(await screen.findByText(/knowledge_base_orphan/)).toBeInTheDocument();
+
+    const faq = (await screen.findByLabelText(/FAQ/)) as HTMLInputElement;
+    await userEvent.click(faq);
+    expect(faq.checked).toBe(true);
+
+    expect(screen.getByText(/knowledge_base_orphan/)).toBeInTheDocument();
+  });
 });

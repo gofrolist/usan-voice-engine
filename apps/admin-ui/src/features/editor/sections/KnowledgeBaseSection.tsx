@@ -6,8 +6,9 @@ import { useKnowledgeBases } from "../../knowledgeBases/hooks";
 // Binds knowledge bases to this agent. The config stores encoded knowledge_base_<hex>
 // tokens (KbSummary.agent_ref); this section toggles those tokens in
 // llm.knowledge_base_ids. A bound token with no matching KB in the org list (deleted or
-// compat-created) is surfaced as a disabled "unknown" row and PRESERVED on every edit —
-// never silently dropped. Applied on Publish, like every other editor field.
+// compat-created) is surfaced as an amber "Unknown knowledge base" row with a Remove
+// button, and PRESERVED on every edit — never silently dropped. Applied on Publish, like
+// every other editor field.
 export function KnowledgeBaseSection({ form }: { form: UseFormReturn<AgentConfigForm> }) {
   const { data: kbs, isLoading, isError } = useKnowledgeBases();
 
@@ -38,7 +39,7 @@ export function KnowledgeBaseSection({ form }: { form: UseFormReturn<AgentConfig
             field.onChange([...next]);
           }
 
-          if (!isLoading && list.length === 0 && orphans.length === 0) {
+          if (!isLoading && !isError && list.length === 0 && orphans.length === 0) {
             return (
               <p className="text-sm text-slate-500">
                 No knowledge bases yet —{" "}
