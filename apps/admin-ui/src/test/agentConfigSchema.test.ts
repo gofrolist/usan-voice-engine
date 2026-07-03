@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentConfigSchema,
+  llmSchema,
   policySchema,
   smsTemplateSchema,
   TOOL_NAMES,
@@ -27,7 +28,7 @@ function validConfig(): AgentConfigForm {
       speed: null,
       language: null,
     },
-    llm: { model: "gemini-3.1-flash-lite", temperature: null },
+    llm: { model: "gemini-3.1-flash-lite", temperature: null, knowledge_base_ids: [] },
     stt: { model: "ink-whisper", language: null },
     timing: { answer_timeout_s: 50, max_call_duration_s: 1800 },
     tools: {
@@ -305,5 +306,30 @@ describe("policySchema", () => {
     if (!badBusy.success) {
       expect(badBusy.error.issues[0]!.path).toEqual(["retry_max_attempts", "busy"]);
     }
+  });
+});
+
+describe("llmSchema.knowledge_base_ids", () => {
+  it("defaults to [] when the key is absent (strip-regression guard)", () => {
+    const out = llmSchema.parse({ model: "gemini-2.0-flash", temperature: null });
+    expect(out.knowledge_base_ids).toEqual([]);
+  });
+
+  it("coerces null to []", () => {
+    const out = llmSchema.parse({
+      model: "gemini-2.0-flash",
+      temperature: null,
+      knowledge_base_ids: null,
+    });
+    expect(out.knowledge_base_ids).toEqual([]);
+  });
+
+  it("preserves bound tokens through parse (does not strip them)", () => {
+    const out = llmSchema.parse({
+      model: "gemini-2.0-flash",
+      temperature: null,
+      knowledge_base_ids: ["knowledge_base_abc123", "knowledge_base_def456"],
+    });
+    expect(out.knowledge_base_ids).toEqual(["knowledge_base_abc123", "knowledge_base_def456"]);
   });
 });
