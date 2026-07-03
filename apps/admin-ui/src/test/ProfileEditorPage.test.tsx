@@ -371,8 +371,8 @@ describe("ProfileEditorPage policy section (D11)", () => {
     await screen.findByRole("button", { name: "Publish" });
 
     const tabs = screen.getAllByRole("tab");
-    expect(tabs).toHaveLength(9);
-    expect(tabs[8]).toHaveAccessibleName("Policy");
+    expect(tabs).toHaveLength(10);
+    expect(tabs[9]).toHaveAccessibleName("Policy");
 
     await user.click(screen.getByRole("tab", { name: "Policy" }));
     expect(screen.getByRole("heading", { name: "Policy" })).toBeInTheDocument();

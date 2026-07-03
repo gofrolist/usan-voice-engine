@@ -17,6 +17,7 @@ import { SectionRail } from "./SectionRail";
 import { PromptsSection } from "./sections/PromptsSection";
 import { VoiceSection } from "./sections/VoiceSection";
 import { LLMSection } from "./sections/LLMSection";
+import { KnowledgeBaseSection } from "./sections/KnowledgeBaseSection";
 import { STTSection } from "./sections/STTSection";
 import { TimingSection } from "./sections/TimingSection";
 import { ToolsSection } from "./sections/ToolsSection";
@@ -35,6 +36,7 @@ const SECTION_ORDER: SectionKey[] = [
   "prompts",
   "voice",
   "llm",
+  "knowledge_base",
   "stt",
   "speech_advanced",
   "timing",
@@ -232,6 +234,7 @@ export function ProfileEditorPage() {
   // system prompt does not re-render the whole editor on every keystroke. The full
   // config for the publish diff is read on demand via form.getValues() below.
   const llmModel = form.watch("llm.model");
+  const kbIds = form.watch("llm.knowledge_base_ids");
   const voiceId = form.watch("voice.cartesia_voice_id");
   const language = form.watch("voice.language");
   const toolsEnabled = form.watch("tools.enabled");
@@ -242,6 +245,7 @@ export function ProfileEditorPage() {
   const policyEnd = form.watch("policy.quiet_hours_end_local");
   const summaries: Partial<Record<SectionKey, string>> = {
     llm: llmModel,
+    knowledge_base: kbIds && kbIds.length ? `${kbIds.length} bound` : "None",
     voice: voiceId ?? "default",
     tools: `${toolsEnabled?.length ?? 0} on`,
     timing: Number.isFinite(answerTimeout) ? `${answerTimeout}s` : undefined,
@@ -294,6 +298,7 @@ export function ProfileEditorPage() {
                 {section === "prompts" ? <PromptsSection form={form} /> : null}
                 {section === "voice" ? <VoiceSection form={form} /> : null}
                 {section === "llm" ? <LLMSection form={form} /> : null}
+                {section === "knowledge_base" ? <KnowledgeBaseSection form={form} /> : null}
                 {section === "stt" ? <STTSection form={form} /> : null}
                 {section === "speech_advanced" ? <SpeechAdvancedSection form={form} /> : null}
                 {section === "timing" ? <TimingSection form={form} /> : null}
