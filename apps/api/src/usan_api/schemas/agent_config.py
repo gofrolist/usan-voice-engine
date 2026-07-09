@@ -12,6 +12,7 @@ import re
 import uuid
 from datetime import time
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -336,6 +337,104 @@ class SmsToolConfig(BaseModel):
         return self
 
 
+# --- Surface 3: external (client-defined) HTTP tools (design 2026-07-09) -----
+# Max client HTTP tools per agent version. The client's busiest agent declares 27
+# (retell/companion/); 40 leaves headroom. A structural cap only — NEVER LOWER it: a
+# published snapshot carrying more tools must keep deserializing on read (the
+# forward-compat invariant above AgentConfig).
+MAX_EXTERNAL_TOOLS = 40
+
+
+class ExternalToolSpec(BaseModel):
+    """One client-defined HTTP tool — a RetellAI ``general_tools`` custom tool the agent
+    calls mid-call (Surface 3, migration spec §5).
+
+    Only STRUCTURAL validation lives here (name/url shape, JSON-Schema object, ranges) so
+    a published ``agent_profile_versions`` snapshot ALWAYS re-deserializes on read
+    (forward-compat invariant). The config-DEPENDENT gates — the egress allow-list and
+    builtin-name collision — are enforced SAVE-TIME in ``external_tool_violations``
+    (mirroring ``catalog_violations``), never here: tightening the allow-list or adding a
+    builtin must never 500 an older stored snapshot on read.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # name is the LLM-facing function name. The '-not-in-TOOL_NAMES' collision check is
+    # SAVE-TIME (see external_tool_violations), not a pattern here, so an external tool can
+    # never shadow a safety builtin (raise_crisis/end_call/...) yet an older snapshot whose
+    # name a future builtin happens to reuse still deserializes.
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    description: str = Field(min_length=1, max_length=1024)
+    url: str = Field(min_length=1, max_length=2000)
+    method: Literal["POST", "GET"] = "POST"
+    parameters: dict[str, Any]
+    timeout_s: float = Field(default=10.0, ge=1.0, le=30.0)
+    # Retell filler-speech flag: parsed + persisted now but INERT in v1 (execution is
+    # synchronous). Restoring filler is a fast-follow that needs no re-ingest.
+    speak_during_execution: bool = False
+
+    @field_validator("url")
+    @classmethod
+    def _https_only(cls, v: str) -> str:
+        # PHI-bearing tool args egress to this url; require TLS. Host MEMBERSHIP is a
+        # separate SAVE-TIME check (external_tool_violations) — see the class docstring.
+        if not v.startswith("https://"):
+            raise ValueError("external tool url must be https://")
+        return v
+
+    @field_validator("parameters")
+    @classmethod
+    def _json_schema_object(cls, v: dict[str, Any]) -> dict[str, Any]:
+        # The LLM sees this verbatim as the tool's JSON schema (LiveKit raw_schema), so it
+        # must be an object schema with a properties map (possibly empty, for a no-arg tool).
+        if v.get("type") != "object":
+            raise ValueError('parameters must be a JSON-Schema object ("type": "object")')
+        if not isinstance(v.get("properties"), dict):
+            raise ValueError('parameters must include a "properties" object')
+        return v
+
+
+def external_tool_violations(
+    config: dict[str, Any], *, allowed_hosts: frozenset[str]
+) -> list[dict[str, Any]]:
+    """SAVE-TIME gate for client HTTP tools (Surface 3): egress allow-list + builtin
+    collision. Handler-layer (like ``catalog_violations`` / ``custom_phi_sms_violations``)
+    so a later allow-list change or a new builtin name never 500s an older published
+    snapshot on read (forward-compat invariant). Walks
+    ``config["tools"]["external_tools"]`` tolerantly (absent/None → no violations). The
+    fabricated field-level ``loc`` mirrors the pydantic shape so the admin-ui's
+    ``tryParseFieldErrors`` lands the error on the offending tool. Messages carry the tool
+    name / host / field path only — never per-call values (spec §7).
+    """
+    tools = ((config.get("tools") or {}).get("external_tools")) or []
+    violations: list[dict[str, Any]] = []
+    for i, tool in enumerate(tools):
+        name = tool.get("name") or ""
+        if name in TOOL_NAMES:
+            violations.append(
+                {
+                    "loc": ["body", "config", "tools", "external_tools", i, "name"],
+                    "msg": (
+                        f"external tool '{name}' collides with a built-in tool name; "
+                        "rename the external tool"
+                    ),
+                    "type": "value_error.external_tool_name_collision",
+                }
+            )
+        host = urlparse(tool.get("url") or "").hostname or ""
+        if host not in allowed_hosts:
+            violations.append(
+                {
+                    "loc": ["body", "config", "tools", "external_tools", i, "url"],
+                    "msg": (
+                        f"external tool '{name}' host '{host}' is not in the tool egress allow-list"
+                    ),
+                    "type": "value_error.external_tool_host_not_allowed",
+                }
+            )
+    return violations
+
+
 class ToolsConfig(BaseModel):
     enabled: list[str] = Field(
         default_factory=lambda: [
@@ -357,6 +456,13 @@ class ToolsConfig(BaseModel):
         ]
     )
     sms: SmsToolConfig | None = None
+    # Surface 3 (Retell general_tools custom tools). Additive and SEPARATE from `enabled`
+    # so the closed builtin catalog gate below stays untouched. Structural checks live on
+    # ExternalToolSpec; the egress allow-list + builtin-name collision are SAVE-TIME
+    # (external_tool_violations), never a validator here (forward-compat invariant).
+    external_tools: list[ExternalToolSpec] = Field(
+        default_factory=list, max_length=MAX_EXTERNAL_TOOLS
+    )
 
     @field_validator("enabled")
     @classmethod
@@ -371,6 +477,17 @@ class ToolsConfig(BaseModel):
         # HARD BLOCK (design §6.2): a PHI token in any SMS body fails to save (422).
         if self.sms is not None:
             _reject_phi_in_templates(self.sms.templates)
+        return self
+
+    @model_validator(mode="after")
+    def _unique_external_tool_names(self) -> ToolsConfig:
+        # Structural (forward-compat-safe): a stored list rejected dupes at write, so
+        # re-validation on read always passes. Duplicate LLM-facing names are ambiguous
+        # at dispatch time (the proxy resolves a tool by name), so block them at save.
+        names = [t.name for t in self.external_tools]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ValueError(f"duplicate external tool name(s): {', '.join(dupes)}")
         return self
 
 
