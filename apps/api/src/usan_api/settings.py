@@ -374,6 +374,20 @@ class Settings(BaseSettings):
     compat_webhook_delivery_enabled: bool = Field(
         default=False, alias="COMPAT_WEBHOOK_DELIVERY_ENABLED"
     )
+    # Surface 2A (inbound-call-router): a single operator-configured URL we POST synchronously on
+    # each inbound call to ask the client which agent + dynamic vars to run. Ship-inert: off + no
+    # URL ⇒ inbound behaves exactly as today (degrade to the DID's default inbound agent). The URL
+    # itself is the allow-list (one trusted endpoint, unlike arbitrary external-tool hosts); the
+    # SSRF public-IP pin still applies. COMPAT_INBOUND_ROUTER_CALLER_SECRET is sent as the
+    # ?caller_secret= query param (the inbound webhook has no header slot — migration spec §3);
+    # ship the capability now, the client wires verifyCaller to the router later.
+    compat_inbound_router_enabled: bool = Field(
+        default=False, alias="COMPAT_INBOUND_ROUTER_ENABLED"
+    )
+    compat_inbound_router_url: str | None = Field(default=None, alias="COMPAT_INBOUND_ROUTER_URL")
+    compat_inbound_router_caller_secret: str | None = Field(
+        default=None, alias="COMPAT_INBOUND_ROUTER_CALLER_SECRET"
+    )
 
     @model_validator(mode="after")
     def _reserved_below_max(self) -> Settings:

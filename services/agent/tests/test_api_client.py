@@ -153,7 +153,9 @@ async def test_start_inbound_call_posts_worker_token_and_returns_json(monkeypatc
 
     monkeypatch.setattr(api_client.httpx, "AsyncClient", _FakeClient)
 
-    result = await api_client.start_inbound_call("+15551234567", "usan-inbound-1", _settings())
+    result = await api_client.start_inbound_call(
+        "+15551234567", "usan-inbound-1", _settings(), to_number="+15550001111"
+    )
 
     assert result == {
         "call_id": "inb-1",
@@ -165,6 +167,7 @@ async def test_start_inbound_call_posts_worker_token_and_returns_json(monkeypatc
         "phone_e164": "+15551234567",
         "livekit_room": "usan-inbound-1",
         "sip_call_id": None,
+        "to_number": "+15550001111",  # Surface 2A: dialed DID forwarded to the router
     }
     token = captured["headers"]["Authorization"].removeprefix("Bearer ")
     claims = jwt.decode(token, SECRET, algorithms=["HS256"])

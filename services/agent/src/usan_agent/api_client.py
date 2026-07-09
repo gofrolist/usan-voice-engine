@@ -355,11 +355,13 @@ async def start_inbound_call(
     livekit_room: str,
     settings: Settings,
     sip_call_id: str | None = None,
+    to_number: str | None = None,
 ) -> dict[str, Any] | None:
     """Best-effort: register an inbound call and fetch contact dynamic vars.
 
-    Returns parsed {call_id, contact_known, dynamic_vars} on success, or None on any
-    failure so the worker can fall back to a greet-only inbound conversation.
+    Returns parsed {call_id, contact_known, dynamic_vars, override_applied} on success, or None on
+    any failure so the worker can fall back to a greet-only inbound conversation. ``to_number`` is
+    the dialed DID, forwarded to the Surface 2A inbound-call-router when enabled.
     """
     url = f"{settings.api_base_url}/v1/calls/inbound"
     headers = {"Authorization": f"Bearer {_mint_worker_token(settings)}"}
@@ -367,6 +369,7 @@ async def start_inbound_call(
         "phone_e164": phone_e164,
         "livekit_room": livekit_room,
         "sip_call_id": sip_call_id,
+        "to_number": to_number,
     }
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:

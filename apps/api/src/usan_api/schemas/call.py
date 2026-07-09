@@ -157,8 +157,12 @@ class InboundCallRequest(BaseModel):
     phone_e164: str | None = Field(default=None, max_length=32)
     livekit_room: str = Field(min_length=1, max_length=255)
     sip_call_id: str | None = Field(default=None, max_length=255)
+    # Surface 2A: the dialed DID (callee), read from the SIP participant by the worker. Sent to
+    # the client's inbound-call-router as ``call_inbound.to_number``. Captured-but-unused when the
+    # router is off. Same lenient caller-ID charset guard as ``phone_e164``.
+    to_number: str | None = Field(default=None, max_length=32)
 
-    @field_validator("phone_e164")
+    @field_validator("phone_e164", "to_number")
     @classmethod
     def _caller_id_charset(cls, v: str | None) -> str | None:
         # Lenient guard (NOT strict E.164): blank => None; otherwise the value must be a
@@ -169,7 +173,7 @@ class InboundCallRequest(BaseModel):
         if not s:
             return None
         if _INBOUND_CALLER_ID_UNSAFE.search(s):
-            raise ValueError("phone_e164 contains control characters")
+            raise ValueError("caller-ID contains control characters")
         return s
 
 
@@ -182,3 +186,8 @@ class InboundCallResponse(BaseModel):
     # agent builds that ignore them keep working.
     resolved_vars: dict[str, str] = Field(default_factory=dict)
     timezone: str = ""
+    # Surface 2A: True when the inbound-call-router returned an override agent we resolved to a
+    # published voice profile (stored as the call's profile_override). Signals the worker to run
+    # the personalized inbound agent with the override config even for an unknown caller. Additive
+    # default False so older worker builds keep the contact-lookup path.
+    override_applied: bool = False

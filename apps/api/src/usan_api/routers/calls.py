@@ -12,10 +12,13 @@ from usan_api.auth import require_operator_token, require_service_token, require
 from usan_api.builtin_vars import build_memory_params, resolve_builtin_vars
 from usan_api.builtin_vars import format_last_check_in as _format_last_check_in
 from usan_api.client_ip import client_ip
+from usan_api.compat import ids, inbound_router
+from usan_api.compat.errors import CompatError
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
 from usan_api.phone import to_e164
+from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import contacts as contacts_repo
 from usan_api.repositories import conversation_summaries as conversation_summaries_repo
@@ -113,10 +116,48 @@ async def enqueue_call(
         return _idempotent_replay(existing, body, response)
 
 
+async def _resolve_inbound_override(
+    db: AsyncSession,
+    settings: Settings,
+    *,
+    from_number: str | None,
+    to_number: str | None,
+    dynamic_vars: dict[str, Any],
+) -> uuid.UUID | None:
+    """Surface 2A: ask the client's router who to be; return the override profile or None.
+
+    On any router failure OR an override_agent_id we can't resolve to a published voice profile,
+    returns None so the caller degrades to the DID's default inbound agent (spec §3). On success,
+    merges the router's dynamic_variables OVER ``dynamic_vars`` (the client's CRM is source of
+    truth) and returns the profile UUID to store as the call's profile_override.
+    """
+    if not settings.compat_inbound_router_enabled:
+        return None
+    result = await inbound_router.route_inbound(
+        settings, from_number=from_number, to_number=to_number
+    )
+    if result is None:
+        return None
+    try:
+        profile_id = ids.decode_agent_id(result.override_agent_id)
+    except CompatError:
+        logger.warning("inbound router returned an undecodable override_agent_id; degrading")
+        return None
+    if not await agent_profiles_repo.is_live_profile(db, profile_id, channel="voice"):
+        logger.bind(profile_id=str(profile_id)).warning(
+            "inbound router override is not a published voice agent; degrading"
+        )
+        return None
+    # Router vars win over same-keyed contact vars — the client's CRM is authoritative (spec §3).
+    dynamic_vars.update(result.dynamic_variables)
+    return profile_id
+
+
 @router.post("/inbound", response_model=InboundCallResponse)
 async def register_inbound_call(
     body: InboundCallRequest,
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     claims: dict[str, Any] = Depends(require_worker_token),
 ) -> InboundCallResponse:
     """Register an answered inbound call and return per-contact dynamic vars.
@@ -169,23 +210,37 @@ async def register_inbound_call(
         survey_due=survey_due,
         **memory,
     )
+    # Surface 2A: when the inbound-call-router is on, let the client pick the agent + vars. On any
+    # failure this returns None (profile_override stays unset), degrading to the default inbound
+    # agent — the call still connects. Merges router vars into dynamic_vars in place.
+    profile_override = await _resolve_inbound_override(
+        db,
+        settings,
+        from_number=phone,
+        to_number=to_e164(body.to_number),
+        dynamic_vars=dynamic_vars,
+    )
     call = await calls_repo.create_inbound_call(
         db,
         contact_id=contact.id if contact is not None else None,
         livekit_room=body.livekit_room,
         sip_call_id=body.sip_call_id,
         dynamic_vars=dynamic_vars,
+        profile_override=profile_override,
     )
     await db.commit()
-    logger.bind(call_id=str(call.id), contact_known=contact is not None).info(
-        "Inbound call registered"
-    )
+    logger.bind(
+        call_id=str(call.id),
+        contact_known=contact is not None,
+        override_applied=profile_override is not None,
+    ).info("Inbound call registered")
     return InboundCallResponse(
         call_id=call.id,
         contact_known=contact is not None,
         dynamic_vars=dynamic_vars,
         resolved_vars=resolved_vars,
         timezone=timezone,
+        override_applied=profile_override is not None,
     )
 
 
