@@ -397,30 +397,25 @@ class ExternalToolSpec(BaseModel):
 def external_tool_violations(
     config: dict[str, Any], *, allowed_hosts: frozenset[str]
 ) -> list[dict[str, Any]]:
-    """SAVE-TIME gate for client HTTP tools (Surface 3): egress allow-list + builtin
-    collision. Handler-layer (like ``catalog_violations`` / ``custom_phi_sms_violations``)
-    so a later allow-list change or a new builtin name never 500s an older published
-    snapshot on read (forward-compat invariant). Walks
+    """SAVE-TIME egress-allow-list gate for client HTTP tools (Surface 3). Handler-layer
+    (like ``catalog_violations`` / ``custom_phi_sms_violations``) because the allow-list is a
+    runtime SETTING — a later change to it must never 500 an older published snapshot on read
+    (forward-compat invariant), so it can't be a pydantic validator. Walks
     ``config["tools"]["external_tools"]`` tolerantly (absent/None → no violations). The
     fabricated field-level ``loc`` mirrors the pydantic shape so the admin-ui's
     ``tryParseFieldErrors`` lands the error on the offending tool. Messages carry the tool
     name / host / field path only — never per-call values (spec §7).
+
+    A name shared by an *enabled* builtin and an external tool is NOT checked here — that is a
+    within-config structural check on ``ToolsConfig`` (``_no_enabled_external_overlap``). A
+    name that merely exists in the global ``TOOL_NAMES`` catalog but is not enabled for this
+    agent is allowed: a migrated Retell client legitimately names its own edge function
+    ``schedule_callback`` / ``flag_crisis`` and wants that, not our Clara builtin.
     """
     tools = ((config.get("tools") or {}).get("external_tools")) or []
     violations: list[dict[str, Any]] = []
     for i, tool in enumerate(tools):
         name = tool.get("name") or ""
-        if name in TOOL_NAMES:
-            violations.append(
-                {
-                    "loc": ["body", "config", "tools", "external_tools", i, "name"],
-                    "msg": (
-                        f"external tool '{name}' collides with a built-in tool name; "
-                        "rename the external tool"
-                    ),
-                    "type": "value_error.external_tool_name_collision",
-                }
-            )
         host = urlparse(tool.get("url") or "").hostname or ""
         if host not in allowed_hosts:
             violations.append(
@@ -488,6 +483,23 @@ class ToolsConfig(BaseModel):
         dupes = sorted({n for n in names if names.count(n) > 1})
         if dupes:
             raise ValueError(f"duplicate external tool name(s): {', '.join(dupes)}")
+        return self
+
+    @model_validator(mode="after")
+    def _no_enabled_external_overlap(self) -> ToolsConfig:
+        # A name may not be BOTH an enabled builtin and an external tool: the agent would
+        # register two tools with the same LLM-facing name (ambiguous dispatch, and an
+        # external tool could shadow a safety builtin like raise_crisis). Structural /
+        # within-config, so forward-compat-safe (independent of the global TOOL_NAMES). The
+        # compat ingest resolves this in the client's favor by dropping the builtin from
+        # `enabled` before validation (agent_bridge._apply_tools_overlay); this guards the
+        # human admin-editor path where someone enables both.
+        overlap = sorted({t.name for t in self.external_tools} & set(self.enabled))
+        if overlap:
+            raise ValueError(
+                f"tool name(s) both enabled as a builtin and declared as external: "
+                f"{', '.join(overlap)}"
+            )
         return self
 
 

@@ -97,12 +97,26 @@ def test_external_tools_count_capped():
         ToolsConfig(external_tools=too_many)
 
 
-def test_external_tool_may_reuse_a_builtin_name_structurally():
-    # The builtin-name COLLISION check is SAVE-TIME (external_tool_violations), not a
-    # pydantic validator — so constructing a spec named after a builtin must NOT raise.
-    # This is what keeps an older snapshot deserializing if a future builtin reuses a name.
+def test_external_tool_spec_may_reuse_a_builtin_name():
+    # An ExternalToolSpec on its own never checks the catalog — a migrated Retell client
+    # legitimately names its own edge function after one of our builtins.
     spec = ExternalToolSpec.model_validate(_spec(name="raise_crisis"))
     assert spec.name == "raise_crisis"
+
+
+def test_tools_config_rejects_enabled_and_external_same_name():
+    # raise_crisis is enabled by default; ALSO declaring it as an external tool is ambiguous
+    # (double-registration / a safety builtin shadowed) — a structural, within-config error.
+    with pytest.raises(ValidationError):
+        ToolsConfig(external_tools=[_spec(name="raise_crisis")])
+
+
+def test_external_tool_may_reuse_a_non_enabled_builtin_name():
+    # schedule_callback is a catalog builtin, but if it is NOT enabled for this agent an
+    # external tool may take that name (the migrated client's own function). This is the
+    # normal shape of a compat agent: builtins off, tools external.
+    cfg = ToolsConfig(enabled=["end_call"], external_tools=[_spec(name="schedule_callback")])
+    assert cfg.external_tools[0].name == "schedule_callback"
 
 
 # --- forward compatibility ---------------------------------------------------
@@ -139,11 +153,11 @@ def test_violations_flags_disallowed_host():
     assert v[0]["loc"] == ["body", "config", "tools", "external_tools", 0, "url"]
 
 
-def test_violations_flags_builtin_collision():
+def test_violations_ignores_builtin_name_when_host_allowed():
+    # The helper does NOT flag a catalog-name collision (that's the ToolsConfig structural
+    # check) — a builtin-named tool on an allowed host produces no violation here.
     cfg = _config_with(_spec(name="raise_crisis"))
-    v = external_tool_violations(cfg, allowed_hosts=_ALLOWED)
-    assert [x["type"] for x in v] == ["value_error.external_tool_name_collision"]
-    assert v[0]["loc"][-1] == "name"
+    assert external_tool_violations(cfg, allowed_hosts=_ALLOWED) == []
 
 
 def test_violations_none_for_allowed_non_builtin():
@@ -156,12 +170,3 @@ def test_violations_tolerates_absent_tools():
     assert external_tool_violations({"tools": {}}, allowed_hosts=_ALLOWED) == []
     none_tools = {"tools": {"external_tools": None}}
     assert external_tool_violations(none_tools, allowed_hosts=_ALLOWED) == []
-
-
-def test_violations_reports_both_for_one_bad_tool():
-    cfg = _config_with(_spec(name="end_call", url="https://evil.example.net/fn"))
-    v = external_tool_violations(cfg, allowed_hosts=_ALLOWED)
-    assert {x["type"] for x in v} == {
-        "value_error.external_tool_name_collision",
-        "value_error.external_tool_host_not_allowed",
-    }

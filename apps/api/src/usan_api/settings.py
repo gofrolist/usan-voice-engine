@@ -367,6 +367,18 @@ class Settings(BaseSettings):
         default="America/New_York", alias="COMPAT_DEFAULT_TIMEZONE"
     )
     compat_key_rate_limit: str = Field(default="600/minute", alias="COMPAT_KEY_RATE_LIMIT")
+    # Surface 3 external HTTP agent tools (design 2026-07-09). Ship-inert:
+    # COMPAT_EXTERNAL_TOOLS_ENABLED gates ingest (create/update-retell-llm translates
+    # general_tools) AND the runtime projection + execution proxy — off keeps general_tools
+    # echo-only exactly as before. COMPAT_TOOL_ALLOWED_HOSTS is the attested allow-list a
+    # client tool url may egress to (PHI-bearing args, Constitution II); empty => no external
+    # tool validates. COMPAT_TOOL_CALLER_SECRET is the shared per-org X-Caller-Secret (= the
+    # client's RETELL_FUNCTION_SECRET); it never leaves apps/api (never projected to the worker).
+    compat_external_tools_enabled: bool = Field(
+        default=False, alias="COMPAT_EXTERNAL_TOOLS_ENABLED"
+    )
+    compat_tool_allowed_hosts: str = Field(default="", alias="COMPAT_TOOL_ALLOWED_HOSTS")
+    compat_tool_caller_secret: str | None = Field(default=None, alias="COMPAT_TOOL_CALLER_SECRET")
     # Ship-inert flag for the compat (RetellAI) webhook delivery poller (US2). Like
     # WEBHOOK_DELIVERY_ENABLED, it gates only the claim+POST half: the poller task always
     # starts so housekeeping (sweep/expire/prune) + the backlog gauge run flag-independently.
@@ -559,6 +571,19 @@ class Settings(BaseSettings):
         """
         return frozenset(
             h.strip().lower() for h in self.compat_webhook_allowed_hosts.split(",") if h.strip()
+        )
+
+    @property
+    def compat_tool_allowed_hosts_set(self) -> frozenset[str]:
+        """Hosts a Surface-3 external tool url may POST to (PHI-bearing args egress here).
+
+        Empty (the default) means NO external tool validates — an operator must attest the
+        client's edge-function host before external tools can be ingested. Lowercased for a
+        case-insensitive match against the tool url's host. Layered atop the SSRF guard the
+        execution proxy applies at call time (design §7 step 3).
+        """
+        return frozenset(
+            h.strip().lower() for h in self.compat_tool_allowed_hosts.split(",") if h.strip()
         )
 
     def warn_if_db_tls_disabled(self) -> None:

@@ -82,8 +82,11 @@ The agent-side mirror (`services/agent/.../agent_config.py`) gets a **leaner** p
 ### 3.2 Why a separate list, not `enabled`
 `enabled` is validated against the **closed** `TOOL_NAMES` (`schemas/tool_catalog.py`, hard-block). External tools are an **open** set (arbitrary operator names) and must not enter that gate. Keeping them in a distinct `external_tools` field means:
 - the builtin closed-set guard is untouched (no regression risk to the 15 safety-critical tools);
-- name-collision with a builtin is a **validation error** at write time (an external `end_call`/`raise_crisis` cannot shadow the builtin);
 - the per-version snapshot/forward-compat invariant holds — `external_tools` is a normal versioned field, unlike the global `TOOL_CATALOG` constant.
+
+**Name-collision rule (refined during WS-B).** The check is *not* "external name ∉ `TOOL_NAMES`" — a migrated Retell client legitimately names its own edge function `schedule_callback` / `flag_crisis`, which happen to be our Clara builtin names, and it wants *its* function, not ours. The real hazard is **double-registration**: the same LLM-facing name appearing as both an *enabled* builtin **and** an external tool. So:
+- a structural `ToolsConfig` validator (`_no_enabled_external_overlap`) rejects a config where a name is in **both** `enabled` and `external_tools` — this is within-config and forward-compat-safe (independent of the growing `TOOL_NAMES` catalog), and it guards the human admin-editor path;
+- the **compat ingest resolves the overlap in the client's favor**: an external tool *shadows* a same-named builtin by dropping it from `enabled` (`agent_bridge._apply_tools_overlay`), so the client's `schedule_callback`/`raise_crisis` becomes its edge function with no 422. A normal compat agent ends up with builtins off and tools external.
 
 ### 3.3 Snapshot & publish
 `external_tools` is part of the `AgentConfig` document that is snapshotted into `AgentProfileVersion` on publish (same path as prompts/voice/tools today). A running call reads the **published** version's tools; editing a draft never affects in-flight calls.
@@ -107,8 +110,10 @@ The raw `general_tools` list is still stored and echoed verbatim in `LlmResponse
 ### 4.2 Write-time validation (fail loud, before publish)
 - `url` scheme is `https`; host resolves and passes the **same allow-list** used for webhooks (a new `COMPAT_TOOL_ALLOWED_HOSTS`, defaulting to the migration client's Supabase functions host). A disallowed host → `422` at create/update, not a silent runtime failure.
 - `parameters` is a JSON-Schema **object** (`type == "object"`, `properties` present). Reject arrays/scalars.
-- `name` matches the identifier regex, is unique in the list, and is **not** in `TOOL_NAMES`.
+- `name` matches the identifier regex and is unique within the list. It may reuse a *catalog* builtin name (§3.2) — only a clash with an *enabled* builtin is rejected (structurally), and the compat ingest avoids even that by shadowing.
 - Duplicate/oversized lists bounded (`MAX_EXTERNAL_TOOLS`, e.g. 40 — the client's busiest agent has 27).
+
+(The `url`-scheme / JSON-Schema-object / name / uniqueness checks are **structural** on `ExternalToolSpec` / `ToolsConfig`; only the config-dependent **host allow-list** is a save-time `external_tool_violations` gate, so tightening the allow-list later never 500s an older snapshot on read.)
 
 ### 4.3 The three client gotchas (from backend recon) — handle explicitly
 - `kb_lookup` — a **Retell built-in with no backing edge function** (its `url` is the literal placeholder `"RETELL_BUILT_IN — …"`). Detect this placeholder and map to our **native KB retrieval** (bind the agent's `knowledge_base_ids`; the tool becomes a thin wrapper over `/v1/tools/retrieve_kb_context`). Do **not** create an `ExternalToolSpec` with a bogus URL.
