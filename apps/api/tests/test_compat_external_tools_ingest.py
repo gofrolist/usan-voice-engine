@@ -112,6 +112,47 @@ def test_kb_lookup_not_persisted_as_tool(
 # --- disabled: echo-only, inert ---------------------------------------------
 
 
+def test_realistic_agent_export_ingests(
+    compat_client, compat_headers, enable_external_tools, async_database_url
+):
+    # WS-G: a migration-shaped general_tools export mixing every entry kind. Exercises the
+    # whole ingest: custom + flat(no type) -> external_tools; end_call -> builtin; kb_lookup
+    # placeholder -> native KB (dropped); unknown builtin -> skipped; a name that shadows a
+    # Clara builtin (schedule_callback) -> external wins, builtin dropped from enabled.
+    def _custom(name, fn, ttype="custom"):
+        d = {
+            "name": name,
+            "description": name,
+            "url": f"https://{_ALLOWED_HOST}/functions/v1/{fn}",
+            "parameters": _PARAMS,
+        }
+        if ttype is not None:
+            d["type"] = ttype
+        return d
+
+    export = [
+        _custom("schedule_callback", "schedule-callback"),  # shadows a Clara builtin
+        _custom("log_mood", "log-mood", ttype=None),  # flat: no `type`
+        _custom("flag_crisis", "flag-crisis"),  # not a builtin name
+        {"type": "end_call", "name": "end_call"},  # builtin
+        {  # KB placeholder → native, not an HTTP tool
+            "name": "kb_lookup",
+            "url": "RETELL_BUILT_IN — handled natively",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        {"type": "transfer_call", "name": "xfer"},  # unknown builtin → skipped
+    ]
+    r = _create_llm(compat_client, compat_headers, general_tools=export)
+    assert r.status_code == 201, r.text
+    cfg = asyncio.run(_fetch_draft_config(async_database_url, _profile_id(r.json())))
+    ext_names = [t["name"] for t in cfg["tools"]["external_tools"]]
+    assert ext_names == ["schedule_callback", "log_mood", "flag_crisis"]
+    enabled = cfg["tools"]["enabled"]
+    assert "end_call" in enabled  # end_call builtin requested + present
+    assert "schedule_callback" not in enabled  # shadowed by the external tool
+    assert "log_wellness" in enabled  # a non-shadowed builtin survives
+
+
 def test_echo_only_when_disabled(compat_client, compat_headers, async_database_url):
     # Flag off (default): a tool on a NON-allow-listed host is accepted (no 422) and NOT
     # translated — pre-Surface-3 behavior is unchanged.
