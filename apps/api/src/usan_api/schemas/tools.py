@@ -199,3 +199,18 @@ class RetrieveKbContextResponse(BaseModel):
     # Invisible RAG: the assembled context block + a count. Never echoes kb ids or titles.
     context: str
     hit_count: int
+
+
+class CallExternalToolRequest(ToolCallRequest):
+    # Surface 3: the worker delegates a client-defined HTTP tool call here. `name` resolves to
+    # the call's published-version ExternalToolSpec; `arguments` is the raw object the LLM
+    # produced per that spec's JSON schema, forwarded as the FLAT client-request body (no
+    # `args` wrapper — Surface 3 design §5/§7). The tool url + caller secret stay server-side.
+    name: str = Field(min_length=1, max_length=64)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class CallExternalToolResponse(BaseModel):
+    # The client tool's 200 body relayed to the model: parsed JSON when the body was JSON,
+    # else wrapped as {"text": <raw body>}.
+    result: Any

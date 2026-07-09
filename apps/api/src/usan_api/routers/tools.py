@@ -1,17 +1,29 @@
+import json
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from loguru import logger
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from usan_api import activities_catalog, cost, emergency_resources, notifications, sms_render
+from usan_api import (
+    activities_catalog,
+    cost,
+    emergency_resources,
+    notifications,
+    sms_render,
+    ssrf_guard,
+)
 from usan_api.auth import require_service_token
 from usan_api.compat.kb_retrieval import RetrievedContext, retrieve_context
-from usan_api.db.base import CallType
+from usan_api.compat.serialization import unpack_dynamic_vars
+from usan_api.db.base import CallDirection, CallType
 from usan_api.db.models import Call
 from usan_api.db.session import get_db
 from usan_api.observability.custom_metrics import (
@@ -37,7 +49,7 @@ from usan_api.repositories import sms_messages as sms_repo
 from usan_api.repositories import survey_results as survey_results_repo
 from usan_api.repositories import transcripts as transcripts_repo
 from usan_api.repositories import wellness as wellness_repo
-from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG
+from usan_api.schemas.agent_config import _TOKEN_RE, DEFAULT_AGENT_CONFIG, ExternalToolSpec
 from usan_api.schemas.crisis import RaiseCrisisRequest, RaiseCrisisResponse
 from usan_api.schemas.personalization import (
     RecordPersonalFactRequest,
@@ -46,6 +58,8 @@ from usan_api.schemas.personalization import (
 from usan_api.schemas.tools import (
     CallbackScheduledResponse,
     CallEndedResponse,
+    CallExternalToolRequest,
+    CallExternalToolResponse,
     CloseFamilyTaskRequest,
     CloseFamilyTaskResponse,
     EndCallRequest,
@@ -756,3 +770,131 @@ async def set_spanish_callback(
     CALLBACK_REQUESTS_TOTAL.inc()
     logger.bind(call_id=str(call.id)).info("Scheduled Spanish callback + recorded language")
     return SpanishCallbackScheduledResponse(status="scheduled", callback_id=row.id)
+
+
+# --- Surface 3: external (client-defined) HTTP tool proxy ------------------------------
+# The worker declares each client tool to the LLM (LiveKit raw_schema) but delegates
+# EXECUTION here: this is where the client edge-function URL and the shared X-Caller-Secret
+# live and never leave apps/api (design 2026-07-09 §2/§7). Bound what we read back from a
+# client tool so a hostile/huge response can't blow up memory (the result is fed to the LLM,
+# so it should be small regardless).
+_EXTERNAL_TOOL_MAX_RESPONSE_BYTES = 64 * 1024
+
+
+def _substitute_vars(text: str, values: dict[str, str]) -> str:
+    """Single-pass {{token}} substitution (mirrors prompt_vars / sms_render): an unknown token
+    resolves to "" and an inserted value is never re-scanned, so a {{...}} inside a spoken arg
+    cannot inject a new slot."""
+    return _TOKEN_RE.sub(lambda m: values.get(m.group(1), ""), text)
+
+
+def _substitute_deep(obj: Any, values: dict[str, str]) -> Any:
+    """Resolve {{var}} in every string within an arbitrarily nested arguments structure."""
+    if isinstance(obj, str):
+        return _substitute_vars(obj, values)
+    if isinstance(obj, dict):
+        return {k: _substitute_deep(v, values) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_substitute_deep(v, values) for v in obj]
+    return obj
+
+
+async def _resolve_external_tool(db: AsyncSession, call: Call, name: str) -> ExternalToolSpec:
+    """Find the named external tool on the call's PUBLISHED agent config — resolved exactly
+    the way the worker's /v1/runtime/agent-config did (profile override → contact profile →
+    direction default). 404 if this call's agent declares no such tool."""
+    contact_profile_id: uuid.UUID | None = None
+    if call.contact_id is not None:
+        contact = await contacts_repo.get_contact(db, call.contact_id)
+        if contact is not None:
+            contact_profile_id = contact.agent_profile_id
+    direction = "outbound" if call.direction is CallDirection.OUTBOUND else "inbound"
+    resolved = await profiles_repo.resolve_agent_config(
+        db,
+        profile_override=call.profile_override,
+        contact_profile_id=contact_profile_id,
+        direction=direction,
+    )
+    config = resolved.config if resolved is not None else DEFAULT_AGENT_CONFIG
+    for tool in config.tools.external_tools:
+        if tool.name == name:
+            return tool
+    raise HTTPException(status_code=404, detail="external tool not found for this call")
+
+
+async def _guard_tool_host(host: str, allowed: frozenset[str]) -> list[str]:
+    """Egress allow-list + SSRF public-IP gate (fail-closed), mirroring the webhook sender."""
+    if host.lower() not in allowed:
+        raise ssrf_guard.SsrfBlocked("tool host not in COMPAT_TOOL_ALLOWED_HOSTS")
+    return await ssrf_guard.resolve_public_or_raise(host)
+
+
+@router.post("/external", response_model=CallExternalToolResponse)
+async def call_external_tool(
+    body: CallExternalToolRequest,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    claims: dict[str, Any] = Depends(require_service_token),
+) -> CallExternalToolResponse:
+    """Execute a client-defined HTTP tool for a call (Surface 3). Resolve the tool on the
+    call's published config, substitute {{dynamic_vars}} into the url + args, apply the egress
+    allow-list + SSRF guard, POST the FLAT args body (no `args` wrapper) with X-Caller-Secret,
+    and relay the client's 200 body to the model. Flag-gated (501 when off); every failure is a
+    502 the worker turns into a calm spoken fallback."""
+    if not settings.compat_external_tools_enabled:
+        raise HTTPException(status_code=501, detail="external tools not enabled")
+    call = await _authorize_call(body.call_id, claims, db)
+    spec = await _resolve_external_tool(db, call, body.name)
+
+    # {{var}} resolves against the call's stored dynamic variables (the client's map); the
+    # reserved __meta__ blob is dropped by unpack. Values stringified for token substitution.
+    retell_vars, _ = unpack_dynamic_vars(call.dynamic_vars)
+    values = {k: str(v) for k, v in retell_vars.items()}
+    url = _substitute_vars(spec.url, values)
+    args = _substitute_deep(body.arguments, values)
+    host = urlsplit(url).hostname or ""
+
+    log = logger.bind(call_id=str(call.id), tool=spec.name, host=host)
+    try:
+        addrs = await _guard_tool_host(host, settings.compat_tool_allowed_hosts_set)
+        headers = {
+            "Content-Type": "application/json",
+            # The shared per-org secret (= the client's RETELL_FUNCTION_SECRET). Never
+            # projected to the worker; applied only here.
+            "X-Caller-Secret": settings.compat_tool_caller_secret or "",
+        }
+        pinned = ssrf_guard.pin_request(url, addrs[0], headers)
+        raw = json.dumps(args, separators=(",", ":")).encode()
+        started = time.monotonic()
+        chunks = bytearray()
+        async with (
+            httpx.AsyncClient(follow_redirects=False) as client,
+            client.stream(
+                "POST",
+                pinned.url,
+                content=raw,
+                headers=pinned.headers,
+                extensions=pinned.extensions,
+                timeout=spec.timeout_s,
+            ) as resp,
+        ):
+            status_code = resp.status_code
+            async for chunk in resp.aiter_bytes():
+                chunks.extend(chunk)
+                if len(chunks) >= _EXTERNAL_TOOL_MAX_RESPONSE_BYTES:
+                    break
+            resp.raise_for_status()
+        latency_ms = int((time.monotonic() - started) * 1000)
+    except (httpx.HTTPError, OSError, ValueError, ssrf_guard.SsrfBlocked) as exc:
+        # PHI-free: exception type + status only, never the args/response body.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        log.bind(err=type(exc).__name__, status=status).warning("external tool call failed")
+        raise HTTPException(status_code=502, detail="external tool call failed") from exc
+
+    body_bytes = bytes(chunks[:_EXTERNAL_TOOL_MAX_RESPONSE_BYTES])
+    try:
+        result: Any = json.loads(body_bytes)
+    except ValueError, UnicodeDecodeError:
+        result = {"text": body_bytes.decode("utf-8", "replace")}
+    log.bind(status=status_code, latency_ms=latency_ms).info("external tool call ok")
+    return CallExternalToolResponse(result=result)
