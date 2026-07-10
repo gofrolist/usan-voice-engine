@@ -19,6 +19,7 @@ _FULL_TOOL = {
     "parameters": {"type": "object", "properties": {"phone": {"type": "string"}}},
     "timeout_s": 12.0,
     "speak_during_execution": True,
+    "terminates_call": True,
 }
 
 
@@ -37,6 +38,8 @@ def test_projection_strips_url_method_secret_when_enabled():
             "name": "client_schedule_callback",
             "description": "Schedule a callback.",
             "parameters": {"type": "object", "properties": {"phone": {"type": "string"}}},
+            # Behavior flag carried through so the worker can hang up after the client's end_call.
+            "terminates_call": True,
         }
     ]
     # Security seam: the endpoint URL must not appear anywhere in the worker payload.

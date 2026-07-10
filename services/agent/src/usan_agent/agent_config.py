@@ -76,6 +76,9 @@ class ExternalToolSpec(BaseModel):
     name: str
     description: str
     parameters: dict[str, Any]
+    # Retell end_call_after_speech_with_success: hang up after a successful call (the client's
+    # end_call logs disposition to its URL AND ends the call). Projected from apps/api.
+    terminates_call: bool = False
 
 
 class ToolsConfig(BaseModel):

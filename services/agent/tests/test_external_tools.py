@@ -6,7 +6,8 @@ builders attach external tools alongside the builtins.
 """
 
 import json
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 from livekit.agents.llm import is_raw_function_tool
 
@@ -20,6 +21,19 @@ _SPEC = ExternalToolSpec(
     description="Schedule a callback.",
     parameters={"type": "object", "properties": {"phone": {"type": "string"}}},
 )
+# A tool that terminates the call after a successful run (Retell
+# end_call_after_speech_with_success).
+_END_SPEC = ExternalToolSpec(
+    name="end_call",
+    description="End the call.",
+    parameters={"type": "object", "properties": {}},
+    terminates_call=True,
+)
+
+
+def _ctx(*, userdata=None, session=None):
+    """A stand-in RunContext for invoking a raw tool's _func directly in tests."""
+    return SimpleNamespace(userdata=userdata, session=session or MagicMock())
 
 
 def _settings() -> Settings:
@@ -74,7 +88,7 @@ async def test_handler_forwards_args_and_returns_json(monkeypatch):
     monkeypatch.setattr(api_client, "call_external_tool", mock)
     tool = et.build_external_tools([_SPEC], call_id="c" * 32, settings=_settings())[0]
 
-    out = await tool._func(raw_arguments={"phone": "+15551234567"})
+    out = await tool._func(_ctx(), raw_arguments={"phone": "+15551234567"})
 
     assert json.loads(out) == {"scheduled": True}
     mock.assert_awaited_once()
@@ -87,7 +101,51 @@ async def test_handler_swallows_errors_to_fallback(monkeypatch):
         api_client, "call_external_tool", AsyncMock(side_effect=RuntimeError("boom"))
     )
     tool = et.build_external_tools([_SPEC], call_id="c" * 32, settings=_settings())[0]
-    assert await tool._func(raw_arguments={}) == et._EXTERNAL_TOOL_FALLBACK
+    assert await tool._func(_ctx(), raw_arguments={}) == et._EXTERNAL_TOOL_FALLBACK
+
+
+# --- terminates_call: the client's end_call hangs up after a successful run -------------------
+
+
+async def test_terminating_tool_hangs_up_after_success(monkeypatch):
+    monkeypatch.setattr(api_client, "call_external_tool", AsyncMock(return_value={"ok": True}))
+    hang = AsyncMock()
+    monkeypatch.setattr("usan_agent.check_in._hang_up", hang)  # picked up by the local import
+    tool = et.build_external_tools([_END_SPEC], call_id="c" * 32, settings=_settings())[0]
+    data = SimpleNamespace(job_ctx=MagicMock(), goodbye_message="bye", call_id="c")
+    session = MagicMock()
+
+    out = await tool._func(_ctx(userdata=data, session=session), raw_arguments={})
+
+    hang.assert_awaited_once_with(data, session)  # POST logged disposition, then hang up
+    assert json.loads(out) == {"ok": True}
+
+
+async def test_terminating_tool_does_not_hang_up_on_failure(monkeypatch):
+    # Retell ends only after a *successful* call: a failed POST must leave the call running.
+    monkeypatch.setattr(api_client, "call_external_tool", AsyncMock(side_effect=RuntimeError("x")))
+    hang = AsyncMock()
+    monkeypatch.setattr("usan_agent.check_in._hang_up", hang)
+    tool = et.build_external_tools([_END_SPEC], call_id="c" * 32, settings=_settings())[0]
+    data = SimpleNamespace(job_ctx=MagicMock())
+
+    out = await tool._func(_ctx(userdata=data), raw_arguments={})
+
+    hang.assert_not_awaited()
+    assert out == et._EXTERNAL_TOOL_FALLBACK
+
+
+async def test_terminating_tool_noop_without_call_context(monkeypatch):
+    # Greet-only sessions carry no CheckInData userdata — there is nothing to tear down.
+    monkeypatch.setattr(api_client, "call_external_tool", AsyncMock(return_value={"ok": True}))
+    hang = AsyncMock()
+    monkeypatch.setattr("usan_agent.check_in._hang_up", hang)
+    tool = et.build_external_tools([_END_SPEC], call_id="c" * 32, settings=_settings())[0]
+
+    out = await tool._func(_ctx(userdata=None), raw_arguments={})
+
+    hang.assert_not_awaited()
+    assert json.loads(out) == {"ok": True}
 
 
 async def test_test_tools_make_no_api_call(monkeypatch):

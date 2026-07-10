@@ -29,10 +29,12 @@ def _project_config_for_worker(
 ) -> dict[str, Any]:
     """Project the resolved config to the WORKER-facing shape (Surface 3 security seam).
 
-    ``tools.external_tools`` is reduced to the LLM-facing fields ONLY —
-    ``{name, description, parameters}`` — stripping each tool's ``url``/``method``/
-    ``timeout_s``. The client edge-function URL and the caller secret therefore never leave
-    ``apps/api``; the worker is structurally unable to learn a tool's endpoint (design §5).
+    ``tools.external_tools`` is reduced to the LLM-facing fields plus the ``terminates_call``
+    behavior flag — ``{name, description, parameters, terminates_call}`` — stripping each tool's
+    ``url``/``method``/``timeout_s``. The client edge-function URL and the caller secret therefore
+    never leave ``apps/api``; the worker is structurally unable to learn a tool's endpoint
+    (design §5). ``terminates_call`` is a behavior flag (not a secret), so the worker needs it to
+    hang up after the client's end_call.
     When the feature flag is off, the list is emptied (the ingest also does not persist any,
     so this is belt-and-suspenders). Returns a JSON-safe dict (uuids stringified)."""
     payload: dict[str, Any] = resolved.model_dump(mode="json")
@@ -40,7 +42,13 @@ def _project_config_for_worker(
     external = tools.get("external_tools") or []
     if external_tools_enabled:
         tools["external_tools"] = [
-            {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}
+            {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["parameters"],
+                # Behavior flag (not a secret): the worker must know to hang up after this tool.
+                "terminates_call": t.get("terminates_call", False),
+            }
             for t in external
         ]
     else:

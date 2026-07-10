@@ -86,6 +86,10 @@ def _to_spec(entry: dict[str, Any]) -> dict[str, Any] | None:
         "parameters": parameters,
         "timeout_s": _timeout_s(entry),
         "speak_during_execution": bool(entry.get("speak_during_execution", False)),
+        # Retell's end_call_after_speech_with_success ⇒ the agent hangs up after a successful
+        # call. Carries the client's end_call (a URL-backed disposition logger) through as an
+        # external tool that ALSO terminates the call, preserving the hang-up semantics.
+        "terminates_call": bool(entry.get("end_call_after_speech_with_success", False)),
     }
 
 

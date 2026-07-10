@@ -372,6 +372,11 @@ class ExternalToolSpec(BaseModel):
     # Retell filler-speech flag: parsed + persisted now but INERT in v1 (execution is
     # synchronous). Restoring filler is a fast-follow that needs no re-ingest.
     speak_during_execution: bool = False
+    # Retell ``end_call_after_speech_with_success``: the client's end_call is a URL-backed
+    # disposition-logging function AND a hang-up directive. When true, the agent tears the call
+    # down (goodbye + delete_room + shutdown) after a SUCCESSFUL call — so end_call logs the
+    # outcome to the client edge function AND ends the call, instead of silently continuing.
+    terminates_call: bool = False
 
     @field_validator("url")
     @classmethod

@@ -27,6 +27,19 @@ def test_custom_tool_becomes_external_spec():
     assert spec["method"] == "POST"
     assert spec["parameters"] == _PARAMS
     assert spec["timeout_s"] == 10.0
+    assert spec["terminates_call"] is False  # default: a normal tool does not hang up
+
+
+def test_url_backed_end_call_carries_terminates_call():
+    # The client's REAL end_call: a URL-backed disposition logger + a hang-up directive (no
+    # `type`). It must translate to an external tool with terminates_call=True — not be dropped
+    # and not silently continue the call after logging (the shipped-#169 gap this closes).
+    entry = _custom(name="end_call", end_call_after_speech_with_success=True)
+    del entry["type"]  # the real client end_call.json has no `type`
+    out = translate_general_tools([entry])
+    spec = out.external_tools[0]
+    assert spec["name"] == "end_call"
+    assert spec["terminates_call"] is True
 
 
 def test_flat_dashboard_shape_without_type_is_custom():
