@@ -2,7 +2,7 @@ import json
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -808,7 +808,9 @@ async def _resolve_external_tool(db: AsyncSession, call: Call, name: str) -> Ext
         contact = await contacts_repo.get_contact(db, call.contact_id)
         if contact is not None:
             contact_profile_id = contact.agent_profile_id
-    direction = "outbound" if call.direction is CallDirection.OUTBOUND else "inbound"
+    direction: Literal["inbound", "outbound"] = (
+        "outbound" if call.direction is CallDirection.OUTBOUND else "inbound"
+    )
     resolved = await profiles_repo.resolve_agent_config(
         db,
         profile_override=call.profile_override,
