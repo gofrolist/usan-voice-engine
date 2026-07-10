@@ -420,6 +420,19 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _external_tools_require_allowlist(self) -> Settings:
+        # Fail-closed (Surface 3 WS-C): enabling client HTTP tools with an empty egress allow-list
+        # would let every ingest 422 ("host not in allow-list") and every proxy call 502 — a
+        # silently-broken feature. That combination is a misconfiguration; fail at startup, not
+        # per call.
+        if self.compat_external_tools_enabled and not self.compat_tool_allowed_hosts.strip():
+            raise ValueError(
+                "COMPAT_EXTERNAL_TOOLS_ENABLED=true requires COMPAT_TOOL_ALLOWED_HOSTS to name "
+                "at least one egress host (Surface 3 WS-C)"
+            )
+        return self
+
     @field_validator(
         "telnyx_caller_id",
         "telnyx_sip_username",
