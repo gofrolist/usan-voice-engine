@@ -69,7 +69,7 @@ async def _cleanup_keys(super_async_url: str, org_id: uuid.UUID) -> None:
         await engine.dispose()
 
 
-async def test_missing_credentials_rejected(app_async_database_url, app_role_password):
+async def test_missing_credentials_rejected(app_async_database_url):
     engine, factory = _app_factory(app_async_database_url)
     try:
         with pytest.raises(CompatError) as exc:
@@ -79,7 +79,7 @@ async def test_missing_credentials_rejected(app_async_database_url, app_role_pas
         await engine.dispose()
 
 
-async def test_wrong_scheme_rejected(app_async_database_url, app_role_password):
+async def test_wrong_scheme_rejected(app_async_database_url):
     engine, factory = _app_factory(app_async_database_url)
     try:
         with pytest.raises(CompatError) as exc:
@@ -89,7 +89,7 @@ async def test_wrong_scheme_rejected(app_async_database_url, app_role_password):
         await engine.dispose()
 
 
-async def test_unknown_token_rejected(app_async_database_url, app_role_password):
+async def test_unknown_token_rejected(app_async_database_url):
     engine, factory = _app_factory(app_async_database_url)
     try:
         with pytest.raises(CompatError) as exc:
@@ -99,9 +99,7 @@ async def test_unknown_token_rejected(app_async_database_url, app_role_password)
         await engine.dispose()
 
 
-async def test_valid_key_resolves_org(
-    async_database_url, app_async_database_url, app_role_password
-):
+async def test_valid_key_resolves_org(async_database_url, app_async_database_url):
     org_id = await _usan_org_id(async_database_url)
     token = await _seed_key(async_database_url, org_id)
     engine, factory = _app_factory(app_async_database_url)
@@ -112,7 +110,7 @@ async def test_valid_key_resolves_org(
         await engine.dispose()
 
 
-async def test_revoked_key_rejected(async_database_url, app_async_database_url, app_role_password):
+async def test_revoked_key_rejected(async_database_url, app_async_database_url):
     org_id = await _usan_org_id(async_database_url)
     token = await _seed_key(async_database_url, org_id, status="revoked")
     engine, factory = _app_factory(app_async_database_url)
@@ -125,9 +123,7 @@ async def test_revoked_key_rejected(async_database_url, app_async_database_url, 
         await engine.dispose()
 
 
-async def test_scoped_session_sets_org_context(
-    async_database_url, app_async_database_url, app_role_password
-):
+async def test_scoped_session_sets_org_context(async_database_url, app_async_database_url):
     org_id = await _usan_org_id(async_database_url)
     engine, factory = _app_factory(app_async_database_url)
     try:

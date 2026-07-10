@@ -62,7 +62,7 @@ async def _roundtrip(async_url: str) -> tuple[set[str], str]:
         await engine.dispose()
 
 
-def test_0033_creates_memberships_and_migrates_role(database_url, app_role_password):
+def test_0033_creates_memberships_and_migrates_role(database_url):
     async_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     cols, role = asyncio.run(_roundtrip(async_url))
     assert {"is_super_admin", "status", "last_active_org_id"} <= cols

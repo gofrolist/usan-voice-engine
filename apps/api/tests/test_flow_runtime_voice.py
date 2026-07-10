@@ -266,7 +266,7 @@ def test_unrunnable_flow_returns_unbound(client, async_database_url, flow_voice_
 
 
 def test_cross_org_flow_binding_is_unbound(
-    client, async_database_url, app_async_database_url, app_role_password, monkeypatch
+    client, async_database_url, app_async_database_url, monkeypatch
 ) -> None:
     # The flow lives under a DIFFERENT org than the call: RLS makes it indistinguishable
     # from absent -> bound=False (never leaks, never errors).

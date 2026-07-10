@@ -129,18 +129,10 @@ def async_database_url(database_url: str) -> str:
     return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
-@pytest.fixture
-def app_role_password(database_url: str) -> None:
-    """Ensure usan_app has its known login password right before a test connects as it.
-
-    The session-scoped `database_url` fixture sets the password once. But the migration
-    round-trip tests (test_webhook_migration, test_batch_migration, test_ops_queue_migration,
-    test_custom_variables_migration) downgrade below 0029 and re-upgrade — recreating
-    usan_app *passwordless* (migrations carry no secrets). Any later test that connects as
-    usan_app (the RLS isolation suite) would then hit "password authentication failed".
-    Re-applying the idempotent ALTER ROLE here makes those tests order-independent.
-    """
-    asyncio.run(_set_app_role_password(database_url))
+# NOTE: usan_app's password is set once by `database_url` above. The only test that
+# can break it is test_migration_roundtrip.py (the sole below-0029 downgrade, which
+# recreates usan_app passwordless) — and it re-applies the ALTER ROLE in its own
+# `finally`, so no per-test healing fixture is needed.
 
 
 @pytest.fixture(scope="session")
@@ -216,7 +208,7 @@ def two_orgs(async_database_url: str) -> tuple[uuid.UUID, uuid.UUID]:
 
 
 @pytest_asyncio.fixture
-async def app_session(app_async_database_url: str, app_role_password: None):
+async def app_session(app_async_database_url: str):
     """A usan_app async session (NullPool) for repo-level tests.
 
     Connects as the non-superuser RLS-subject role. memberships + admin_users are
@@ -407,7 +399,6 @@ def client(
     async_database_url: str,
     app_database_url: str,
     app_async_database_url: str,
-    app_role_password: None,
     monkeypatch,
 ) -> TestClient:
     # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
@@ -474,7 +465,6 @@ def sso_client(
     async_database_url: str,
     app_database_url: str,
     app_async_database_url: str,
-    app_role_password: None,
     monkeypatch,
 ) -> TestClient:
     """Like `client`, but with Google SSO configured (for /v1/auth flow tests)."""

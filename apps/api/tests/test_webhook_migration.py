@@ -11,16 +11,11 @@ exists (tables absent) and pass once it lands.
 
 Helpers copied verbatim from test_ops_queue_migration.py (`_columns` returning
 {name: (data_type, is_nullable, column_default)}, `_indexes`, `_indexdef`,
-`_check_constraints`, `_execute`, `_fetch_one`, plus its API_DIR/env-dict
-subprocess pattern) and `_delete_rules` from test_batch_migration.py.
+`_check_constraints`, `_execute`) and `_delete_rules` from test_batch_migration.py.
 """
 
 import asyncio
-import os
-import subprocess
-import sys
 import uuid
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,9 +23,6 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
-
-API_DIR = Path(__file__).resolve().parents[1]
-TEST_SECRET = "a" * 32
 
 
 async def _columns(async_database_url: str, table: str) -> dict[str, tuple[str, str, str | None]]:
@@ -106,17 +98,6 @@ async def _execute(async_database_url: str, sql: str, params: dict[str, Any]) ->
     try:
         async with engine.begin() as conn:
             await conn.execute(text(sql), params)
-    finally:
-        await engine.dispose()
-
-
-async def _fetch_one(async_database_url: str, sql: str, params: dict[str, Any]) -> Any:
-    engine = create_async_engine(async_database_url, poolclass=NullPool)
-    try:
-        async with engine.begin() as conn:
-            rows = await conn.execute(text(sql), params)
-            row = rows.first()
-            return row[0] if row is not None else None
     finally:
         await engine.dispose()
 
@@ -331,65 +312,6 @@ def test_fk_delete_rule_cascade(async_database_url: str) -> None:
     assert rules["webhook_endpoints"] == "CASCADE"
 
 
-def test_downgrade_seed_upgrade_roundtrip(database_url: str, async_database_url: str) -> None:
-    # Runs last in this module; always finishes at head (the shared session DB
-    # must never be stranded mid-stack). Spec §10.1: downgrade → seed → upgrade —
-    # upgrading 0014 over a *populated* pre-0014 database must work.
-    env = {
-        **os.environ,
-        "DATABASE_URL": database_url,
-        "LIVEKIT_API_KEY": "key",
-        "LIVEKIT_API_SECRET": TEST_SECRET,
-        "LIVEKIT_URL": "ws://livekit:7880",
-        "JWT_SIGNING_KEY": "s" * 32,
-        "OPERATOR_API_KEY": "o" * 32,
-    }
-    subprocess.run(
-        [sys.executable, "-m", "alembic", "downgrade", "0013"],
-        cwd=API_DIR,
-        env=env,
-        check=True,
-    )
-    call_id = uuid.uuid4()
-    try:
-        assert asyncio.run(_columns(async_database_url, "webhook_endpoints")) == {}
-        assert asyncio.run(_columns(async_database_url, "webhook_deliveries")) == {}
-
-        # Seed one minimal business row while downgraded: NOT NULL columns only,
-        # nullable FKs (contact_id) left NULL.
-        asyncio.run(
-            _execute(
-                async_database_url,
-                "INSERT INTO calls (id, direction, status) "
-                "VALUES (:id, CAST('outbound' AS call_direction), "
-                "CAST('queued' AS call_status))",
-                {"id": call_id},
-            )
-        )
-    finally:
-        # A mid-test failure must not strand the shared session DB at 0013 —
-        # every other module in the run assumes head.
-        subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
-            cwd=API_DIR,
-            env=env,
-            check=True,
-        )
-
-    assert "id" in asyncio.run(_columns(async_database_url, "webhook_endpoints"))
-    assert "id" in asyncio.run(_columns(async_database_url, "webhook_deliveries"))
-    idx = asyncio.run(_indexes(async_database_url, "webhook_deliveries"))
-    assert "idx_webhook_deliveries_due" in idx
-
-    assert (
-        asyncio.run(
-            _fetch_one(
-                async_database_url,
-                "SELECT count(*) FROM calls WHERE id = :id",
-                {"id": call_id},
-            )
-        )
-        == 1
-    )
-
-    asyncio.run(_execute(async_database_url, "DELETE FROM calls WHERE id = :id", {"id": call_id}))
+# The downgrade→seed→upgrade round-trip (webhook tables re-created over a
+# populated calls table) lives in test_migration_roundtrip.py, shared with the
+# 0012/0013/0015 suites (one head→0011→head cycle instead of four).

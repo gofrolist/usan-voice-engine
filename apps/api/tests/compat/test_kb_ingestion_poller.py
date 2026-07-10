@@ -19,7 +19,7 @@ def _on():
 
 @pytest.mark.asyncio
 async def test_poll_processes_two_orgs(
-    app_session, app_async_database_url, async_database_url, app_role_password, mock_embed
+    app_session, app_async_database_url, async_database_url, mock_embed
 ) -> None:
     # Truncate all 3 KB tables so leftover in_progress rows from other tests don't skew the count.
     eng0 = create_async_engine(async_database_url, poolclass=NullPool)
