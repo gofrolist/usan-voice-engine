@@ -18,10 +18,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
 from usan_api.repositories import agent_profiles as agent_profiles_repo
 from usan_api.repositories import call_schedules as schedules_repo
 
-_OP = {"Authorization": "Bearer " + "o" * 32}
 ALL_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
@@ -125,16 +125,14 @@ def test_create_two_slots_then_per_slot_409_and_filter(client):
     assert {r["slot"] for r in both.json()} == {"morning", "evening"}
 
 
-def test_patch_slot_and_invalid_slot_filter_are_422(client):
-    contact_id = _seed_contact(client)
-    created = client.post("/v1/schedules", json=_schedule_body(contact_id), headers=_OP).json()
+def test_patch_slot_and_invalid_slot_filter_are_422(bare_client):
     # slot is immutable identity: a PATCH carrying it 422s (extra="forbid"), never a
     # silent no-op that would let the caller believe a move succeeded.
-    r = client.patch(f"/v1/schedules/{created['id']}", json={"slot": "evening"}, headers=_OP)
+    r = bare_client.patch(f"/v1/schedules/{uuid.uuid4()}", json={"slot": "evening"}, headers=_OP)
     assert r.status_code == 422
     # The ?slot= filter is the closed morning|evening enum: an unknown value 422s at
     # the boundary instead of returning a misleading empty 200.
-    bad = client.get("/v1/schedules", params={"slot": "afternoon"}, headers=_OP)
+    bad = bare_client.get("/v1/schedules", params={"slot": "afternoon"}, headers=_OP)
     assert bad.status_code == 422
 
 
@@ -327,10 +325,10 @@ def test_mutations_write_audit_log_lines(client):
         assert all(contact_name not in str(v) for v in record["extra"].values())
 
 
-def test_schedules_require_operator_token(client):
+def test_schedules_require_operator_token(bare_client):
     sid = uuid.uuid4()
-    assert client.post("/v1/schedules", json={}).status_code == 401
-    assert client.get("/v1/schedules").status_code == 401
-    assert client.get(f"/v1/schedules/{sid}").status_code == 401
-    assert client.patch(f"/v1/schedules/{sid}", json={}).status_code == 401
-    assert client.delete(f"/v1/schedules/{sid}").status_code == 401
+    assert bare_client.post("/v1/schedules", json={}).status_code == 401
+    assert bare_client.get("/v1/schedules").status_code == 401
+    assert bare_client.get(f"/v1/schedules/{sid}").status_code == 401
+    assert bare_client.patch(f"/v1/schedules/{sid}", json={}).status_code == 401
+    assert bare_client.delete(f"/v1/schedules/{sid}").status_code == 401

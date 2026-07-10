@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import WebhookDelivery, WebhookEndpoint
 from usan_api.repositories import calls as calls_repo
@@ -19,7 +20,6 @@ from usan_api.repositories import contacts as contacts_repo
 from usan_api.routers.webhooks import _recording_uri
 
 # Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 def _sign(body: str, key: str, secret: str) -> str:
@@ -147,9 +147,9 @@ def test_livekit_webhook_does_not_complete_terminal_call(client, async_database_
     assert follow.json()["status"] == "no_answer"
 
 
-def test_livekit_webhook_bad_signature_rejected(client):
+def test_livekit_webhook_bad_signature_rejected(bare_client):
     body = _event("room_finished", "usan-outbound-x")
-    r = client.post(
+    r = bare_client.post(
         "/webhooks/livekit",
         content=body,
         headers={"Authorization": "not-a-valid-token"},
@@ -164,12 +164,12 @@ def test_livekit_webhook_unknown_event_ignored(client):
     assert r.status_code == 200
 
 
-def test_livekit_webhook_stale_event_rejected(client):
+def test_livekit_webhook_stale_event_rejected(bare_client):
     # A signature-valid but ancient (replayed) delivery is rejected with 401 — the same
     # status as a forged signature, so the response is not a signature-validity oracle.
     body = _event("room_finished", "usan-outbound-stale", created_at=1)
     token = _sign(body, "key", "a" * 32)
-    r = client.post("/webhooks/livekit", content=body, headers={"Authorization": token})
+    r = bare_client.post("/webhooks/livekit", content=body, headers={"Authorization": token})
     assert r.status_code == 401
 
 

@@ -5,6 +5,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
 from usan_api import object_storage, phi_audit
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.repositories import calls as calls_repo
@@ -12,7 +13,6 @@ from usan_api.repositories import contacts as contacts_repo
 from usan_api.settings import get_settings
 
 # Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 async def _seed(async_database_url: str, room: str, *, recording_uri=None) -> uuid.UUID:

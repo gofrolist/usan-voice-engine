@@ -33,9 +33,9 @@ def test_create_profile_returns_201(client, super_admin_acting_session):
     assert body["has_unpublished_draft"] is True
 
 
-def test_create_profile_requires_session(client):
+def test_create_profile_requires_session(bare_client):
     # No session cookie: the management plane rejects the request.
-    r = client.post("/v1/admin/profiles", json={"name": _name()})
+    r = bare_client.post("/v1/admin/profiles", json={"name": _name()})
     assert r.status_code == 401
 
 

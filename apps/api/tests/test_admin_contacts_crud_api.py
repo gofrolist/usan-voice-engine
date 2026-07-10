@@ -71,9 +71,9 @@ def test_viewer_cannot_create(client, async_database_url):
     assert r.status_code == 403
 
 
-def test_create_requires_session(client):
+def test_create_requires_session(bare_client):
     assert (
-        client.post(
+        bare_client.post(
             "/v1/admin/contacts",
             json={"name": "X", "phone_e164": "+15551230606", "timezone": _TZ},
         ).status_code

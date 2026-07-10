@@ -69,8 +69,8 @@ def _seed_flag(client, *, severity="urgent", category="medical", reason="reporte
     return contact_id, call_id, r.json()["id"]
 
 
-def test_follow_up_flags_requires_session(client):
-    assert client.get("/v1/admin/follow-up-flags").status_code == 401
+def test_follow_up_flags_requires_session(bare_client):
+    assert bare_client.get("/v1/admin/follow-up-flags").status_code == 401
 
 
 def test_follow_up_flags_list_and_filter(client, mock_dispatch, admin_session):
@@ -222,9 +222,11 @@ def test_flag_transition_idempotent_noop(client, mock_dispatch, admin_session):
     first = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "acknowledged"})
     assert first.status_code == 200, first.text
     stamps = (first.json()["status_updated_at"], first.json()["status_updated_by"])
-    audits = _audit_count(client, "follow_up_flag.update")
+    # One unfiltered audit fetch per phase: both action counts come from one response.
+    rows = client.get("/v1/admin/audit").json()
+    audits = sum(e["action"] == "follow_up_flag.update" for e in rows)
     # Success legs write only the .update row — never a noop_read one.
-    assert _audit_count(client, "follow_up_flag.noop_read") == 0
+    assert all(e["action"] != "follow_up_flag.noop_read" for e in rows)
 
     # (a) ack -> ack replay: 200, stamps byte-identical, no new .update audit row
     # — but the body is still a PHI read (reason + contact_name), so a PHI-free
@@ -232,8 +234,9 @@ def test_flag_transition_idempotent_noop(client, mock_dispatch, admin_session):
     replay = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "acknowledged"})
     assert replay.status_code == 200, replay.text
     assert (replay.json()["status_updated_at"], replay.json()["status_updated_by"]) == stamps
-    assert _audit_count(client, "follow_up_flag.update") == audits
-    noop_rows = client.get("/v1/admin/audit?action=follow_up_flag.noop_read").json()
+    rows = client.get("/v1/admin/audit").json()
+    assert sum(e["action"] == "follow_up_flag.update" for e in rows) == audits
+    noop_rows = [e for e in rows if e["action"] == "follow_up_flag.noop_read"]
     assert len(noop_rows) == 1
     entry = noop_rows[0]
     assert entry["detail"] == {"status": "acknowledged", "noop": True}
@@ -253,8 +256,9 @@ def test_flag_transition_idempotent_noop(client, mock_dispatch, admin_session):
     replay = client.patch(f"/v1/admin/follow-up-flags/{flag_id}", json={"status": "resolved"})
     assert replay.status_code == 200, replay.text
     assert (replay.json()["status_updated_at"], replay.json()["status_updated_by"]) == stamps
-    assert _audit_count(client, "follow_up_flag.update") == audits
-    noop_rows = client.get("/v1/admin/audit?action=follow_up_flag.noop_read").json()
+    rows = client.get("/v1/admin/audit").json()
+    assert sum(e["action"] == "follow_up_flag.update" for e in rows) == audits
+    noop_rows = [e for e in rows if e["action"] == "follow_up_flag.noop_read"]
     assert len(noop_rows) == 2
     assert any(r["detail"] == {"status": "resolved", "noop": True} for r in noop_rows)
 
@@ -590,24 +594,60 @@ def test_flags_audit_detail_gains_offset_and_severity(client, mock_dispatch, adm
 # --- C4: GET /v1/admin/queues/summary — PHI-free counts, no audit row (spec §4.5) ---
 
 
-def test_queues_summary_counts_match_seeds(
-    client, mock_dispatch, admin_session, async_database_url
-):
-    # 2 open flags (1 urgent), 1 acknowledged flag, 1 resolved flag.
-    _seed_flag(client, severity="urgent")
-    _seed_flag(client, severity="routine")
-    _e, _c, ack_flag = _seed_flag(client, severity="routine")
-    r = client.patch(f"/v1/admin/follow-up-flags/{ack_flag}", json={"status": "acknowledged"})
-    assert r.status_code == 200, r.text
-    _e, _c, res_flag = _seed_flag(client, severity="routine")
-    r = client.patch(f"/v1/admin/follow-up-flags/{res_flag}", json={"status": "resolved"})
-    assert r.status_code == 200, r.text
+async def _seed_queue_rows(async_database_url: str) -> None:
+    """Direct-SQL seed of the exact status/severity mix the summary must count:
+    2 open flags (1 urgent), 1 acknowledged flag, 1 resolved flag; 1 open callback,
+    1 acknowledged callback. This test pins the COUNTING (spec §4.5) — the flag-tool
+    and PATCH transition paths are pinned by the transition tests above."""
+    contact_id = str(uuid.uuid4())
+    call_id = str(uuid.uuid4())
+    engine = create_async_engine(async_database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO contacts (id, name, phone_e164, timezone) "
+                    "VALUES (CAST(:id AS uuid), 'Ada', :p, 'UTC')"
+                ),
+                {"id": contact_id, "p": f"+1555{str(uuid.UUID(contact_id).int)[:7].zfill(7)}"},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO calls (id, contact_id, direction, status) "
+                    "VALUES (CAST(:cid AS uuid), CAST(:eid AS uuid), 'outbound', 'completed')"
+                ),
+                {"cid": call_id, "eid": contact_id},
+            )
+            for severity, status in (
+                ("urgent", "open"),
+                ("routine", "open"),
+                ("routine", "acknowledged"),
+                ("routine", "resolved"),
+            ):
+                await conn.execute(
+                    text(
+                        "INSERT INTO follow_up_flags "
+                        "(call_id, contact_id, severity, category, reason, status) "
+                        "VALUES (CAST(:cid AS uuid), CAST(:eid AS uuid), "
+                        ":sev, 'medical', 'seeded', :st)"
+                    ),
+                    {"cid": call_id, "eid": contact_id, "sev": severity, "st": status},
+                )
+            for status in ("open", "acknowledged"):
+                await conn.execute(
+                    text(
+                        "INSERT INTO callback_requests "
+                        "(call_id, contact_id, requested_time_text, status) "
+                        "VALUES (CAST(:cid AS uuid), CAST(:eid AS uuid), 'tomorrow at 3', :st)"
+                    ),
+                    {"cid": call_id, "eid": contact_id, "st": status},
+                )
+    finally:
+        await engine.dispose()
 
-    # 1 open callback, 1 acknowledged callback.
-    _seed_callback(async_database_url)
-    ack_cb = _seed_callback(async_database_url)
-    r = client.patch(f"/v1/admin/callback-requests/{ack_cb}", json={"status": "acknowledged"})
-    assert r.status_code == 200, r.text
+
+def test_queues_summary_counts_match_seeds(client, admin_session, async_database_url):
+    asyncio.run(_seed_queue_rows(async_database_url))
 
     r = client.get("/v1/admin/queues/summary")
     assert r.status_code == 200, r.text
@@ -653,5 +693,5 @@ def test_queues_summary_viewer_readable_no_audit_no_phi(
     assert len(client.get("/v1/admin/audit").json()) == audits_before
 
 
-def test_queues_summary_requires_session(client):
-    assert client.get("/v1/admin/queues/summary").status_code == 401
+def test_queues_summary_requires_session(bare_client):
+    assert bare_client.get("/v1/admin/queues/summary").status_code == 401

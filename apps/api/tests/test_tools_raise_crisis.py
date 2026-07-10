@@ -4,15 +4,13 @@ Per-category resource script, idempotency per (call_id, category), and the stand
 tool-auth contract (token required / call_id match / known call / valid enum).
 """
 
-import time
 import uuid
 
-import jwt
 import pytest
 
+from tests.conftest import OPERATOR_HEADERS as _OP
+from tests.conftest import service_token as _service_token
 from usan_api import livekit_dispatch
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 @pytest.fixture
@@ -23,15 +21,6 @@ def mock_dispatch(monkeypatch):
 
     monkeypatch.setattr(livekit_dispatch, "dispatch_agent", AsyncMock())
     monkeypatch.setattr(dialer, "schedule_dial", lambda call_id, settings: None)
-
-
-def _service_token(call_id: str, secret: str = "s" * 32) -> str:
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
-    )
 
 
 def _auth(call_id: str) -> dict:
@@ -129,20 +118,17 @@ def test_raise_crisis_distinct_categories_are_distinct_flags(client, mock_dispat
     assert a.json()["flag_id"] != b.json()["flag_id"]
 
 
-def test_raise_crisis_requires_token(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_raise_crisis_requires_token(bare_client):
+    r = bare_client.post(
         "/v1/tools/raise_crisis",
-        json={"call_id": call_id, "category": "medical", "detection_source": "llm"},
+        json={"call_id": str(uuid.uuid4()), "category": "medical", "detection_source": "llm"},
     )
     assert r.status_code == 401
 
 
-def test_raise_crisis_call_id_mismatch_403(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_raise_crisis_call_id_mismatch_403(bare_client):
+    call_id = str(uuid.uuid4())
+    r = bare_client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "medical", "detection_source": "llm"},
         headers=_auth(str(uuid.uuid4())),
@@ -160,10 +146,9 @@ def test_raise_crisis_unknown_call_404(client, mock_dispatch):
     assert r.status_code == 404
 
 
-def test_raise_crisis_bad_category_422(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_raise_crisis_bad_category_422(bare_client):
+    call_id = str(uuid.uuid4())
+    r = bare_client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "panic", "detection_source": "llm"},
         headers=_auth(call_id),
@@ -171,10 +156,9 @@ def test_raise_crisis_bad_category_422(client, mock_dispatch):
     assert r.status_code == 422
 
 
-def test_raise_crisis_bad_detection_source_422(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_raise_crisis_bad_detection_source_422(bare_client):
+    call_id = str(uuid.uuid4())
+    r = bare_client.post(
         "/v1/tools/raise_crisis",
         json={"call_id": call_id, "category": "medical", "detection_source": "guess"},
         headers=_auth(call_id),

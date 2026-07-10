@@ -1,8 +1,9 @@
 import uuid
 
+from tests.conftest import OPERATOR_HEADERS as _OP
+
 # Management-plane routes require the operator bearer token (matches conftest's
 # OPERATOR_API_KEY). Kept as a module constant so each request stays terse.
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 def test_create_contact_returns_201(client):
@@ -87,8 +88,8 @@ def test_update_missing_contact_returns_404(client):
     assert r.status_code == 404
 
 
-def test_create_contact_invalid_phone_returns_422(client):
-    r = client.post(
+def test_create_contact_invalid_phone_returns_422(bare_client):
+    r = bare_client.post(
         "/v1/contacts",
         json={"name": "A", "phone_e164": "5551234567", "timezone": "UTC"},
         headers=_OP,
@@ -96,8 +97,8 @@ def test_create_contact_invalid_phone_returns_422(client):
     assert r.status_code == 422
 
 
-def test_create_contact_sip_uri_phone_rejected_422(client):
-    r = client.post(
+def test_create_contact_sip_uri_phone_rejected_422(bare_client):
+    r = bare_client.post(
         "/v1/contacts",
         json={"name": "A", "phone_e164": "sip:victim@attacker.com", "timezone": "UTC"},
         headers=_OP,
@@ -105,19 +106,15 @@ def test_create_contact_sip_uri_phone_rejected_422(client):
     assert r.status_code == 422
 
 
-def test_update_contact_invalid_phone_returns_422(client):
-    created = client.post(
-        "/v1/contacts",
-        json={"name": "A", "phone_e164": "+15551239999", "timezone": "UTC"},
-        headers=_OP,
+def test_update_contact_invalid_phone_returns_422(bare_client):
+    r = bare_client.put(
+        f"/v1/contacts/{uuid.uuid4()}", json={"phone_e164": "not-a-number"}, headers=_OP
     )
-    contact_id = created.json()["id"]
-    r = client.put(f"/v1/contacts/{contact_id}", json={"phone_e164": "not-a-number"}, headers=_OP)
     assert r.status_code == 422
 
 
-def test_create_contact_oversized_name_returns_422(client):
-    r = client.post(
+def test_create_contact_oversized_name_returns_422(bare_client):
+    r = bare_client.post(
         "/v1/contacts",
         json={"name": "A" * 201, "phone_e164": "+15551230001", "timezone": "UTC"},
         headers=_OP,
@@ -125,21 +122,16 @@ def test_create_contact_oversized_name_returns_422(client):
     assert r.status_code == 422
 
 
-def test_create_contact_requires_operator_token(client):
+def test_create_contact_requires_operator_token(bare_client):
     payload = {"name": "A", "phone_e164": "+15551239000", "timezone": "UTC"}
-    assert client.post("/v1/contacts", json=payload).status_code == 401
+    assert bare_client.post("/v1/contacts", json=payload).status_code == 401
     wrong = {"Authorization": "Bearer " + "x" * 32}
-    assert client.post("/v1/contacts", json=payload, headers=wrong).status_code == 401
+    assert bare_client.post("/v1/contacts", json=payload, headers=wrong).status_code == 401
 
 
-def test_update_contact_requires_operator_token(client):
-    created = client.post(
-        "/v1/contacts",
-        json={"name": "A", "phone_e164": "+15551239001", "timezone": "UTC"},
-        headers=_OP,
-    )
-    contact_id = created.json()["id"]
-    assert client.put(f"/v1/contacts/{contact_id}", json={"name": "Z"}).status_code == 401
+def test_update_contact_requires_operator_token(bare_client):
+    contact_id = uuid.uuid4()
+    assert bare_client.put(f"/v1/contacts/{contact_id}", json={"name": "Z"}).status_code == 401
     wrong = {"Authorization": "Bearer " + "x" * 32}
-    r = client.put(f"/v1/contacts/{contact_id}", json={"name": "Z"}, headers=wrong)
+    r = bare_client.put(f"/v1/contacts/{contact_id}", json={"name": "Z"}, headers=wrong)
     assert r.status_code == 401

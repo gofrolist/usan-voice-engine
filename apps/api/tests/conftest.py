@@ -393,16 +393,13 @@ def _install_tenant_db_override(
     return tenant_engine
 
 
-@pytest.fixture
-def client(
-    database_url: str,
-    async_database_url: str,
-    app_database_url: str,
-    app_async_database_url: str,
-    monkeypatch,
-) -> TestClient:
-    # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
-    monkeypatch.setenv("DATABASE_URL", app_database_url)
+def _set_app_env(monkeypatch, database_url: str) -> None:
+    """The env every app-under-test client needs (secrets + service endpoints).
+
+    ``database_url`` is normally the usan_app (RLS-subject) DSN; `bare_client`
+    passes a closed-port guard URL instead.
+    """
+    monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("LIVEKIT_API_KEY", "key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
@@ -413,20 +410,22 @@ def client(
     monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "false")
-    # Absolute origin for invite accept-links (invites._origin); without it the builder
-    # raises rather than emit a malformed "://..." URL.
-    monkeypatch.setenv("ADMIN_BASE_URL", "http://testserver")
     get_settings.cache_clear()
 
+
+def _app_client(async_database_url: str, app_async_database_url: str, *, follow_redirects=True):
+    """Shared body of `client`/`sso_client` (env is the caller's job).
+
+    Clean BEFORE yielding, not only after. The per-worker Postgres is shared with
+    modules that truncate on their own teardown (or never), so under xdist the test
+    that ran just before this one on the same worker can leave rows behind — e.g. an
+    enabled webhook_endpoint that silently inflates this request's outbox fan-out
+    (the room_finished double-fire regression test, CI run 27508993998). Starting
+    from a known-clean DB makes each client test order-independent.
+    One connection does both: clean-before truncate + read the default org id (saves a
+    separate _resolve_usan_org_id engine/connection per client test).
+    """
     test_engine = create_async_engine(async_database_url, poolclass=NullPool)
-    # Clean BEFORE yielding, not only after. The per-worker Postgres is shared with
-    # modules that truncate on their own teardown (or never), so under xdist the test
-    # that ran just before this one on the same worker can leave rows behind — e.g. an
-    # enabled webhook_endpoint that silently inflates this request's outbox fan-out
-    # (the room_finished double-fire regression test, CI run 27508993998). Starting
-    # from a known-clean DB makes each client test order-independent.
-    # One connection does both: clean-before truncate + read the default org id (saves a
-    # separate _resolve_usan_org_id engine/connection per client test).
     usan_org_id = asyncio.run(_truncate_and_resolve_org(test_engine))
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
 
@@ -442,7 +441,7 @@ def client(
     app.dependency_overrides[get_db] = _override_get_db
     tenant_engine = _install_tenant_db_override(app, app_async_database_url, usan_org_id)
     try:
-        yield TestClient(app)
+        yield TestClient(app, follow_redirects=follow_redirects)
     finally:
         asyncio.run(_truncate_and_dispose(test_engine))
         asyncio.run(tenant_engine.dispose())
@@ -452,6 +451,59 @@ def client(
         from usan_api.tenant_context import _clear_default_org_cache
 
         _clear_default_org_cache()
+
+
+@pytest.fixture
+def client(
+    database_url: str,
+    async_database_url: str,
+    app_database_url: str,
+    app_async_database_url: str,
+    monkeypatch,
+) -> TestClient:
+    # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
+    _set_app_env(monkeypatch, app_database_url)
+    # Absolute origin for invite accept-links (invites._origin); without it the builder
+    # raises rather than emit a malformed "://..." URL.
+    monkeypatch.setenv("ADMIN_BASE_URL", "http://testserver")
+    get_settings.cache_clear()
+    yield from _app_client(async_database_url, app_async_database_url)
+
+
+@pytest.fixture
+def bare_client(monkeypatch) -> TestClient:
+    """A TestClient over the shared routed app with NO database plumbing.
+
+    For pure rejection tests only: requests that die in auth / signature / body
+    validation (401/403/422) BEFORE any DB dependency resolves. Skips everything
+    that makes `client` expensive — the two 45-table TRUNCATEs, the org resolve
+    and three per-test engines — and does not even need the Postgres container.
+
+    get_db/get_tenant_db are overridden with a lazy no-op (production get_db
+    EAGERLY resolves the default org before auth even runs — see
+    db/session.py:get_db — and several routes declare it before their auth
+    dependency). A test that does reach a handler and touches the session
+    explodes on the None immediately, and DATABASE_URL points at a closed port
+    so any other DB path fails loudly (connection refused) instead of silently
+    depending on another test's leftover state. If your test trips either
+    guard, it needs `client`, not `bare_client`.
+    """
+    _set_app_env(monkeypatch, "postgresql://guard:guard@127.0.0.1:9/guard")
+    monkeypatch.setenv("ADMIN_BASE_URL", "http://testserver")
+    get_settings.cache_clear()
+
+    async def _no_db():
+        yield None
+
+    app = _routed_app()
+    app.dependency_overrides[get_db] = _no_db
+    app.dependency_overrides[get_tenant_db] = _no_db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_tenant_db, None)
+        get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -469,50 +521,13 @@ def sso_client(
 ) -> TestClient:
     """Like `client`, but with Google SSO configured (for /v1/auth flow tests)."""
     # Connect the app-under-test as the non-superuser usan_app role so RLS applies.
-    monkeypatch.setenv("DATABASE_URL", app_database_url)
-    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_SECRET)
-    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit:7880")
-    monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_TRUNK_ID", "ST_test")
-    monkeypatch.setenv("TELNYX_CALLER_ID", "+15551230000")
-    monkeypatch.setenv("AGENT_NAME", "usan-agent")
-    monkeypatch.setenv("JWT_SIGNING_KEY", "s" * 32)
-    monkeypatch.setenv("OPERATOR_API_KEY", "o" * 32)
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
-    monkeypatch.setenv("SESSION_COOKIE_SECURE", "false")
+    _set_app_env(monkeypatch, app_database_url)
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "cid.apps.googleusercontent.com")
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "client-secret")
     monkeypatch.setenv("GOOGLE_OAUTH_REDIRECT_URI", "http://testserver/v1/auth/callback")
     get_settings.cache_clear()
-
-    test_engine = create_async_engine(async_database_url, poolclass=NullPool)
-    # clean-before truncate + default org id on one connection (see `client`).
-    usan_org_id = asyncio.run(_truncate_and_resolve_org(test_engine))
-    factory = async_sessionmaker(test_engine, expire_on_commit=False)
-
-    async def _override_get_db():
-        async with factory() as session:
-            try:
-                yield session
-            except Exception:
-                await session.rollback()
-                raise
-
-    app = _routed_app()
-    app.dependency_overrides[get_db] = _override_get_db
-    tenant_engine = _install_tenant_db_override(app, app_async_database_url, usan_org_id)
-    try:
-        # follow_redirects off so the login 302 to Google is observable.
-        yield TestClient(app, follow_redirects=False)
-    finally:
-        asyncio.run(_truncate_and_dispose(test_engine))
-        asyncio.run(tenant_engine.dispose())
-        app.dependency_overrides.pop(get_db, None)
-        app.dependency_overrides.pop(get_tenant_db, None)
-        get_settings.cache_clear()
-        from usan_api.tenant_context import _clear_default_org_cache
-
-        _clear_default_org_cache()
+    # follow_redirects off so the login 302 to Google is observable.
+    yield from _app_client(async_database_url, app_async_database_url, follow_redirects=False)
 
 
 async def _seed_admin_user_async(

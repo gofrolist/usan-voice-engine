@@ -1,6 +1,7 @@
 # Management-plane routes require the operator bearer token (matches conftest's
+from tests.conftest import OPERATOR_HEADERS as _OP
+
 # OPERATOR_API_KEY).
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 def test_add_dnc_returns_201(client):
@@ -28,26 +29,25 @@ def test_remove_dnc_returns_204_then_404(client):
     assert d2.status_code == 404
 
 
-def test_add_dnc_invalid_phone_returns_422(client):
-    r = client.post("/v1/dnc", json={"phone_e164": "5550001111", "reason": "x"}, headers=_OP)
+def test_add_dnc_invalid_phone_returns_422(bare_client):
+    r = bare_client.post("/v1/dnc", json={"phone_e164": "5550001111", "reason": "x"}, headers=_OP)
     assert r.status_code == 422
 
 
-def test_add_dnc_requires_operator_token(client):
+def test_add_dnc_requires_operator_token(bare_client):
     payload = {"phone_e164": "+15550009999", "reason": "x"}
-    assert client.post("/v1/dnc", json=payload).status_code == 401
+    assert bare_client.post("/v1/dnc", json=payload).status_code == 401
     wrong = {"Authorization": "Bearer " + "x" * 32}
-    assert client.post("/v1/dnc", json=payload, headers=wrong).status_code == 401
+    assert bare_client.post("/v1/dnc", json=payload, headers=wrong).status_code == 401
 
 
-def test_remove_dnc_requires_operator_token(client):
-    client.post("/v1/dnc", json={"phone_e164": "+15550008888", "reason": None}, headers=_OP)
-    assert client.delete("/v1/dnc/%2B15550008888").status_code == 401
+def test_remove_dnc_requires_operator_token(bare_client):
+    assert bare_client.delete("/v1/dnc/%2B15550008888").status_code == 401
     wrong = {"Authorization": "Bearer " + "x" * 32}
-    assert client.delete("/v1/dnc/%2B15550008888", headers=wrong).status_code == 401
+    assert bare_client.delete("/v1/dnc/%2B15550008888", headers=wrong).status_code == 401
 
 
-def test_remove_dnc_rejects_malformed_phone(client):
+def test_remove_dnc_rejects_malformed_phone(bare_client):
     # The DELETE path param is held to the same E.164 contract as the POST body.
-    assert client.delete("/v1/dnc/not-a-phone", headers=_OP).status_code == 422
-    assert client.delete("/v1/dnc/5550001111", headers=_OP).status_code == 422
+    assert bare_client.delete("/v1/dnc/not-a-phone", headers=_OP).status_code == 422
+    assert bare_client.delete("/v1/dnc/5550001111", headers=_OP).status_code == 422

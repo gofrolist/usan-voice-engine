@@ -19,11 +19,11 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, CallBatch
 from usan_api.repositories import call_batches as batches_repo
 
-_OP = {"Authorization": "Bearer " + "o" * 32}
 NOW = datetime(2026, 6, 10, 16, 0, tzinfo=UTC)
 
 
@@ -384,9 +384,9 @@ def test_batch_log_lines_never_bind_name(client):
         assert all(batch_name not in str(v) for v in record["extra"].values())
 
 
-def test_batches_require_operator_token(client):
+def test_batches_require_operator_token(bare_client):
     batch_id = uuid.uuid4()
-    assert client.post("/v1/batches", json={}).status_code == 401
-    assert client.get("/v1/batches").status_code == 401
-    assert client.get(f"/v1/batches/{batch_id}").status_code == 401
-    assert client.post(f"/v1/batches/{batch_id}/cancel").status_code == 401
+    assert bare_client.post("/v1/batches", json={}).status_code == 401
+    assert bare_client.get("/v1/batches").status_code == 401
+    assert bare_client.get(f"/v1/batches/{batch_id}").status_code == 401
+    assert bare_client.post(f"/v1/batches/{batch_id}/cancel").status_code == 401

@@ -41,8 +41,8 @@ async def _seed(url: str, *, status: str, phone: str | None = None) -> uuid.UUID
         await engine.dispose()
 
 
-def test_sms_messages_requires_admin_session(client):
-    r = client.get("/v1/admin/sms-messages")
+def test_sms_messages_requires_admin_session(bare_client):
+    r = bare_client.get("/v1/admin/sms-messages")
     assert r.status_code == 401
 
 

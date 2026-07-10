@@ -128,7 +128,14 @@ def test_callback_garbage_tx_cookie_is_400(sso_client):
     assert r.status_code == 400
 
 
-def test_callback_oauth_error_is_403(sso_client, monkeypatch):
+def test_callback_oauth_error_is_403(bare_client, monkeypatch):
+    # SSO env on top of bare_client's minimal env (mirrors the sso_client fixture);
+    # the mocked exchange raises, so the 403 fires before any DB access.
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "cid.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_REDIRECT_URI", "http://testserver/v1/auth/callback")
+    get_settings.cache_clear()
+
     async def _fake_exchange(settings, *, code, code_verifier):
         return "fake-id-token"
 
@@ -138,8 +145,8 @@ def test_callback_oauth_error_is_403(sso_client, monkeypatch):
     monkeypatch.setattr(oauth, "exchange_code", _fake_exchange)
     monkeypatch.setattr(oauth, "verify_id_token", _raise)
     tx = issue_tx("S", "v", get_settings())
-    sso_client.cookies.set(TX_COOKIE_NAME, tx)
-    r = sso_client.get("/v1/auth/callback", params={"code": "abc", "state": "S"})
+    bare_client.cookies.set(TX_COOKIE_NAME, tx)
+    r = bare_client.get("/v1/auth/callback", params={"code": "abc", "state": "S"})
     assert r.status_code == 403
 
 

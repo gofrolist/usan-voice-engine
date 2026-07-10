@@ -70,8 +70,11 @@ def test_call_now_viewer_403(client, admin_session, async_database_url):
     assert client.post("/v1/admin/calls", json={"contact_id": cid}).status_code == 403
 
 
-def test_call_now_requires_session(client):
-    assert client.post("/v1/admin/calls", json={"contact_id": str(uuid.uuid4())}).status_code == 401
+def test_call_now_requires_session(bare_client):
+    assert (
+        bare_client.post("/v1/admin/calls", json={"contact_id": str(uuid.uuid4())}).status_code
+        == 401
+    )
 
 
 def test_call_now_advisory_lock_held_through_dispatch(

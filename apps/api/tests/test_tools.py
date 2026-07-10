@@ -1,18 +1,17 @@
 import asyncio as _asyncio
-import time
 import uuid
 
-import jwt
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
 from tests.conftest import counter_value as _counter_value
+from tests.conftest import service_token as _service_token
 from usan_api import livekit_dispatch
 
 # Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 @pytest.fixture
@@ -23,15 +22,6 @@ def mock_dispatch(monkeypatch):
 
     monkeypatch.setattr(livekit_dispatch, "dispatch_agent", AsyncMock())
     monkeypatch.setattr(dialer, "schedule_dial", lambda call_id, settings: None)
-
-
-def _service_token(call_id: str, secret: str = "s" * 32) -> str:
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
-    )
 
 
 def _create_contact(client, *, metadata: dict | None = None) -> str:
@@ -79,21 +69,18 @@ def test_log_wellness_ok(client, mock_dispatch):
     assert isinstance(r.json()["id"], int)
 
 
-def test_log_wellness_requires_token(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_log_wellness_requires_token(bare_client):
+    r = bare_client.post(
         "/v1/tools/log_wellness",
-        json={"call_id": call_id, "mood": 3},
+        json={"call_id": str(uuid.uuid4()), "mood": 3},
     )
     assert r.status_code == 401
 
 
-def test_log_wellness_token_call_id_mismatch_403(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
+def test_log_wellness_token_call_id_mismatch_403(bare_client):
+    call_id = str(uuid.uuid4())
     wrong = str(uuid.uuid4())
-    r = client.post(
+    r = bare_client.post(
         "/v1/tools/log_wellness",
         json={"call_id": call_id, "mood": 3},
         headers=_auth(wrong),
@@ -111,10 +98,9 @@ def test_log_wellness_unknown_call_404(client, mock_dispatch):
     assert r.status_code == 404
 
 
-def test_log_wellness_out_of_range_422(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_log_wellness_out_of_range_422(bare_client):
+    call_id = str(uuid.uuid4())
+    r = bare_client.post(
         "/v1/tools/log_wellness",
         json={"call_id": call_id, "mood": 9},  # mood is 1..5
         headers=_auth(call_id),
@@ -134,21 +120,18 @@ def test_log_medication_ok(client, mock_dispatch):
     assert isinstance(r.json()["id"], int)
 
 
-def test_log_medication_requires_token(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_log_medication_requires_token(bare_client):
+    r = bare_client.post(
         "/v1/tools/log_medication",
-        json={"call_id": call_id, "medication_name": "Aspirin", "taken": False},
+        json={"call_id": str(uuid.uuid4()), "medication_name": "Aspirin", "taken": False},
     )
     assert r.status_code == 401
 
 
-def test_log_medication_mismatch_403(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
+def test_log_medication_mismatch_403(bare_client):
+    call_id = str(uuid.uuid4())
     wrong = str(uuid.uuid4())
-    r = client.post(
+    r = bare_client.post(
         "/v1/tools/log_medication",
         json={"call_id": call_id, "medication_name": "Aspirin", "taken": True},
         headers=_auth(wrong),
@@ -204,10 +187,9 @@ def test_get_today_meds_skips_malformed_entries(client, mock_dispatch):
     assert meds[0]["name"] == "Good"
 
 
-def test_get_today_meds_mismatch_403(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_get_today_meds_mismatch_403(bare_client):
+    call_id = str(uuid.uuid4())
+    r = bare_client.post(
         "/v1/tools/get_today_meds",
         json={"call_id": call_id},
         headers=_auth(str(uuid.uuid4())),
@@ -304,7 +286,7 @@ def test_end_call_noop_when_not_in_progress(client, mock_dispatch):
     assert r.json()["status"] == "dialing"
 
 
-def test_log_transcript_inserts_segments(client, mock_dispatch, async_database_url):
+def test_log_transcript_inserts_segments(client, mock_dispatch):
     contact_id = _create_contact(client)
     call_id = _enqueue(client, contact_id)
     r = client.post(
@@ -329,23 +311,20 @@ def test_log_transcript_inserts_segments(client, mock_dispatch, async_database_u
     assert r.json()["count"] == 3
 
 
-def test_log_transcript_requires_token(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_log_transcript_requires_token(bare_client):
+    r = bare_client.post(
         "/v1/tools/log_transcript",
         json={
-            "call_id": call_id,
+            "call_id": str(uuid.uuid4()),
             "segments": [{"role": "user", "content": "hi", "started_at": "2026-06-01T12:00:00Z"}],
         },
     )
     assert r.status_code == 401
 
 
-def test_log_transcript_mismatch_403(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_log_transcript_mismatch_403(bare_client):
+    call_id = str(uuid.uuid4())
+    r = bare_client.post(
         "/v1/tools/log_transcript",
         json={
             "call_id": call_id,
@@ -356,10 +335,9 @@ def test_log_transcript_mismatch_403(client, mock_dispatch):
     assert r.status_code == 403
 
 
-def test_log_transcript_empty_segments_422(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_log_transcript_empty_segments_422(bare_client):
+    call_id = str(uuid.uuid4())
+    r = bare_client.post(
         "/v1/tools/log_transcript",
         json={"call_id": call_id, "segments": []},
         headers=_auth(call_id),
@@ -384,21 +362,23 @@ def test_flag_for_followup_ok(client, mock_dispatch):
     assert isinstance(r.json()["id"], int)
 
 
-def test_flag_for_followup_requires_token(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_flag_for_followup_requires_token(bare_client):
+    r = bare_client.post(
         "/v1/tools/flag_for_followup",
-        json={"call_id": call_id, "severity": "routine", "category": "other", "reason": "x"},
+        json={
+            "call_id": str(uuid.uuid4()),
+            "severity": "routine",
+            "category": "other",
+            "reason": "x",
+        },
     )
     assert r.status_code == 401
 
 
-def test_flag_for_followup_call_id_mismatch_403(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
+def test_flag_for_followup_call_id_mismatch_403(bare_client):
+    call_id = str(uuid.uuid4())
     wrong = str(uuid.uuid4())
-    r = client.post(
+    r = bare_client.post(
         "/v1/tools/flag_for_followup",
         json={"call_id": call_id, "severity": "routine", "category": "other", "reason": "x"},
         headers=_auth(wrong),
@@ -416,10 +396,9 @@ def test_flag_for_followup_unknown_call_404(client, mock_dispatch):
     assert r.status_code == 404
 
 
-def test_flag_for_followup_bad_enum_422(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_flag_for_followup_bad_enum_422(bare_client):
+    call_id = str(uuid.uuid4())
+    r = bare_client.post(
         "/v1/tools/flag_for_followup",
         json={"call_id": call_id, "severity": "panic", "category": "medical", "reason": "x"},
         headers=_auth(call_id),
@@ -532,10 +511,10 @@ def test_send_sms_no_sms_config_404(client, mock_dispatch):
     assert r.status_code == 404
 
 
-def test_send_sms_requires_token(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post("/v1/tools/send_sms", json={"call_id": call_id, "template_key": "greet"})
+def test_send_sms_requires_token(bare_client):
+    r = bare_client.post(
+        "/v1/tools/send_sms", json={"call_id": str(uuid.uuid4()), "template_key": "greet"}
+    )
     assert r.status_code == 401
 
 
@@ -1051,12 +1030,11 @@ def test_retrieve_kb_context_empty_on_blank_query(
         app.dependency_overrides.pop(get_settings, None)
 
 
-def test_retrieve_kb_context_rejects_token_not_for_call(client, mock_dispatch):
+def test_retrieve_kb_context_rejects_token_not_for_call(bare_client):
     """Token scoped to a different call_id -> 403."""
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
+    call_id = str(uuid.uuid4())
     other = str(uuid.uuid4())
-    r = client.post(
+    r = bare_client.post(
         "/v1/tools/retrieve_kb_context",
         json={"call_id": other, "query": "x"},
         headers=_auth(call_id),

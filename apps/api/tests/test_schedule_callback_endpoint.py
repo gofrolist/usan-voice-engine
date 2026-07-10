@@ -1,13 +1,11 @@
-import time
 import uuid
 
-import jwt
 import pytest
 
+from tests.conftest import OPERATOR_HEADERS as _OP
 from tests.conftest import counter_value as _counter_value
+from tests.conftest import service_token as _service_token
 from usan_api import livekit_dispatch
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 @pytest.fixture
@@ -18,15 +16,6 @@ def mock_dispatch(monkeypatch):
 
     monkeypatch.setattr(livekit_dispatch, "dispatch_agent", AsyncMock())
     monkeypatch.setattr(dialer, "schedule_dial", lambda call_id, settings: None)
-
-
-def _service_token(call_id: str, secret: str = "s" * 32) -> str:
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
-    )
 
 
 def _auth(call_id: str) -> dict:
@@ -91,20 +80,17 @@ def test_schedule_callback_minimal_no_iso_time(client, mock_dispatch):
     assert isinstance(r.json()["id"], int)
 
 
-def test_schedule_callback_requires_token(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_schedule_callback_requires_token(bare_client):
+    r = bare_client.post(
         "/v1/tools/schedule_callback",
-        json={"call_id": call_id, "requested_time_text": "soon"},
+        json={"call_id": str(uuid.uuid4()), "requested_time_text": "soon"},
     )
     assert r.status_code == 401
 
 
-def test_schedule_callback_mismatch_403(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_schedule_callback_mismatch_403(bare_client):
+    call_id = str(uuid.uuid4())
+    r = bare_client.post(
         "/v1/tools/schedule_callback",
         json={"call_id": call_id, "requested_time_text": "soon"},
         headers=_auth(str(uuid.uuid4())),
@@ -122,10 +108,9 @@ def test_schedule_callback_unknown_call_404(client, mock_dispatch):
     assert r.status_code == 404
 
 
-def test_schedule_callback_empty_time_text_422(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    call_id = _enqueue(client, contact_id)
-    r = client.post(
+def test_schedule_callback_empty_time_text_422(bare_client):
+    call_id = str(uuid.uuid4())
+    r = bare_client.post(
         "/v1/tools/schedule_callback",
         json={"call_id": call_id, "requested_time_text": ""},
         headers=_auth(call_id),

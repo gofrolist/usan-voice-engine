@@ -303,7 +303,7 @@ def test_cross_org_flow_binding_is_unbound(
     assert result.bound is False
 
 
-def test_missing_call_returns_unbound(client, async_database_url, monkeypatch) -> None:
+def test_missing_call_returns_unbound(client, monkeypatch) -> None:
     monkeypatch.setenv("FLOW_RUNTIME_VOICE_ENABLED", "true")
     resp = client.post(
         "/v1/runtime/flow-advance",
@@ -313,8 +313,8 @@ def test_missing_call_returns_unbound(client, async_database_url, monkeypatch) -
     assert resp.json()["bound"] is False
 
 
-def test_requires_worker_token(client, async_database_url) -> None:
-    resp = client.post(
+def test_requires_worker_token(bare_client) -> None:
+    resp = bare_client.post(
         "/v1/runtime/flow-advance",
         json={"call_id": str(uuid.uuid4()), "cursor": None, "turns": []},
     )

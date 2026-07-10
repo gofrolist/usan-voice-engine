@@ -15,11 +15,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
 from usan_api.schemas.call import CallOrigin, parse_origin
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 def test_parse_origin_schedule_key() -> None:

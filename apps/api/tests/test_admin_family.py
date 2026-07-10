@@ -92,9 +92,11 @@ def _viewer_cookies(async_database_url: str) -> dict[str, str]:
     }
 
 
-def test_family_endpoints_require_session(client):
-    assert client.get(f"/v1/admin/family-contacts?contact_id={uuid.uuid4()}").status_code == 401
-    assert client.get("/v1/admin/family-tasks").status_code == 401
+def test_family_endpoints_require_session(bare_client):
+    assert (
+        bare_client.get(f"/v1/admin/family-contacts?contact_id={uuid.uuid4()}").status_code == 401
+    )
+    assert bare_client.get("/v1/admin/family-tasks").status_code == 401
 
 
 def test_contact_crud_roundtrip(client, admin_session, async_database_url):
@@ -244,8 +246,8 @@ async def _seed_family_report(
         await engine.dispose()
 
 
-def test_family_reports_require_session(client):
-    assert client.get("/v1/admin/family-reports").status_code == 401
+def test_family_reports_require_session(bare_client):
+    assert bare_client.get("/v1/admin/family-reports").status_code == 401
 
 
 def test_list_family_reports_returns_rich_trend_row(client, admin_session, async_database_url):

@@ -17,10 +17,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
+from tests.conftest import service_token as _service_token
 from usan_api import livekit_dispatch
 from usan_api.db.models import DNCEntry, FollowUpFlag, SmsMessage
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 @pytest.fixture
@@ -31,15 +31,6 @@ def mock_dispatch(monkeypatch):
 
     monkeypatch.setattr(livekit_dispatch, "dispatch_agent", AsyncMock())
     monkeypatch.setattr(dialer, "schedule_dial", lambda call_id, settings: None)
-
-
-def _service_token(call_id: str, secret: str = "s" * 32) -> str:
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
-    )
 
 
 def _worker_token(secret: str = "s" * 32) -> str:
@@ -196,7 +187,7 @@ def test_register_opt_out_is_idempotent_within_call(client, mock_dispatch, async
     assert len(_operator_flags(async_database_url, call_id)) == 1
 
 
-def test_register_opt_out_suppresses_future_outbound(client, mock_dispatch, async_database_url):
+def test_register_opt_out_suppresses_future_outbound(client, mock_dispatch):
     # SC-010: once opted out, a later outbound enqueue is terminal-at-birth DNC_BLOCKED.
     phone = _phone()
     contact_id = _create_contact(client, phone)
@@ -218,12 +209,10 @@ def test_register_opt_out_suppresses_future_outbound(client, mock_dispatch, asyn
     assert later.json()["status"] == "dnc_blocked"
 
 
-def test_register_opt_out_rejects_wrong_call_token(client, mock_dispatch, async_database_url):
-    phone = _phone()
-    contact_id = _create_contact(client, phone)
-    call_id = _enqueue(client, contact_id)["id"]
+def test_register_opt_out_rejects_wrong_call_token(bare_client):
+    call_id = str(uuid.uuid4())
     other = str(uuid.uuid4())
-    r = client.post(
+    r = bare_client.post(
         "/v1/tools/register_opt_out",
         json={"call_id": call_id},
         headers=_auth(other),  # token scoped to a different call

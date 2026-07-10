@@ -155,10 +155,8 @@ def test_add_invalid_email_422(members_client, admin_session):
     assert client.post("/v1/admin/members", json={"email": "not-an-email"}).status_code == 422
 
 
-def test_requires_session(members_client):
-    client, _ = members_client
-    client.cookies.clear()
-    assert client.get("/v1/admin/members").status_code == 401
+def test_requires_session(bare_client):
+    assert bare_client.get("/v1/admin/members").status_code == 401
 
 
 async def _resolve_usan_org(super_async_url: str) -> uuid.UUID:

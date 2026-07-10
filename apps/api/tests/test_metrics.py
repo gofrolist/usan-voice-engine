@@ -4,6 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import service_token as _service_token
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call, CallMetrics, TurnMetrics
 from usan_api.repositories.metrics import response_latency_ms
@@ -19,19 +20,6 @@ def test_response_latency_ignores_none():
 
 def test_response_latency_all_none_is_none():
     assert response_latency_ms(None, None, None) is None
-
-
-def _service_token(call_id: str, secret: str = "s" * 32) -> str:
-    import time
-
-    import jwt
-
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
-    )
 
 
 def _make_completed_call(async_database_url: str, duration_seconds: int | None = 120) -> str:

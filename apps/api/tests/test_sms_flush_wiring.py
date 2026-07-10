@@ -9,20 +9,10 @@ import jwt
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import service_token as _service_token
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.repositories import calls as calls_repo
 from usan_api.repositories import contacts as contacts_repo
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
-
-
-def _service_token(call_id: str, secret: str = "s" * 32) -> str:
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
-    )
 
 
 def _sign(body: str, key: str, secret: str) -> str:

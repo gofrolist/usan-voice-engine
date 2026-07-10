@@ -450,13 +450,13 @@ def test_mutations_write_sentinel_audit_rows_same_commit(
         assert "hooks.example.com" not in serialized
 
 
-def test_requires_operator_token(client):
+def test_requires_operator_token(bare_client):
     some_id = str(uuid.uuid4())
-    assert client.post("/v1/webhook-endpoints", json={}).status_code == 401
-    assert client.get("/v1/webhook-endpoints").status_code == 401
-    assert client.get(f"/v1/webhook-endpoints/{some_id}").status_code == 401
-    assert client.patch(f"/v1/webhook-endpoints/{some_id}", json={}).status_code == 401
-    assert client.delete(f"/v1/webhook-endpoints/{some_id}").status_code == 401
-    assert client.post(f"/v1/webhook-endpoints/{some_id}/test").status_code == 401
-    assert client.get(f"/v1/webhook-endpoints/{some_id}/deliveries").status_code == 401
-    assert client.post(f"/v1/webhook-deliveries/{some_id}/redeliver").status_code == 401
+    assert bare_client.post("/v1/webhook-endpoints", json={}).status_code == 401
+    assert bare_client.get("/v1/webhook-endpoints").status_code == 401
+    assert bare_client.get(f"/v1/webhook-endpoints/{some_id}").status_code == 401
+    assert bare_client.patch(f"/v1/webhook-endpoints/{some_id}", json={}).status_code == 401
+    assert bare_client.delete(f"/v1/webhook-endpoints/{some_id}").status_code == 401
+    assert bare_client.post(f"/v1/webhook-endpoints/{some_id}/test").status_code == 401
+    assert bare_client.get(f"/v1/webhook-endpoints/{some_id}/deliveries").status_code == 401
+    assert bare_client.post(f"/v1/webhook-deliveries/{some_id}/redeliver").status_code == 401

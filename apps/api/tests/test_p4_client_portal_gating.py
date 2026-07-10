@@ -181,11 +181,10 @@ def _create_var(client, name: str, cookies: dict[str, str]):
 
 # --- unauthenticated callers are rejected (defense-in-depth on the relaxed routers) ---
 @pytest.mark.parametrize("path", AUTHORING_GET_ENDPOINTS)
-def test_unauthenticated_request_is_401(client, path):
+def test_unauthenticated_request_is_401(bare_client, path):
     # require_admin_role(VIEWER) pulls require_admin_session, so a request with no session
     # cookie is still rejected — the routers are member-readable, never public.
-    client.cookies.clear()
-    r = client.get(path)
+    r = bare_client.get(path)
     assert r.status_code == 401, f"{path}: {r.status_code} {r.text}"
 
 

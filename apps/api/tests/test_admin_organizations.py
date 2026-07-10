@@ -86,9 +86,8 @@ def test_duplicate_slug_conflict(client, super_admin_session):
     assert second.status_code == 409
 
 
-def test_requires_session(client):
-    client.cookies.clear()
-    assert client.get("/v1/admin/organizations").status_code == 401
+def test_requires_session(bare_client):
+    assert bare_client.get("/v1/admin/organizations").status_code == 401
 
 
 def test_invalid_slug_422(client, super_admin_session):

@@ -49,7 +49,7 @@ async def _seed_contact(url: str) -> uuid.UUID:
         await engine.dispose()
 
 
-def test_family_alert_bodies_are_phi_minimized(client):
+def test_family_alert_bodies_are_phi_minimized():
     for reason in ("crisis", "missed_call"):
         body = notifications.build_family_alert_body(reason)
         assert body
@@ -59,7 +59,7 @@ def test_family_alert_bodies_are_phi_minimized(client):
             assert term not in low, f"family alert ({reason}) leaks clinical term: {term}"
 
 
-def test_opt_out_ack_body_is_phi_minimized(client):
+def test_opt_out_ack_body_is_phi_minimized():
     body = notifications.build_opt_out_ack_body()
     assert body
     assert isinstance(body, str)

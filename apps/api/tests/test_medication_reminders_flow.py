@@ -22,10 +22,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
+from tests.conftest import service_token as _service_token
 from usan_api import livekit_dispatch
 from usan_api.repositories.medication_reminders import MAX_REASK_ATTEMPTS
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 @pytest.fixture
@@ -44,15 +44,6 @@ async def session_factory(async_database_url):
     engine = create_async_engine(async_database_url, poolclass=NullPool)
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
-
-
-def _service_token(call_id: str, secret: str = "s" * 32) -> str:
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
-    )
 
 
 def _auth(call_id: str) -> dict:

@@ -24,6 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
 from usan_api import dialer, livekit_dispatch
 from usan_api.db.base import CallDirection, CallStatus
 from usan_api.db.models import Call
@@ -130,8 +131,6 @@ def test_call_response_echoes_profile_override() -> None:
 
 
 # --- B2: enqueue_call wiring (HTTP tests; dispatch mocked per the test_calls.py pattern) ---
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 @pytest.fixture

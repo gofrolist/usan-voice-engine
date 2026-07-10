@@ -3,24 +3,17 @@ import uuid
 
 import jwt
 
+from tests.conftest import OPERATOR_HEADERS as _OP
+from tests.conftest import service_token as _service_token
+
 SECRET = "s" * 32
 # Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 def _worker_token(secret: str = SECRET) -> str:
     now = int(time.time())
     return jwt.encode(
         {"sub": "usan-agent", "iat": now, "exp": now + 300}, secret, algorithm="HS256"
-    )
-
-
-def _service_token(call_id: str, secret: str = SECRET) -> str:
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
     )
 
 
@@ -103,8 +96,8 @@ def test_inbound_no_phone_is_unknown(client):
     assert r.json()["contact_known"] is False
 
 
-def test_inbound_requires_worker_token(client):
-    r = client.post(
+def test_inbound_requires_worker_token(bare_client):
+    r = bare_client.post(
         "/v1/calls/inbound",
         json={"phone_e164": "+19998887777", "livekit_room": "usan-inbound-4"},
     )

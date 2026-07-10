@@ -39,11 +39,11 @@ def test_reserved_key_prefixes_constant() -> None:
 
 
 def test_enqueue_call_endpoint_422_on_reserved_prefix(
-    client: TestClient, operator_headers: dict[str, str]
+    bare_client: TestClient, operator_headers: dict[str, str]
 ) -> None:
     # FastAPI request validation must fire before the handler: never reaches the
     # DNC lock or contact lookup (a 404 on the unknown contact would mean it did).
-    r = client.post(
+    r = bare_client.post(
         "/v1/calls",
         json={
             "contact_id": str(uuid.uuid4()),

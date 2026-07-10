@@ -70,8 +70,8 @@ async def _seed_admin(async_database_url: str, email: str) -> None:
         await engine.dispose()
 
 
-def test_contacts_requires_session(client):
-    assert client.get("/v1/admin/contacts").status_code == 401
+def test_contacts_requires_session(bare_client):
+    assert bare_client.get("/v1/admin/contacts").status_code == 401
 
 
 def test_list_and_assign_profile(client, admin_session, async_database_url):
