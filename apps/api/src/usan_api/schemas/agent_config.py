@@ -73,8 +73,10 @@ class PromptsConfig(BaseModel):
     # prompt_vars.substitute() (legacy single-brace slots {contact_name}/
     # {last_check_in_line} are str.replace-d, never str.format-ed), so a stray brace is
     # inert at substitution time.
-    # Large-field caps sized to hold real migrated single-prompt agents: the client's Retell
-    # prompts run 21–40 KB (checkin_v0.2 ≈ 40 KB), so the three large fields cap at 65000.
+    # Large-field caps sized to hold real migrated single-prompt agents: a migrated Retell prompt
+    # (21–40 KB, checkin_v0.2 ≈ 40 KB) drives the tool-enabled conversation and lands in
+    # checkin_flow_instructions / inbound_personalization_template, so those cap at 65000.
+    # system_prompt shares the uniform cap (it may also hold a large admin-authored persona).
     # Raising a max_length is FORWARD-COMPAT-SAFE — the invariant above AgentConfig forbids
     # only TIGHTENING a constraint (an older stored config still satisfies a larger max), so
     # bumping these never 500s a published snapshot on read.

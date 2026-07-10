@@ -16,13 +16,17 @@ Each Retell agent maps to one `AgentConfig` document:
 | Clara – Inbound v0.1 | **Clara — Inbound** | `prompts/inbound_clara_v0.1_retell.txt` | 12 (+kb) |
 | Betty Tester | **Betty — QA Tester** | `prompts/betty_tester_retell.txt` | 0 |
 
-- **Prompt** — the full single-prompt goes into all three large prompt fields
-  (`system_prompt`, `checkin_flow_instructions`, `inbound_personalization_template`). Our
-  routing resolves the live agent by direction **and** by the contact's assigned profile, so
-  a profile may drive an outbound *or* an inbound call; the whole prompt is authoritative on
-  every path. (The fields are read by different agent instances, never concatenated into one
-  LLM context, so there's no per-turn duplication.) This required raising the large-field cap
-  to 65000 — the real prompts are 18–40 KB.
+- **Prompt** — the full single-prompt drives the tool-enabled conversation agents, so it goes
+  into the two flow fields those builders read: `checkin_flow_instructions` (outbound,
+  `build_check_in_agent`) and `inbound_personalization_template` (inbound known-contact,
+  `build_inbound_agent`). A profile may serve either direction depending on the contact's
+  assignment, so both carry it. `system_prompt` is deliberately left as the **thin default
+  persona**: it backs only the greet-only fallback agent (`build_agent`), which registers **no
+  tools** — putting the tool-driving prompt there would instruct a tool-less agent to call
+  functions it doesn't have. This required raising the two large flow-field caps to 65000 — the
+  real prompts are 18–40 KB. (Note: the voice engine's *unknown*-inbound path is greet-only/
+  tool-less by design; a migrated inbound agent serving unknown callers with its full toolset is
+  a separate voice-engine capability, out of scope for the seed.)
 - **Tools** — translated by the **same** code the live compat ingest uses
   (`usan_api.compat.tool_translate`), so `external_tools` is byte-identical to what a real
   RetellAI `create-agent` would store: URL, method, params, `timeout_s`, and
