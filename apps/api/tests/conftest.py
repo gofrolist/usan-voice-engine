@@ -87,9 +87,14 @@ async def _set_app_role_password(super_url: str) -> None:
 
 @pytest.fixture(scope="session")
 def database_url() -> str:
-    with PostgresContainer(
+    # Durability off for the throwaway test DB: the suite is dominated by per-test
+    # TRUNCATE + insert I/O, and with fsync on every commit waits on a WAL flush.
+    # fsync/synchronous_commit/full_page_writes are safe to disable here — if the
+    # container crashes mid-run the whole test run is void anyway.
+    container = PostgresContainer(
         "pgvector/pgvector:pg18", username="usan", password="usan", dbname="usan"
-    ) as pg:
+    ).with_command("postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off")
+    with container as pg:
         host = pg.get_container_host_ip()
         port = pg.get_exposed_port(5432)
         url = f"postgresql://usan:usan@{host}:{port}/usan"

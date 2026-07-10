@@ -72,7 +72,10 @@ markers = [
 # 14-core box). Tests are already order-independent (the `client` fixture truncates
 # before every test). To debug a single test serially (pdb, -s output), override
 # with `-n0`, e.g. `uv run pytest -n0 tests/test_x.py::test_y -s`.
-addopts = "-n auto"
+# --dist worksteal: idle workers steal queued tests from busy ones, killing the
+# end-of-run straggler tail (default load-scheduling pre-assigns chunks, so one
+# worker can sit on the slow migration tests while the rest are done).
+addopts = "-n auto --dist worksteal"
 
 [tool.mypy]
 python_version = "3.14"
