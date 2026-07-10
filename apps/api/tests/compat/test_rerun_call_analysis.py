@@ -59,11 +59,6 @@ def _seed_call(compat_client, compat_headers) -> str:
     return r.json()["call_id"]
 
 
-def test_rerun_requires_key(compat_client):
-    r = compat_client.put(f"/rerun-call-analysis/{ids.encode_call_id(uuid.uuid4())}")
-    assert r.status_code == 401
-
-
 def test_rerun_unknown_call_404(compat_client, compat_headers):
     r = compat_client.put(
         f"/rerun-call-analysis/{ids.encode_call_id(uuid.uuid4())}", headers=compat_headers

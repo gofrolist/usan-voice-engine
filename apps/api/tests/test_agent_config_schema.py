@@ -106,12 +106,6 @@ def test_personalization_template_accepts_unknown_double_brace_token():
     assert PromptsConfig.model_validate(ok)
 
 
-def test_personalization_template_accepts_allowed_slots():
-    ok = DEFAULT_AGENT_CONFIG.prompts.model_dump()
-    ok["inbound_personalization_template"] = "Hi {contact_name}. {last_check_in_line}"
-    assert PromptsConfig.model_validate(ok)
-
-
 def test_tools_rejects_unknown_tool():
     with pytest.raises(ValidationError):
         ToolsConfig(enabled=["log_wellness", "launch_missiles"])

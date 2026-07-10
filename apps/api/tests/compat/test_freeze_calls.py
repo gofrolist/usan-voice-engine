@@ -6,8 +6,7 @@ string tag ("latest", "prod").  Any change that breaks either accepted form is a
 contract regression.
 
 Task 7 adds:
-  - test_call_object_conforms_to_oracle  (xfail: 13 null-field violations +
-    transcript_with_tool_calls type mismatch; green after exclude_none + Task 8)
+  - test_call_object_conforms_to_oracle  (green: exclude_none + Task 8 landed)
   - test_user_sentiment_default_is_null  (CallAnalysis.user_sentiment default must stay None)
 """
 

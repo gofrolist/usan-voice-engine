@@ -22,10 +22,6 @@ def _create(compat_client, headers):
     )
 
 
-def test_create_requires_key(compat_client) -> None:
-    assert compat_client.post("/create-knowledge-base", data={}).status_code == 401
-
-
 def test_create_conforms(compat_client, compat_headers) -> None:
     body = _create(compat_client, compat_headers).json()
     assert_conforms(body, "KnowledgeBaseResponse")

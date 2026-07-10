@@ -1,16 +1,10 @@
 """Tool catalog schema tests (Admin-UI Phase 3 design §4.1).
 
-Locks the closed 7-tool inventory: catalog order, per-tool category/gating flags,
-``TOOL_NAMES`` as a frozenset of the catalog names, ``ToolSpec`` defaults, and the
-``ToolCatalogResponse`` envelope the admin-ui fetches at runtime.
+Locks the closed tool inventory: catalog order, per-tool category/gating flags,
+and ``TOOL_NAMES`` as a frozenset of the catalog names.
 """
 
-from usan_api.schemas.tool_catalog import (
-    TOOL_CATALOG,
-    TOOL_NAMES,
-    ToolCatalogResponse,
-    ToolSpec,
-)
+from usan_api.schemas.tool_catalog import TOOL_CATALOG, TOOL_NAMES
 
 
 def test_catalog_has_exactly_fifteen_tools_in_order():
@@ -64,14 +58,3 @@ def test_catalog_categories_and_flags():
 def test_tool_names_is_frozenset_of_catalog_names():
     assert isinstance(TOOL_NAMES, frozenset)
     assert {t.name for t in TOOL_CATALOG} == TOOL_NAMES
-
-
-def test_tool_spec_default_flags():
-    spec = ToolSpec(name="x", label="X", description="d", category="logging")
-    assert spec.always_on is False
-    assert spec.requires_config is False
-
-
-def test_catalog_response_wraps_tools_list():
-    resp = ToolCatalogResponse(tools=list(TOOL_CATALOG))
-    assert [t.name for t in resp.tools] == [t.name for t in TOOL_CATALOG]

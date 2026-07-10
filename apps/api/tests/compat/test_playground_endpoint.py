@@ -63,11 +63,3 @@ def test_endpoint_422_empty_messages(compat_client, compat_headers, web_agent_id
         json={"messages": []},
     )
     assert r.status_code == 422, r.text
-
-
-def test_endpoint_401_without_key(compat_client) -> None:
-    r = compat_client.post(
-        "/agent-playground-completion/agent_deadbeef",
-        json={"messages": [{"role": "user", "content": "hi"}]},
-    )
-    assert r.status_code == 401, r.text

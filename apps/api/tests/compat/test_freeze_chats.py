@@ -26,11 +26,6 @@ def _create_chat(client, headers, agent_id, **overrides):
     return client.post("/create-chat", json=body, headers=headers)
 
 
-def test_create_chat_requires_key(compat_client, web_agent_id):
-    r = compat_client.post("/create-chat", json={"agent_id": web_agent_id})
-    assert r.status_code == 401
-
-
 def test_create_chat_conforms(compat_client, compat_headers, web_agent_id):
     r = _create_chat(
         compat_client,

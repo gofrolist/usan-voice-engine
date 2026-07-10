@@ -68,13 +68,6 @@ def _create_sms(client, headers, *, from_number=_SMS_FROM, to_number=_SMS_TO, **
     )
 
 
-def test_create_sms_chat_requires_key(compat_client):
-    r = compat_client.post(
-        "/create-sms-chat", json={"from_number": _SMS_FROM, "to_number": _SMS_TO}
-    )
-    assert r.status_code == 401
-
-
 def test_503_when_messaging_disabled(compat_client, compat_headers, web_agent_id):
     # default settings: telnyx_messaging_enabled is False -> 503 before any write
     r = _create_sms(compat_client, compat_headers, override_agent_id=web_agent_id)

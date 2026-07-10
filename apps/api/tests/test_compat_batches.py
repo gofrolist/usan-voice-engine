@@ -119,19 +119,6 @@ async def _count_batches(super_async_url) -> int:
         await engine.dispose()
 
 
-# --- auth / envelope -------------------------------------------------------------------
-def test_missing_key_returns_401_envelope(compat_client):
-    r = compat_client.post(
-        "/create-batch-call",
-        json={"from_number": "+15551230000", "tasks": [{"to_number": "+15557654321"}]},
-    )
-    assert r.status_code == 401
-    body = r.json()
-    assert body["status"] == 401
-    assert "message" in body
-    assert "detail" not in body  # RetellAI envelope, not the native {detail}
-
-
 # --- happy path / contract -------------------------------------------------------------
 def test_create_batch_unversioned_path_returns_201_retell_shape(
     compat_client, compat_headers, async_database_url

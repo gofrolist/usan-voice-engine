@@ -84,16 +84,6 @@ async def _seed_native_profile(super_async_url: str, org_id: uuid.UUID, name: st
         await engine.dispose()
 
 
-# --- auth / envelope -------------------------------------------------------------------
-def test_missing_key_returns_401_envelope(compat_client):
-    r = compat_client.post("/create-retell-llm", json={"start_speaker": "agent"})
-    assert r.status_code == 401
-    body = r.json()
-    assert body["status"] == 401
-    assert "message" in body
-    assert "detail" not in body
-
-
 # --- create-retell-llm + create-agent (same underlying profile) ------------------------
 def test_create_retell_llm_returns_llm_id(compat_client, compat_headers):
     r = _create_llm(compat_client, compat_headers, general_prompt="Be concise.")

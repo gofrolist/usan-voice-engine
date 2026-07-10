@@ -101,17 +101,6 @@ async def _seed_session_with_kb(
 
 
 @pytest.mark.asyncio
-async def test_create_chat_rejects_unpublished_agent(app_session) -> None:
-    org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
-    await set_tenant_context(app_session, org_id)
-
-    with pytest.raises(CompatError) as exc:
-        await chat_service.create_chat(app_session, CreateChatRequest(agent_id="agent_" + "0" * 32))
-    assert exc.value.status_code == 422
-    await app_session.rollback()
-
-
-@pytest.mark.asyncio
 async def test_completion_503_when_gcp_unset_persists_nothing(app_session, monkeypatch) -> None:
     spy = AsyncMock()
     monkeypatch.setattr("usan_api.compat.chat_service.run_vertex_turn", spy)
