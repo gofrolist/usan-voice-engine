@@ -47,6 +47,7 @@ from usan_api.compat.schemas.retell_llm import (
     UpdateRetellLlmRequest,
 )
 from usan_api.compat.serialization import to_ms
+from usan_api.compat.tool_translate import translate_general_tools
 from usan_api.db.base import ProfileStatus
 from usan_api.db.models import AgentProfile, AgentProfileVersion
 from usan_api.repositories import agent_profiles as agent_profiles_repo
@@ -54,7 +55,11 @@ from usan_api.repositories import compat_webhooks as compat_webhooks_repo
 from usan_api.repositories import conversation_flows as conversation_flows_repo
 from usan_api.repositories import knowledge_bases as kb_repo
 from usan_api.repositories.agent_profiles import ProfileInUseError
-from usan_api.schemas.agent_config import DEFAULT_AGENT_CONFIG, AgentConfig
+from usan_api.schemas.agent_config import (
+    DEFAULT_AGENT_CONFIG,
+    AgentConfig,
+    external_tool_violations,
+)
 from usan_api.settings import Settings
 
 # Actor attribution on the native repo writes (created_by/updated_by/published_by audit).
@@ -88,6 +93,44 @@ def _apply_llm_overlay(
     # generation reads cfg.llm.knowledge_base_ids. None = PATCH no-op (prior binding survives).
     if knowledge_base_ids is not None:
         config["llm"]["knowledge_base_ids"] = knowledge_base_ids
+
+
+def _apply_tools_overlay(
+    config: dict[str, Any],
+    *,
+    general_tools: list[Any] | None,
+    settings: Settings,
+) -> None:
+    """Surface 3: translate ``general_tools`` into native ``tools.external_tools`` (+ any
+    builtin, e.g. end_call). No-op unless ``COMPAT_EXTERNAL_TOOLS_ENABLED`` — off keeps
+    general_tools echo-only (via ``_merge_extras``), the pre-Surface-3 behavior, so no
+    existing client gets a new 422. A ``None`` general_tools is a PATCH no-op (prior
+    external tools survive); an explicit ``[]`` clears them (replace semantics).
+
+    Raises ``CompatError(422)`` on an egress-allow-list violation BEFORE publish — never a
+    silent failure at call time. A same-named builtin is not an error: the external tool
+    shadows it (dropped from ``enabled`` below).
+    """
+    if not settings.compat_external_tools_enabled or general_tools is None:
+        return
+    translated = translate_general_tools(general_tools)
+    tools = config.setdefault("tools", {})
+    tools["external_tools"] = translated.external_tools
+    enabled = tools.setdefault("enabled", [])
+    # The client's external tools shadow any same-named Clara builtin for THIS agent — a
+    # migrated Retell client's `schedule_callback`/`flag_crisis` mean its own edge function,
+    # not our builtin. Drop the overlap so there is no double-registration (and so the
+    # structural _no_enabled_external_overlap check passes).
+    external_names = {t["name"] for t in translated.external_tools}
+    enabled[:] = [n for n in enabled if n not in external_names]
+    for builtin in translated.enable:
+        if builtin not in enabled:
+            enabled.append(builtin)
+    violations = external_tool_violations(
+        config, allowed_hosts=settings.compat_tool_allowed_hosts_set
+    )
+    if violations:
+        raise CompatError(422, violations[0]["msg"])
 
 
 def _apply_voice_overlay(config: dict[str, Any], *, cartesia_voice_id: str) -> None:
@@ -250,6 +293,7 @@ async def create_response_engine(
         begin_message=body.begin_message,
         knowledge_base_ids=body.knowledge_base_ids,
     )
+    _apply_tools_overlay(config, general_tools=body.general_tools, settings=settings)
     _merge_extras(config, "llm", body.model_dump(exclude_none=True))
     _validate_config(config)
     # The provisional name is a uuid8 suffix (deduped), so create_profile's INSERT cannot
@@ -410,6 +454,7 @@ async def update_response_engine(
         begin_message=body.begin_message,
         knowledge_base_ids=body.knowledge_base_ids,
     )
+    _apply_tools_overlay(config, general_tools=body.general_tools, settings=settings)
     _merge_extras(config, "llm", body.model_dump(exclude_none=True))
     _validate_config(config)
     await agent_profiles_repo.update_draft(

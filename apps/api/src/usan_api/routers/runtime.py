@@ -24,18 +24,56 @@ router = APIRouter(prefix="/v1/runtime", tags=["runtime"])
 _FLOW_ADVANCE_TIMEOUT_S = 20.0
 
 
-@router.get("/agent-config", response_model=ResolvedAgentConfig)
+def _project_config_for_worker(
+    resolved: ResolvedAgentConfig, *, external_tools_enabled: bool
+) -> dict[str, Any]:
+    """Project the resolved config to the WORKER-facing shape (Surface 3 security seam).
+
+    ``tools.external_tools`` is reduced to the LLM-facing fields plus the ``terminates_call``
+    behavior flag — ``{name, description, parameters, terminates_call}`` — stripping each tool's
+    ``url``/``method``/``timeout_s``. The client edge-function URL and the caller secret therefore
+    never leave ``apps/api``; the worker is structurally unable to learn a tool's endpoint
+    (design §5). ``terminates_call`` is a behavior flag (not a secret), so the worker needs it to
+    hang up after the client's end_call.
+    When the feature flag is off, the list is emptied (the ingest also does not persist any,
+    so this is belt-and-suspenders). Returns a JSON-safe dict (uuids stringified)."""
+    payload: dict[str, Any] = resolved.model_dump(mode="json")
+    tools = payload.get("config", {}).get("tools") or {}
+    external = tools.get("external_tools") or []
+    if external_tools_enabled:
+        tools["external_tools"] = [
+            {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["parameters"],
+                # Behavior flag (not a secret): the worker must know to hang up after this tool.
+                "terminates_call": t.get("terminates_call", False),
+            }
+            for t in external
+        ]
+    else:
+        tools["external_tools"] = []
+    return payload
+
+
+@router.get("/agent-config")
 async def get_agent_config(
     direction: Literal["inbound", "outbound"],
     call_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     claims: dict[str, Any] = Depends(require_worker_token),
-) -> ResolvedAgentConfig:
+) -> dict[str, Any]:
     """Resolve the published agent config for a call (or a direction default).
 
     Worker-token scope: the resolved config is profile-global, not per-contact PHI. A
     missing/unknown call_id is not an error — resolution falls back to the direction
     default and ultimately DEFAULT_AGENT_CONFIG. Always 200 with a usable config.
+
+    The response is the ``ResolvedAgentConfig`` shape with ``tools.external_tools`` projected
+    to LLM-facing fields only (``_project_config_for_worker``); ``response_model`` is dropped
+    because that projected shape is intentionally NOT a full API-side ``ExternalToolSpec``
+    (no ``url``) — re-validating it would fail on the required ``url`` field.
     """
     override_id: uuid.UUID | None = None
     contact_profile_id: uuid.UUID | None = None
@@ -61,10 +99,12 @@ async def get_agent_config(
         direction=resolved_direction,
     )
     if resolved is None:
-        return ResolvedAgentConfig(
+        resolved = ResolvedAgentConfig(
             source="default", profile_id=None, version=None, config=DEFAULT_AGENT_CONFIG
         )
-    return resolved
+    return _project_config_for_worker(
+        resolved, external_tools_enabled=settings.compat_external_tools_enabled
+    )
 
 
 @router.post("/flow-advance", response_model=FlowAdvanceResponse)

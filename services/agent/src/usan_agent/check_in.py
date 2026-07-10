@@ -24,6 +24,7 @@ from usan_agent.api_client import (
     FlagCategory,
     FlagSeverity,
 )
+from usan_agent.external_tools import build_external_test_tools, build_external_tools
 from usan_agent.prompt_vars import build_vars, substitute
 from usan_agent.rag_agent import RagAgent
 from usan_agent.sanitize import sanitize_prompt_value
@@ -1011,7 +1012,10 @@ def build_check_in_agent(
     return RagAgent(
         instructions=substitute(cfg.prompts.checkin_flow_instructions, values)
         + _sms_template_instructions(cfg.tools),
-        tools=_select_tools(cfg.tools),
+        tools=_select_tools(cfg.tools)
+        + build_external_tools(
+            getattr(cfg.tools, "external_tools", None) or [], call_id=call_id, settings=settings
+        ),
         call_id=call_id,
         kb_ids=cfg.llm.knowledge_base_ids,
         settings=settings,
@@ -1048,7 +1052,10 @@ def build_inbound_agent(
     return RagAgent(
         instructions=substitute(cfg.prompts.inbound_personalization_template, values)
         + _sms_template_instructions(cfg.tools),
-        tools=_select_tools(cfg.tools),
+        tools=_select_tools(cfg.tools)
+        + build_external_tools(
+            getattr(cfg.tools, "external_tools", None) or [], call_id=call_id, settings=settings
+        ),
         call_id=call_id,
         kb_ids=cfg.llm.knowledge_base_ids,
         settings=settings,
@@ -1080,5 +1087,6 @@ def build_test_agent(
     return Agent(
         instructions=substitute(cfg.prompts.checkin_flow_instructions, values)
         + _sms_template_instructions(cfg.tools),
-        tools=_select_test_tools(cfg.tools),
+        tools=_select_test_tools(cfg.tools)
+        + build_external_test_tools(getattr(cfg.tools, "external_tools", None) or []),
     )

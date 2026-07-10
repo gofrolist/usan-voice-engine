@@ -367,6 +367,18 @@ class Settings(BaseSettings):
         default="America/New_York", alias="COMPAT_DEFAULT_TIMEZONE"
     )
     compat_key_rate_limit: str = Field(default="600/minute", alias="COMPAT_KEY_RATE_LIMIT")
+    # Surface 3 external HTTP agent tools (design 2026-07-09). Ship-inert:
+    # COMPAT_EXTERNAL_TOOLS_ENABLED gates ingest (create/update-retell-llm translates
+    # general_tools) AND the runtime projection + execution proxy — off keeps general_tools
+    # echo-only exactly as before. COMPAT_TOOL_ALLOWED_HOSTS is the attested allow-list a
+    # client tool url may egress to (PHI-bearing args, Constitution II); empty => no external
+    # tool validates. COMPAT_TOOL_CALLER_SECRET is the shared per-org X-Caller-Secret (= the
+    # client's RETELL_FUNCTION_SECRET); it never leaves apps/api (never projected to the worker).
+    compat_external_tools_enabled: bool = Field(
+        default=False, alias="COMPAT_EXTERNAL_TOOLS_ENABLED"
+    )
+    compat_tool_allowed_hosts: str = Field(default="", alias="COMPAT_TOOL_ALLOWED_HOSTS")
+    compat_tool_caller_secret: str | None = Field(default=None, alias="COMPAT_TOOL_CALLER_SECRET")
     # Ship-inert flag for the compat (RetellAI) webhook delivery poller (US2). Like
     # WEBHOOK_DELIVERY_ENABLED, it gates only the claim+POST half: the poller task always
     # starts so housekeeping (sweep/expire/prune) + the backlog gauge run flag-independently.
@@ -405,6 +417,19 @@ class Settings(BaseSettings):
             raise ValueError(
                 "INVITE_EMAIL_ENABLED=true requires INVITE_EMAIL_SENDER to name a real "
                 "Workspace mailbox (the domain-wide-delegation subject; spec 2026-06-19)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _external_tools_require_allowlist(self) -> Settings:
+        # Fail-closed (Surface 3 WS-C): enabling client HTTP tools with an empty egress allow-list
+        # would let every ingest 422 ("host not in allow-list") and every proxy call 502 — a
+        # silently-broken feature. That combination is a misconfiguration; fail at startup, not
+        # per call.
+        if self.compat_external_tools_enabled and not self.compat_tool_allowed_hosts.strip():
+            raise ValueError(
+                "COMPAT_EXTERNAL_TOOLS_ENABLED=true requires COMPAT_TOOL_ALLOWED_HOSTS to name "
+                "at least one egress host (Surface 3 WS-C)"
             )
         return self
 
@@ -559,6 +584,19 @@ class Settings(BaseSettings):
         """
         return frozenset(
             h.strip().lower() for h in self.compat_webhook_allowed_hosts.split(",") if h.strip()
+        )
+
+    @property
+    def compat_tool_allowed_hosts_set(self) -> frozenset[str]:
+        """Hosts a Surface-3 external tool url may POST to (PHI-bearing args egress here).
+
+        Empty (the default) means NO external tool validates — an operator must attest the
+        client's edge-function host before external tools can be ingested. Lowercased for a
+        case-insensitive match against the tool url's host. Layered atop the SSRF guard the
+        execution proxy applies at call time (design §7 step 3).
+        """
+        return frozenset(
+            h.strip().lower() for h in self.compat_tool_allowed_hosts.split(",") if h.strip()
         )
 
     def warn_if_db_tls_disabled(self) -> None:

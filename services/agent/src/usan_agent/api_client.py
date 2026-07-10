@@ -249,6 +249,33 @@ async def report_end_call(call_id: str, settings: Settings, reason: str) -> None
     await _post_tool("end_call", call_id, settings, {"reason": reason})
 
 
+# The server proxy bounds each client-tool call to the tool's own timeout (<=30s); allow a
+# little headroom over that on the agent->API hop so a legitimately-slow tool isn't cut short.
+_EXTERNAL_TOOL_TIMEOUT_S = 35.0
+
+
+async def call_external_tool(
+    call_id: str, settings: Settings, *, name: str, arguments: dict[str, Any]
+) -> Any:
+    """Delegate a client-defined HTTP tool call (Surface 3) to the API proxy
+    ``/v1/tools/external``. The proxy owns the tool url, {{var}} substitution, the egress
+    guard, and the X-Caller-Secret — the worker sends only the call-scoped name + arguments.
+    Returns the tool's ``result`` payload; raises ``httpx.HTTPStatusError`` on a non-2xx so the
+    caller can surface a calm spoken fallback."""
+    call_id = _validate_call_id(call_id)
+    url = f"{settings.api_base_url}/v1/tools/external"
+    headers = {"Authorization": f"Bearer {_mint_token(call_id, settings)}"}
+    async with httpx.AsyncClient(timeout=_EXTERNAL_TOOL_TIMEOUT_S) as client:
+        response = await client.post(
+            url,
+            json={"call_id": call_id, "name": name, "arguments": arguments},
+            headers=headers,
+        )
+        response.raise_for_status()
+        body = response.json()
+    return body.get("result") if isinstance(body, dict) else body
+
+
 async def flush_transcript(
     call_id: str, settings: Settings, segments: list[dict[str, Any]]
 ) -> None:

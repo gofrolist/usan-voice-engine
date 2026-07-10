@@ -11,7 +11,7 @@ re-export their constants from here. Keep field names/defaults in sync with the 
 copy; the response JSON's `config` block is parsed straight into AgentConfig.
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -63,6 +63,24 @@ class SmsToolConfig(BaseModel):
     templates: list[SmsTemplate] = Field(default_factory=list)
 
 
+class ExternalToolSpec(BaseModel):
+    """Agent-side projection of a client HTTP tool (Surface 3, design 2026-07-09).
+
+    LLM-facing fields ONLY — the runtime `/v1/runtime/agent-config` projection strips the
+    tool's `url`/`method`/secret, so the worker is structurally unable to learn a tool's
+    endpoint or the caller secret (they never leave apps/api). Parsed, not validated: the
+    API already validated the full spec before publish. Extra fields are ignored (pydantic
+    default), so a richer server-side spec never breaks the worker.
+    """
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    # Retell end_call_after_speech_with_success: hang up after a successful call (the client's
+    # end_call logs disposition to its URL AND ends the call). Projected from apps/api.
+    terminates_call: bool = False
+
+
 class ToolsConfig(BaseModel):
     enabled: list[str] = Field(
         default_factory=lambda: [
@@ -84,6 +102,9 @@ class ToolsConfig(BaseModel):
         ]
     )
     sms: SmsToolConfig | None = None
+    # Surface 3: client HTTP tools, LLM-facing projection only (name/description/parameters).
+    # Defaults to [] so every legacy config (and the DEFAULT_AGENT_CONFIG) is unchanged.
+    external_tools: list[ExternalToolSpec] = Field(default_factory=list)
 
 
 class VoicemailDetectionConfig(BaseModel):
