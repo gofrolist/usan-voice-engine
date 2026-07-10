@@ -144,15 +144,19 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
     # Surface 2A: the inbound-call-router may pick a specific agent for this caller even when our
     # own contacts table doesn't know them (override_applied), so the personalized path runs on
     # either signal. A router override selects a different profile than the inbound default cfg
-    # fetched before this call, so re-resolve config by call_id (which now carries the override) —
-    # fetch_agent_config degrades to the inbound default on failure, the correct fallback.
+    # fetched before this call, so re-resolve config by call_id (which now carries the override),
+    # falling back to that already-loaded inbound-default cfg if the re-fetch blips.
     if info and info.get("call_id") and (info.get("contact_known") or info.get("override_applied")):
         call_id = str(info["call_id"])
         dynamic_vars = info.get("dynamic_vars") or {}
         if info.get("override_applied"):
-            # fetch_agent_config never raises and degrades to the inbound default on failure —
-            # which is exactly the correct fallback, so no separate guard is needed.
-            cfg = await fetch_agent_config(settings, direction="inbound", call_id=call_id)
+            # Re-resolve by call_id (now carrying the override). fetch_agent_config never raises;
+            # on a transient failure it degrades to `fallback=cfg` — the DID's inbound-default
+            # already in hand — NOT the global default, so a blip can't strip the caller down to
+            # the generic default agent.
+            cfg = await fetch_agent_config(
+                settings, direction="inbound", call_id=call_id, fallback=cfg
+            )
         data = CheckInData(
             call_id=call_id,
             settings=settings,

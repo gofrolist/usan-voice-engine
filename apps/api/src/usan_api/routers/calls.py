@@ -128,8 +128,14 @@ async def _resolve_inbound_override(
 
     On any router failure OR an override_agent_id we can't resolve to a published voice profile,
     returns None so the caller degrades to the DID's default inbound agent (spec §3). On success,
-    merges the router's dynamic_variables OVER ``dynamic_vars`` (the client's CRM is source of
-    truth) and returns the profile UUID to store as the call's profile_override.
+    merges the router's dynamic_variables OVER ``dynamic_vars`` (in place) and returns the profile
+    UUID to store as the call's profile_override.
+
+    Precedence caveat: this "router wins" merge is authoritative only for CUSTOM (non-builtin)
+    variable names. The worker's ``prompt_vars.build_vars`` gives our resolved built-ins the
+    HIGHEST precedence (spec §4.4), so a router var reusing a builtin name (e.g. ``contact_name``)
+    is superseded by our own records — deliberately, so external input can't override a caller's
+    verified identity fields. Router-supplied custom vars (``offer_early_payment`` etc.) win.
     """
     if not settings.compat_inbound_router_enabled:
         return None

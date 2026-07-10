@@ -382,13 +382,23 @@ async def start_inbound_call(
 
 
 async def fetch_agent_config(
-    settings: Settings, *, direction: Literal["inbound", "outbound"], call_id: str | None = None
+    settings: Settings,
+    *,
+    direction: Literal["inbound", "outbound"],
+    call_id: str | None = None,
+    fallback: AgentConfig | None = None,
 ) -> AgentConfig:
-    """Fetch the resolved agent config; degrade to DEFAULT_AGENT_CONFIG on any failure.
+    """Fetch the resolved agent config; degrade to ``fallback`` (or DEFAULT_AGENT_CONFIG)
+    on any failure.
 
     Best-effort and never raises: a failed config fetch must never crash a call. Uses
     the worker token (matches the server's require_worker_token) and api_base_url
     (so the plaintext-http fail-closed rule holds).
+
+    ``fallback`` lets a caller that already holds a good config (e.g. an inbound re-fetch
+    after a router override, where the direction-default cfg is already in hand) degrade to
+    THAT config instead of the global default — so a transient re-fetch blip keeps the
+    DID's inbound personality rather than dropping to the generic default agent.
     """
     try:
         url = f"{settings.api_base_url}/v1/runtime/agent-config"
@@ -409,5 +419,6 @@ async def fetch_agent_config(
         logger.bind(direction=direction, err=type(exc).__name__).warning(
             "agent-config fetch failed; using defaults"
         )
-        # Return a copy so a caller mutating the result can't corrupt the shared singleton.
-        return DEFAULT_AGENT_CONFIG.model_copy(deep=True)
+        # Return a copy so a caller mutating the result can't corrupt the shared singleton
+        # (or the caller-supplied fallback).
+        return (fallback or DEFAULT_AGENT_CONFIG).model_copy(deep=True)

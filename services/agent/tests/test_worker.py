@@ -11,7 +11,7 @@ from usan_agent.voicemail import VoicemailWatcher
 from usan_agent.worker import CallMetadata, parse_metadata
 
 
-async def _fake_fetch(settings, *, direction, call_id=None):
+async def _fake_fetch(settings, *, direction, call_id=None, fallback=None):
     return DEFAULT_AGENT_CONFIG
 
 
@@ -441,7 +441,7 @@ async def test_inbound_router_override_refetches_config_and_runs_personalized(mo
 
     fetch_calls: list[str | None] = []
 
-    async def _tracking_fetch(settings, *, direction, call_id=None):
+    async def _tracking_fetch(settings, *, direction, call_id=None, fallback=None):
         fetch_calls.append(call_id)
         return DEFAULT_AGENT_CONFIG
 

@@ -371,6 +371,38 @@ async def test_fetch_agent_config_returns_default_on_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_agent_config_degrades_to_fallback_when_given(monkeypatch):
+    # Surface 2A: an inbound override re-fetch passes the already-loaded inbound-default cfg as
+    # fallback, so a transient failure keeps THAT config rather than dropping to the global default.
+    class _BoomClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **k):
+            raise RuntimeError("network down")
+
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _BoomClient)
+    inbound_default = DEFAULT_AGENT_CONFIG.model_copy(
+        update={
+            "voice": DEFAULT_AGENT_CONFIG.voice.model_copy(
+                update={"cartesia_voice_id": "did-voice"}
+            )
+        }
+    )
+    cfg = await api_client.fetch_agent_config(
+        _settings(), direction="inbound", call_id="call-1", fallback=inbound_default
+    )
+    assert cfg.voice.cartesia_voice_id == "did-voice"  # kept the fallback, not the global default
+    assert cfg is not inbound_default  # returned a defensive copy
+
+
+@pytest.mark.asyncio
 async def test_fetch_agent_config_returns_default_on_bad_body(monkeypatch):
     class _FakeResponse:
         def raise_for_status(self):
