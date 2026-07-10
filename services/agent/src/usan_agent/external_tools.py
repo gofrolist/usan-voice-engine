@@ -28,7 +28,7 @@ def _raw_schema(spec: ExternalToolSpec) -> dict[str, Any]:
     return {"name": spec.name, "description": spec.description, "parameters": spec.parameters}
 
 
-async def _terminate_call(ctx: RunContext, *, tool: str) -> None:
+async def _terminate_call(ctx: RunContext[Any], *, tool: str) -> None:
     """Hang up after a client tool with ``terminates_call=True`` (Retell
     end_call_after_speech_with_success). Mirrors the builtin end_call: say goodbye, delete the
     room, shut down. Best-effort — never raises into the session. A no-op when the session has no
@@ -48,7 +48,7 @@ async def _terminate_call(ctx: RunContext, *, tool: str) -> None:
 
 
 def _make_external_tool(spec: ExternalToolSpec, *, call_id: str, settings: Settings) -> Any:
-    async def _handler(ctx: RunContext, raw_arguments: dict[str, object]) -> str:
+    async def _handler(ctx: RunContext[Any], raw_arguments: dict[str, object]) -> str:
         try:
             result = await api_client.call_external_tool(
                 call_id, settings, name=spec.name, arguments=dict(raw_arguments)
