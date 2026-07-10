@@ -73,14 +73,19 @@ class PromptsConfig(BaseModel):
     # prompt_vars.substitute() (legacy single-brace slots {contact_name}/
     # {last_check_in_line} are str.replace-d, never str.format-ed), so a stray brace is
     # inert at substitution time.
-    system_prompt: str = Field(min_length=1, max_length=24000)
+    # Large-field caps sized to hold real migrated single-prompt agents: the client's Retell
+    # prompts run 21–40 KB (checkin_v0.2 ≈ 40 KB), so the three large fields cap at 65000.
+    # Raising a max_length is FORWARD-COMPAT-SAFE — the invariant above AgentConfig forbids
+    # only TIGHTENING a constraint (an older stored config still satisfies a larger max), so
+    # bumping these never 500s a published snapshot on read.
+    system_prompt: str = Field(min_length=1, max_length=65000)
     greeting: str = Field(min_length=1, max_length=1000)
     recording_disclosure: str = Field(min_length=1, max_length=1000)
     voicemail_message: str = Field(min_length=1, max_length=1000)
-    checkin_flow_instructions: str = Field(min_length=1, max_length=24000)
+    checkin_flow_instructions: str = Field(min_length=1, max_length=65000)
     goodbye_message: str = Field(min_length=1, max_length=1000)
     inbound_opening: str = Field(min_length=1, max_length=1000)
-    inbound_personalization_template: str = Field(min_length=1, max_length=6000)
+    inbound_personalization_template: str = Field(min_length=1, max_length=65000)
 
     # Field-tiered braces (design §5.1). Only the SHORT one-line fields reject a stray
     # lone brace (a likely typo); they still accept {{tokens}}. The large free-form
