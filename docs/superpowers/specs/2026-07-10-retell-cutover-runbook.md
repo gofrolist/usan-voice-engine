@@ -17,10 +17,13 @@ client-side `VOICE_API_BASE` refactor is merged (backend PR #15).
 ## 0. Preconditions (all true before canary)
 
 - [ ] Voice-engine deployed and reachable; `/health` green with the deployed version.
-- [ ] The **3 agent profiles** exist and are **published** in the voice engine (Sales, Companion,
-      Betty/QA), each with the migrated prompt + voice/LLM config (**bucket B — blocked on the
-      Retell dashboard export**). Their tool bindings match `retell/{sales,inbound,companion}/`
-      (validated: 33 unique tools, all external, one host).
+- [ ] The **agent profiles** exist and are **published** in the voice engine (Companion, Sales,
+      Inbound, + Betty/QA), each with the migrated prompt + tools (**bucket B — delivered by the
+      seed in voice-engine PR #172**: `apps/api/scripts/seed_retell_profiles/`). Prompts and tool
+      decls are checked into the client repo (`prompts/*_retell.txt`, `retell/{sales,inbound,
+      companion}/`), so B was **not** blocked on a dashboard export. What still needs the client's
+      confirmation is voice/LLM *values* only (voice id, model/temperature) + KB binding — the
+      seed ships flagged defaults (see the seed README "CONFIRM before production").
 - [ ] Telnyx numbers reachable by the engine (SIP inbound trunk + dispatch rule to the agent),
       OR a test DID for canary.
 - [ ] The client backend on the `VOICE_API_BASE` refactor (PR #15), `VOICE_API_BASE` **still
@@ -139,7 +142,9 @@ Every step is reversible without a redeploy:
 
 - [ ] §1 Q1–Q8 answered/confirmed by the client.
 - [ ] §4 acceptance thresholds agreed.
-- [ ] Bucket B: 3 agent prompts + voice/LLM configs exported from Retell and published in the engine.
+- [ ] Bucket B: agent profiles seeded + published (PR #172, `seed_profiles.py --apply`); the seed
+      README "CONFIRM before production" items settled with the client (voice id, LLM model/
+      temperature, KB binding for Sales/Inbound, short operational lines).
 - [ ] Subscription secret = client `RETELL_API_KEY` (Q2); `COMPAT_TOOL_CALLER_SECRET` = `RETELL_FUNCTION_SECRET`.
 - [ ] `failed_jobs` voice queue drained (§3 gate).
 - [ ] Compliance recordings archived (Q6).
