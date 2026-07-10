@@ -80,8 +80,9 @@ jobs:
         # dominated (~50% worker CPU idle measured at -n 4), so 2x-oversubscribing
         # the 4 vCPUs keeps them busy. --dist worksteal comes from addopts; the
         # explicit -n here overrides addopts' -n auto (CLI args follow addopts).
-        # Drop -v: 1300+ verbose lines is just log I/O.
-        run: uv run pytest -n 8 --tb=short
+        # Drop -v: 1300+ verbose lines is just log I/O. --durations keeps the
+        # slowest tests visible in the log so wall-time regressions are diagnosable.
+        run: uv run pytest -n 8 --tb=short --durations=25
 
   pytest-agent:
     name: pytest (services/agent)

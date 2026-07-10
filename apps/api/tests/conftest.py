@@ -90,10 +90,14 @@ def database_url() -> str:
     # Durability off for the throwaway test DB: the suite is dominated by per-test
     # TRUNCATE + insert I/O, and with fsync on every commit waits on a WAL flush.
     # fsync/synchronous_commit/full_page_writes are safe to disable here — if the
-    # container crashes mid-run the whole test run is void anyway.
-    container = PostgresContainer(
-        "pgvector/pgvector:pg18", username="usan", password="usan", dbname="usan"
-    ).with_command("postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off")
+    # container crashes mid-run the whole test run is void anyway. tmpfs replaces
+    # the image's anonymous volume so checkpoints/bgwriter never touch real disk
+    # either (pg18's PGDATA is /var/lib/postgresql/18/docker, under this mount).
+    container = (
+        PostgresContainer("pgvector/pgvector:pg18", username="usan", password="usan", dbname="usan")
+        .with_kwargs(tmpfs={"/var/lib/postgresql": "rw"})
+        .with_command("postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off")
+    )
     with container as pg:
         host = pg.get_container_host_ip()
         port = pg.get_exposed_port(5432)
