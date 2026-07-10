@@ -416,6 +416,12 @@ def external_tool_violations(
     name that merely exists in the global ``TOOL_NAMES`` catalog but is not enabled for this
     agent is allowed: a migrated Retell client legitimately names its own edge function
     ``schedule_callback`` / ``flag_crisis`` and wants that, not our Clara builtin.
+
+    ``method`` is also gated here: the execution proxy is POST-only (Retell custom tools always
+    POST a JSON body), so a ``GET`` tool would ingest fine yet silently 502 on every call. We
+    reject it at SAVE with a clear field-level error instead. The Literal still ADMITS ``GET`` on
+    ``ExternalToolSpec`` (forward-compat: an older stored snapshot with GET must keep
+    deserializing on read) — enforcement lives here at the handler layer, not as a validator.
     """
     tools = ((config.get("tools") or {}).get("external_tools")) or []
     violations: list[dict[str, Any]] = []
@@ -430,6 +436,18 @@ def external_tool_violations(
                         f"external tool '{name}' host '{host}' is not in the tool egress allow-list"
                     ),
                     "type": "value_error.external_tool_host_not_allowed",
+                }
+            )
+        method = str(tool.get("method") or "POST").upper()
+        if method != "POST":
+            violations.append(
+                {
+                    "loc": ["body", "config", "tools", "external_tools", i, "method"],
+                    "msg": (
+                        f"external tool '{name}' method '{method}' is not supported; external "
+                        "tools are POST-only"
+                    ),
+                    "type": "value_error.external_tool_method_unsupported",
                 }
             )
     return violations

@@ -870,6 +870,9 @@ async def call_external_tool(
         async with (
             httpx.AsyncClient(follow_redirects=False) as client,
             client.stream(
+                # POST-only by design (Retell custom tools always POST a JSON body); a GET
+                # external tool is rejected at save time (external_tool_violations), so spec.method
+                # is always POST here and is not read.
                 "POST",
                 pinned.url,
                 content=raw,

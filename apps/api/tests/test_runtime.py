@@ -224,3 +224,50 @@ def test_agent_config_not_rate_limited(client, async_database_url):
             "/v1/runtime/agent-config", params={"direction": "inbound"}, headers=_wauth()
         )
         assert r.status_code == 200
+
+
+_LEAK_URL = "https://leak.example.com/functions/v1/secret-tool"
+
+
+async def _seed_default_with_external_tool(async_url: str, *, direction: str) -> str:
+    engine = create_async_engine(async_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            profile = await repo.create_profile(
+                db, name=f"p-{uuid.uuid4().hex}", description=None, actor_email="op"
+            )
+            cfg = dict(profile.draft_config)
+            cfg["tools"] = {
+                **cfg["tools"],
+                "external_tools": [
+                    {
+                        "name": "secret_tool",
+                        "description": "d",
+                        "url": _LEAK_URL,
+                        "method": "POST",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            }
+            await repo.update_draft(db, profile.id, config=cfg, description=None, actor_email="op")
+            await repo.publish(db, profile.id, note="v1", actor_email="op")
+            await repo.set_default(db, profile.id, direction=direction)
+            await db.commit()
+            return str(profile.id)
+    finally:
+        await engine.dispose()
+
+
+def test_agent_config_never_leaks_external_tool_url_to_worker(client, async_database_url):
+    # Surface-3 secret seam: the worker-facing config must NEVER carry a tool's url. This is the
+    # endpoint-level guard for the #169/#170 merge collision on get_agent_config — a resolution
+    # that returns the resolved config raw (bypassing _project_config_for_worker) would leak the
+    # client edge-function endpoint to the worker VM, and this assertion catches it. Holds
+    # regardless of the external-tools flag: projection empties the list when off and strips url
+    # when on, so the url is absent either way.
+    asyncio.run(_seed_default_with_external_tool(async_database_url, direction="outbound"))
+    r = client.get("/v1/runtime/agent-config", params={"direction": "outbound"}, headers=_wauth())
+    assert r.status_code == 200
+    assert _LEAK_URL not in r.text
+    assert "leak.example.com" not in r.text

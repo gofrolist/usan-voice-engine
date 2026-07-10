@@ -170,3 +170,19 @@ def test_violations_tolerates_absent_tools():
     assert external_tool_violations({"tools": {}}, allowed_hosts=_ALLOWED) == []
     none_tools = {"tools": {"external_tools": None}}
     assert external_tool_violations(none_tools, allowed_hosts=_ALLOWED) == []
+
+
+def test_violations_rejects_get_method_at_save():
+    # The proxy is POST-only; a GET tool would ingest fine then silently 502 on every call.
+    # It is rejected at save with a method-field error (the Literal still admits GET for
+    # forward-compat, so an older stored snapshot with GET keeps deserializing).
+    cfg = _config_with(_spec(method="GET"))
+    v = external_tool_violations(cfg, allowed_hosts=_ALLOWED)
+    assert len(v) == 1
+    assert v[0]["type"] == "value_error.external_tool_method_unsupported"
+    assert v[0]["loc"] == ["body", "config", "tools", "external_tools", 0, "method"]
+
+
+def test_violations_allows_post_method():
+    cfg = _config_with(_spec(method="POST"))
+    assert external_tool_violations(cfg, allowed_hosts=_ALLOWED) == []
