@@ -156,9 +156,17 @@ def test_checkin_flow_accepts_braces():
     assert PromptsConfig.model_validate(cfg)
 
 
+def test_system_prompt_accepts_real_migrated_prompt_size():
+    # The large-field cap (65000) holds real migrated single-prompt agents (Retell
+    # prompts run 21–40 KB). A 40 KB system_prompt must validate; only past the cap fails.
+    cfg = DEFAULT_AGENT_CONFIG.prompts.model_dump()
+    cfg["system_prompt"] = "x" * 40000
+    assert PromptsConfig.model_validate(cfg)
+
+
 def test_system_prompt_rejects_over_cap():
     cfg = DEFAULT_AGENT_CONFIG.prompts.model_dump()
-    cfg["system_prompt"] = "x" * 24001
+    cfg["system_prompt"] = "x" * 65001
     with pytest.raises(ValidationError):
         PromptsConfig.model_validate(cfg)
 
