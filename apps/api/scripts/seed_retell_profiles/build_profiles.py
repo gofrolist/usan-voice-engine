@@ -130,16 +130,23 @@ def _build_config(
 ) -> dict[str, Any]:
     """Assemble a full AgentConfig dict for one migrated agent.
 
-    The full Retell single-prompt goes into ALL THREE large prompt fields (system_prompt,
-    checkin_flow_instructions, inbound_personalization_template). Our routing resolves the
-    live agent by direction AND by the contact's assigned profile, so a profile can drive
-    either an outbound OR an inbound call; putting the whole prompt in every large field makes
-    the same client prompt authoritative on every path (the fields are read by different agent
-    instances, never concatenated into one context, so there is no per-turn duplication).
+    Prompt-field placement is by WHICH AGENT BUILDER reads the field (services/agent), not a
+    hedge:
+      - ``checkin_flow_instructions`` — the OUTBOUND conversation agent (build_check_in_agent)
+      - ``inbound_personalization_template`` — the INBOUND known-contact agent (build_inbound_agent)
+    Both are tool-enabled, so the full Retell single-prompt (which drives tool use) goes into both
+    — a profile can serve either direction depending on the contact's assignment.
+
+    ``system_prompt`` is DELIBERATELY the thin default persona, NOT the migrated prompt: it backs
+    only the greet-only fallback agent (build_agent, pipeline.py), which registers NO tools. Copying
+    the tool-driving prompt here would tell that tool-less agent to call functions it doesn't have
+    (an unknown inbound caller would then hear hallucinated tool 'success'). Keep it tool-free.
     """
     return {
         "prompts": {
-            "system_prompt": prompt,
+            # Greet-only fallback (unknown inbound) reads this and has no tools — keep it a thin,
+            # tool-free persona. The migrated prompt lives in the two flow fields below.
+            "system_prompt": _D.system_prompt,
             "checkin_flow_instructions": prompt,
             "inbound_personalization_template": prompt,
             # Short operational lines — defaulted (see module note); review per agent.
