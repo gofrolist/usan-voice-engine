@@ -37,5 +37,5 @@ def test_viewer_can_list_cannot_add(client, async_database_url):
     assert client.post("/v1/admin/dnc", json={"phone_e164": "+15551240002"}).status_code == 403
 
 
-def test_dnc_requires_session(client):
-    assert client.get("/v1/admin/dnc").status_code == 401
+def test_dnc_requires_session(bare_client):
+    assert bare_client.get("/v1/admin/dnc").status_code == 401

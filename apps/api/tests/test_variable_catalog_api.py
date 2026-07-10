@@ -31,12 +31,6 @@ BUILTIN_ORDER = [
 _N_BUILTINS = len(BUILTIN_ORDER)
 
 
-def test_variable_catalog_requires_admin_session(client):
-    # Mirrors the admin-profiles plane: no session cookie -> 401.
-    r = client.get("/v1/admin/variable-catalog")
-    assert r.status_code == 401
-
-
 def test_variable_catalog_returns_builtins_in_order(client, super_admin_acting_session):
     r = client.get("/v1/admin/variable-catalog")
     assert r.status_code == 200

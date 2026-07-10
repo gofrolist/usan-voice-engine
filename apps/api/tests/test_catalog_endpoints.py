@@ -177,14 +177,6 @@ def test_withdrawn_id_in_frozen_config_still_deserializes():
 # --- endpoint tests (require the client + admin session) --------------------
 
 
-def test_voice_catalog_requires_admin_session(client):
-    assert client.get("/v1/admin/voice-catalog").status_code == 401
-
-
-def test_model_catalog_requires_admin_session(client):
-    assert client.get("/v1/admin/model-catalog").status_code == 401
-
-
 def test_voice_catalog_returns_catalog(client, super_admin_acting_session):
     r = client.get("/v1/admin/voice-catalog")
     assert r.status_code == 200

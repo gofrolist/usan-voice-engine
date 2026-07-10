@@ -112,8 +112,8 @@ def test_get_unknown_kb_404(client, admin_session):
     )
 
 
-def test_create_requires_session(client):
-    assert client.post("/v1/admin/knowledge-bases", json={"name": "KB"}).status_code == 401
+def test_create_requires_session(bare_client):
+    assert bare_client.post("/v1/admin/knowledge-bases", json={"name": "KB"}).status_code == 401
 
 
 def test_viewer_cannot_create(client, async_database_url):

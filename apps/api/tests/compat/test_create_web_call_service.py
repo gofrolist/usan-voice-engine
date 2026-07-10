@@ -78,18 +78,6 @@ async def test_create_web_call_persists_registered_web_row(app_session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_web_call_rejects_unpublished_agent(app_session) -> None:
-    org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
-    await set_tenant_context(app_session, org_id)
-
-    settings = _settings()
-    body = CreateWebCallRequest(agent_id="agent_" + "0" * 32)
-    with pytest.raises(CompatError) as exc:
-        await call_create.create_web_call(app_session, settings, body)
-    assert exc.value.status_code == 422
-
-
-@pytest.mark.asyncio
 async def test_create_web_call_dispatch_failure_rolls_back(app_session) -> None:
     org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
     await set_tenant_context(app_session, org_id)

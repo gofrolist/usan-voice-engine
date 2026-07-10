@@ -13,7 +13,11 @@ _HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
 @cache
 def load_oracle() -> dict[str, Any]:
-    return yaml.safe_load(ORACLE_PATH.read_text())
+    # CSafeLoader: the oracle is 530KB and the pure-Python loader costs ~0.26s
+    # per xdist worker (~0.03s with libyaml) — first-touch cost billed to
+    # whichever conformance test runs first on each worker.
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    return yaml.load(ORACLE_PATH.read_text(), Loader=loader)
 
 
 @cache
@@ -26,7 +30,3 @@ def oracle_operations() -> frozenset[tuple[str, str]]:
         for method in item
         if method.lower() in _HTTP_METHODS
     )
-
-
-def component_schema(name: str) -> dict[str, Any]:
-    return load_oracle()["components"]["schemas"][name]

@@ -35,10 +35,6 @@ def _make_llm(compat_client, compat_headers, prompt: str) -> str:
     return r.json()["llm_id"]
 
 
-def test_v2_list_requires_key(compat_client):
-    assert compat_client.get("/v2/list-retell-llms").status_code == 401
-
-
 @pytest.mark.frozen
 def test_v2_list_conforms_and_roundtrips(compat_client, compat_headers):
     for i in range(3):

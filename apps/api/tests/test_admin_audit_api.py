@@ -1,5 +1,5 @@
-def test_audit_requires_session(client):
-    assert client.get("/v1/admin/audit").status_code == 401
+def test_audit_requires_session(bare_client):
+    assert bare_client.get("/v1/admin/audit").status_code == 401
 
 
 def test_audit_lists_recent_entries(client, super_admin_acting_session):
@@ -20,16 +20,17 @@ def test_audit_limit_bounds(client, super_admin_acting_session):
 
 def test_audit_action_filter_finds_match_beyond_limit_window(client, super_admin_acting_session):
     # Compliance-screen fix: a server-side action filter must find a match that falls
-    # OUTSIDE the latest-N window. Create one set_default, then several later publishes;
-    # with a tiny unfiltered window the set_default is invisible, but the filter finds it.
+    # OUTSIDE the latest-N window. Create one set_default, then later publishes; with
+    # the tiniest unfiltered window (limit=1) the set_default is invisible, but the
+    # filter finds it.
     a = client.post("/v1/admin/profiles", json={"name": "p-aud-a"}).json()["id"]
     client.post(f"/v1/admin/profiles/{a}/set-default", json={"direction": "inbound"})
-    for i in range(5):
+    for i in range(2):
         pid = client.post("/v1/admin/profiles", json={"name": f"p-aud-{i}"}).json()["id"]
         client.post(f"/v1/admin/profiles/{pid}/publish", json={"note": "v"})
-    recent = client.get("/v1/admin/audit?limit=3").json()
+    recent = client.get("/v1/admin/audit?limit=1").json()
     assert all(e["action"] != "profile.set_default" for e in recent)  # outside the window
-    filtered = client.get("/v1/admin/audit?action=profile.set_default&limit=3").json()
+    filtered = client.get("/v1/admin/audit?action=profile.set_default&limit=1").json()
     assert filtered
     assert all(e["action"] == "profile.set_default" for e in filtered)
 

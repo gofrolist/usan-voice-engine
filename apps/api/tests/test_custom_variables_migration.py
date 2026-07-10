@@ -6,14 +6,10 @@ exists (table absent) and pass once it lands.
 
 Helpers cloned verbatim from test_ops_queue_migration.py (`_columns` returning
 {name: (data_type, is_nullable, column_default)}, `_indexes`,
-`_check_constraints`, `_execute`, plus its API_DIR/env-dict subprocess pattern).
+`_check_constraints`, `_execute`).
 """
 
 import asyncio
-import os
-import subprocess
-import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -21,9 +17,6 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
-
-API_DIR = Path(__file__).resolve().parents[1]
-TEST_SECRET = "a" * 32
 
 
 async def _columns(async_database_url: str, table: str) -> dict[str, tuple[str, str, str | None]]:
@@ -188,39 +181,5 @@ def test_unique_name_enforced(async_database_url: str) -> None:
         )
 
 
-def test_downgrade_upgrade_roundtrip(database_url: str, async_database_url: str) -> None:
-    # Runs last in this module; leaves the session DB clean at head. The
-    # subprocess roundtrip pattern from test_ops_queue_migration.py — conftest
-    # migrates to head before tests run.
-    env = {
-        **os.environ,
-        "DATABASE_URL": database_url,
-        "LIVEKIT_API_KEY": "key",
-        "LIVEKIT_API_SECRET": TEST_SECRET,
-        "LIVEKIT_URL": "ws://livekit:7880",
-        "JWT_SIGNING_KEY": "s" * 32,
-        "OPERATOR_API_KEY": "o" * 32,
-    }
-    subprocess.run(
-        [sys.executable, "-m", "alembic", "downgrade", "0014"],
-        cwd=API_DIR,
-        env=env,
-        check=True,
-    )
-    try:
-        cols = asyncio.run(_columns(async_database_url, "custom_variables"))
-        assert cols == {}
-    finally:
-        # A mid-test failure must not strand the shared session DB at 0014 —
-        # every other module in the run assumes head.
-        subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
-            cwd=API_DIR,
-            env=env,
-            check=True,
-        )
-
-    cols = asyncio.run(_columns(async_database_url, "custom_variables"))
-    assert "id" in cols
-    checks = asyncio.run(_check_constraints(async_database_url, "custom_variables"))
-    assert "ck_custom_variables_name_slug" in checks
+# The downgrade→upgrade round-trip lives in test_migration_roundtrip.py, shared
+# with the 0012/0013/0014 suites (one head→0011→head cycle instead of four).

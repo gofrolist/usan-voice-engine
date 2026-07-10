@@ -109,9 +109,9 @@ def vertex_admin(monkeypatch):
 # --- test/llm -------------------------------------------------------------
 
 
-def test_llm_requires_session(client):
+def test_llm_requires_session(bare_client):
     pid = "00000000-0000-0000-0000-000000000000"
-    r = client.post(
+    r = bare_client.post(
         f"/v1/admin/profiles/{pid}/test/llm",
         json={"messages": [{"role": "user", "content": "hi"}]},
     )

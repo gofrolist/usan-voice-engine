@@ -8,15 +8,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 
-@pytest.fixture(autouse=True)
-def _ensure_app_role_password(app_role_password):
-    """Every test here connects as usan_app; guarantee its login password is set first.
-
-    Migration round-trip tests elsewhere downgrade below 0029 (dropping usan_app) and
-    re-upgrade it passwordless, so re-apply the known password before each test here.
-    """
-
-
 def _app_url(async_database_url: str) -> str:
     # The app role (RLS-subject). Seeds use the superuser url; queries-under-test use this.
     return async_database_url.replace("usan:usan@", "usan_app:usan_app@", 1)

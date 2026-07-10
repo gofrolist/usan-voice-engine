@@ -3,10 +3,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.conftest import OPERATOR_HEADERS as _OP
+from tests.conftest import service_token as _service_token
 from usan_api import livekit_dispatch
 
 # Operator bearer token for the management plane (matches conftest's OPERATOR_API_KEY).
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 def _create_contact(client) -> str:
@@ -313,12 +314,11 @@ def test_enqueue_call_acquires_phone_advisory_lock(client, mock_dispatch, monkey
     assert seen == ["+15551234567"]
 
 
-def test_enqueue_call_oversized_dynamic_vars_returns_422(client, mock_dispatch):
-    contact_id = _create_contact(client)
+def test_enqueue_call_oversized_dynamic_vars_returns_422(bare_client, mock_dispatch):
     big = {"k": "x" * 9000}
-    r = client.post(
+    r = bare_client.post(
         "/v1/calls",
-        json={"contact_id": contact_id, "idempotency_key": "big", "dynamic_vars": big},
+        json={"contact_id": str(uuid.uuid4()), "idempotency_key": "big", "dynamic_vars": big},
         headers=_OP,
     )
     assert r.status_code == 422
@@ -341,32 +341,22 @@ def test_get_unknown_call_returns_404(client):
     assert r.status_code == 404
 
 
-def test_enqueue_call_requires_operator_token(client, mock_dispatch):
-    contact_id = _create_contact(client)
-    payload = {"contact_id": contact_id, "idempotency_key": "noauth", "dynamic_vars": {}}
-    assert client.post("/v1/calls", json=payload).status_code == 401
+def test_enqueue_call_requires_operator_token(bare_client):
+    payload = {
+        "contact_id": str(uuid.uuid4()),
+        "idempotency_key": "noauth",
+        "dynamic_vars": {},
+    }
+    assert bare_client.post("/v1/calls", json=payload).status_code == 401
     wrong = {"Authorization": "Bearer " + "x" * 32}
-    assert client.post("/v1/calls", json=payload, headers=wrong).status_code == 401
+    assert bare_client.post("/v1/calls", json=payload, headers=wrong).status_code == 401
 
 
-def test_get_call_requires_operator_token(client, mock_dispatch):
-    r = client.get(f"/v1/calls/{uuid.uuid4()}")
+def test_get_call_requires_operator_token(bare_client):
+    r = bare_client.get(f"/v1/calls/{uuid.uuid4()}")
     assert r.status_code == 401
     wrong = {"Authorization": "Bearer " + "x" * 32}
-    assert client.get(f"/v1/calls/{uuid.uuid4()}", headers=wrong).status_code == 401
-
-
-def _service_token(call_id: str, secret: str = "s" * 32) -> str:
-    import time
-
-    import jwt
-
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
-    )
+    assert bare_client.get(f"/v1/calls/{uuid.uuid4()}", headers=wrong).status_code == 401
 
 
 def _answered_call(client, async_database_url) -> str:

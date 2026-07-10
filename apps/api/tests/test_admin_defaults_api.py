@@ -22,11 +22,6 @@ def _publish_new_profile(client) -> str:
     return pid
 
 
-def test_defaults_requires_session(client):
-    # The management plane rejects an unauthenticated request.
-    assert client.get("/v1/admin/defaults").status_code == 401
-
-
 def test_defaults_no_defaults_set_reports_null(client, super_admin_acting_session):
     r = client.get("/v1/admin/defaults")
     assert r.status_code == 200

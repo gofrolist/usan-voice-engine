@@ -415,7 +415,7 @@ def test_members_api_cannot_see_other_orgs(isolation_client, two_orgs):
 
 
 async def test_get_tenant_db_reapplies_active_org_after_commit(
-    app_async_database_url, app_role_password, two_orgs, monkeypatch
+    app_async_database_url, two_orgs, monkeypatch
 ):
     """Guard the real ``get_tenant_db`` after_begin re-apply (review MEDIUM-1).
 

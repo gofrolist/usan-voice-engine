@@ -92,10 +92,10 @@ def test_tool_call_error_path_increments_counter(client):
     assert _counter("usan_tool_calls_total", labels) == before + 1
 
 
-def test_invalid_webhook_increments_counter(client):
+def test_invalid_webhook_increments_counter(bare_client):
     labels = {"type": "unknown", "outcome": "invalid"}
     before = _counter("usan_webhooks_total", labels)
-    r = client.post("/webhooks/livekit", content=b"{}", headers={"Authorization": "bad"})
+    r = bare_client.post("/webhooks/livekit", content=b"{}", headers={"Authorization": "bad"})
     assert r.status_code == 401
     assert _counter("usan_webhooks_total", labels) == before + 1
 

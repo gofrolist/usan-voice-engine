@@ -13,20 +13,18 @@ edges; the endpoint test pins the end-to-end non-repeat.
 Written FIRST (Constitution IV) — fails until the catalog + schema + repos + endpoints land.
 """
 
-import time
 import uuid
 from collections import namedtuple
 from datetime import UTC, datetime, timedelta
 
-import jwt
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
+from tests.conftest import service_token as _service_token
 from usan_api import livekit_dispatch
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 # Minimal duck-typed history row for the pure selection tests (most-recent-first).
 Use = namedtuple("Use", ["activity_key", "used_at"])
@@ -49,15 +47,6 @@ async def session_factory(async_database_url):
     await engine.dispose()
 
 
-def _service_token(call_id: str, secret: str = "s" * 32) -> str:
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
-    )
-
-
 def _auth(call_id: str) -> dict:
     return {"Authorization": f"Bearer {_service_token(call_id)}"}
 
@@ -75,6 +64,22 @@ async def _make_contact(session_factory, *, tz: str = "UTC") -> str:
         ).scalar_one()
         await db.commit()
         return str(eid)
+
+
+async def _seed_calls(session_factory, contact_id: str, n: int) -> list[str]:
+    """Direct-DB call rows (token scopes only) — no enqueue POST/dispatch needed."""
+    ids = [str(uuid.uuid4()) for _ in range(n)]
+    async with session_factory() as db:
+        for cid in ids:
+            await db.execute(
+                text(
+                    "INSERT INTO calls (id, contact_id, direction, status) "
+                    "VALUES (CAST(:id AS uuid), CAST(:e AS uuid), 'outbound', 'completed')"
+                ),
+                {"id": cid, "e": contact_id},
+            )
+        await db.commit()
+    return ids
 
 
 def _enqueue_call(client, contact_id: str) -> str:
@@ -205,25 +210,26 @@ async def test_get_activity_returns_script_and_records_use(client, mock_dispatch
     assert str(rows[0].call_id) == call_id
 
 
-async def test_get_activity_does_not_repeat_until_exhausted(client, mock_dispatch, session_factory):
+async def test_get_activity_does_not_repeat_until_exhausted(client, session_factory):
     # Consecutive calls return distinct activities until the catalog is exhausted, then
     # fall back to the least-recently-used (the first one used) — never two in a row repeat
-    # while a fresh one exists (FR-034 / SC-009).
+    # while a fresh one exists (FR-034 / SC-009). The LRU policy lives in the get_activity
+    # handler; the call rows are only token scopes, so they are seeded directly instead of
+    # one enqueue POST per activity.
     from usan_api import activities_catalog
 
     total = len(activities_catalog.list_activities("any"))
     contact_id = await _make_contact(session_factory)
+    call_ids = await _seed_calls(session_factory, contact_id, total + 1)
 
     seen: list[str] = []
-    for _ in range(total):
-        call_id = _enqueue_call(client, contact_id)
+    for call_id in call_ids[:total]:
         key = _get_activity(client, call_id).json()["activity_key"]
         seen.append(key)
     assert len(set(seen)) == total  # every distinct activity used, no repeat yet
 
     # Catalog now exhausted -> the next pick is the least-recently-used (the first used).
-    call_id = _enqueue_call(client, contact_id)
-    assert _get_activity(client, call_id).json()["activity_key"] == seen[0]
+    assert _get_activity(client, call_ids[total]).json()["activity_key"] == seen[0]
 
 
 async def test_get_activity_kind_filter(client, mock_dispatch, session_factory):

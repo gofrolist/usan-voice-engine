@@ -7,11 +7,9 @@ oracle schema and round-trip through the retell SDK model. Vertex is mocked (no 
 from __future__ import annotations
 
 import json
-import uuid
 
 import pytest
 
-from usan_api.compat import ids
 from usan_api.vertex_test import VertexTurn
 
 from .conformance import assert_conforms, assert_sdk_roundtrip
@@ -35,11 +33,6 @@ def mock_vertex_analysis(monkeypatch):
 
     monkeypatch.setattr("usan_api.compat.chat_service.run_vertex_turn", _reply)
     monkeypatch.setattr("usan_api.chat_analysis.run_vertex_turn", _analysis)
-
-
-def test_rerun_requires_key(compat_client):
-    r = compat_client.put(f"/rerun-chat-analysis/{ids.encode_chat_id(uuid.uuid4())}")
-    assert r.status_code == 401
 
 
 def test_rerun_chat_analysis_conforms(

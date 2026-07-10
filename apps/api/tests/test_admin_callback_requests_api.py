@@ -51,8 +51,8 @@ async def _seed_callback(
     return call_id, contact_id
 
 
-def test_callback_requests_requires_session(client):
-    assert client.get("/v1/admin/callback-requests").status_code == 401
+def test_callback_requests_requires_session(bare_client):
+    assert bare_client.get("/v1/admin/callback-requests").status_code == 401
 
 
 def test_list_callback_requests(client, admin_session, async_database_url):

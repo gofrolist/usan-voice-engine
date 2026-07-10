@@ -21,9 +21,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from usan_api.db.session import _install_default_org_context
 
 
-async def test_connect_baseline_survives_pool_reuse(
-    app_async_database_url: str, app_role_password: None
-) -> None:
+async def test_connect_baseline_survives_pool_reuse(app_async_database_url: str) -> None:
     # pool_size=1 / max_overflow=0 forces the 2nd checkout to REUSE the 1st physical
     # connection, so the connect hook does NOT re-fire — exactly the prod worker scenario.
     engine = create_async_engine(app_async_database_url, pool_size=1, max_overflow=0)

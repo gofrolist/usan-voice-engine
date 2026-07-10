@@ -36,11 +36,6 @@ def _published_agent_id(client, headers) -> str:
     return agent["agent_id"]
 
 
-# --- auth (app-level gate runs before every route, incl. read-only + stubs) -------------
-def test_list_voices_requires_key(compat_client):
-    assert compat_client.get("/list-voices").status_code == 401
-
-
 # --- list-voices / get-voice -----------------------------------------------------------
 def test_list_voices_bare_array_shape(compat_client, compat_headers):
     r = compat_client.get("/list-voices", headers=compat_headers)

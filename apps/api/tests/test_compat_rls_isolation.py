@@ -44,9 +44,7 @@ async def _delete_contacts(super_async_url: str, ids: list[uuid.UUID]) -> None:
         await engine.dispose()
 
 
-async def test_compat_session_isolated_to_org(
-    two_orgs, async_database_url, app_async_database_url, app_role_password
-):
+async def test_compat_session_isolated_to_org(two_orgs, async_database_url, app_async_database_url):
     org_a, org_b = two_orgs
     phone_a = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
     phone_b = f"+1556{uuid.uuid4().int % 10_000_000:07d}"

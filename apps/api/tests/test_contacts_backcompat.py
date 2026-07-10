@@ -16,11 +16,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
 from usan_api import webhook_events
 from usan_api.schemas.contact import ContactCreate, ContactUpdate
 
 # Management-plane routes require the operator bearer token (matches conftest).
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 async def _seed_contact(async_database_url: str, name: str, phone: str) -> str:

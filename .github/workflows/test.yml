@@ -53,6 +53,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Overlap the ~160MB (compressed) Postgres image pull with checkout + uv sync:
+      # testcontainers would otherwise pull it serially inside the first test's
+      # session fixture. Backgrounded so the step returns immediately; docker
+      # serializes a concurrent pull of the same image, so if pytest reaches the
+      # fixture first it simply waits on the in-flight layers.
+      - name: Pre-pull Postgres image (background)
+        run: docker pull -q pgvector/pgvector:pg18 >/dev/null 2>&1 &
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           persist-credentials: false
@@ -66,12 +73,16 @@ jobs:
         run: uv sync --frozen
       - name: pytest
         working-directory: apps/api
-        # -n auto runs the suite across all runner cores. Each xdist worker is a
-        # separate process, so the session-scoped `database_url` fixture spins its
-        # OWN throwaway Postgres container per worker — workers are fully isolated
-        # (no shared DB), and the per-test TRUNCATE stays correct. ~1.9x locally
-        # (116s -> 61s at -n 2). Drop -v: 1300+ verbose lines is just log I/O.
-        run: uv run pytest -n auto --tb=short
+        # Each xdist worker is a separate process, so the session-scoped
+        # `database_url` fixture spins its OWN throwaway Postgres container per
+        # worker — workers are fully isolated (no shared DB), and the per-test
+        # TRUNCATE stays correct. -n 8 (not auto=4): the suite is DB-I/O-wait
+        # dominated (~50% worker CPU idle measured at -n 4), so 2x-oversubscribing
+        # the 4 vCPUs keeps them busy. --dist worksteal comes from addopts; the
+        # explicit -n here overrides addopts' -n auto (CLI args follow addopts).
+        # Drop -v: 1300+ verbose lines is just log I/O. --durations keeps the
+        # slowest tests visible in the log so wall-time regressions are diagnosable.
+        run: uv run pytest -n 8 --tb=short --durations=25
 
   pytest-agent:
     name: pytest (services/agent)

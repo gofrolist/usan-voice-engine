@@ -92,5 +92,5 @@ def test_viewer_cannot_create_schedule(client, admin_session, async_database_url
     assert client.post("/v1/admin/schedules", json=_create_body(cid)).status_code == 403
 
 
-def test_schedules_requires_session(client):
-    assert client.get("/v1/admin/schedules").status_code == 401
+def test_schedules_requires_session(bare_client):
+    assert bare_client.get("/v1/admin/schedules").status_code == 401

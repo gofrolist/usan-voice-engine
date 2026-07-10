@@ -21,9 +21,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
 from usan_api import livekit_dispatch
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 @pytest.fixture

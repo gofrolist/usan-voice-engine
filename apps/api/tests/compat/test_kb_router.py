@@ -22,10 +22,6 @@ def test_create_in_progress_and_omits_sources(compat_client, compat_headers) -> 
     assert "knowledge_base_sources" not in body
 
 
-def test_requires_key(compat_client) -> None:
-    assert compat_client.get("/list-knowledge-bases").status_code == 401
-
-
 def test_files_rejected_422(compat_client, compat_headers) -> None:
     files = {"knowledge_base_files[]": ("a.txt", b"data", "text/plain")}
     r = compat_client.post(

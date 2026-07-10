@@ -17,11 +17,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
+from tests.conftest import service_token as _service_token
 from usan_api import livekit_dispatch
 from usan_api.db.models import CallbackRequest, Contact
 from usan_api.settings import get_settings
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 @pytest.fixture
@@ -32,15 +32,6 @@ def mock_dispatch(monkeypatch):
 
     monkeypatch.setattr(livekit_dispatch, "dispatch_agent", AsyncMock())
     monkeypatch.setattr(dialer, "schedule_dial", lambda call_id, settings: None)
-
-
-def _service_token(call_id: str, secret: str = "s" * 32) -> str:
-    now = int(time.time())
-    return jwt.encode(
-        {"sub": "usan-agent", "call_id": call_id, "iat": now, "exp": now + 300},
-        secret,
-        algorithm="HS256",
-    )
 
 
 def _worker_token(secret: str = "s" * 32) -> str:
@@ -170,11 +161,9 @@ def test_set_spanish_callback_uses_configured_profile(
     assert str(cb.profile_override) == profile_id
 
 
-def test_set_spanish_callback_rejects_wrong_call_token(client, mock_dispatch, async_database_url):
-    phone = _phone()
-    contact_id = _create_contact(client, phone)
-    call_id = _enqueue(client, contact_id)["id"]
-    r = client.post(
+def test_set_spanish_callback_rejects_wrong_call_token(bare_client):
+    call_id = str(uuid.uuid4())
+    r = bare_client.post(
         "/v1/tools/set_spanish_callback",
         json={"call_id": call_id},
         headers=_auth(str(uuid.uuid4())),  # token scoped to a different call

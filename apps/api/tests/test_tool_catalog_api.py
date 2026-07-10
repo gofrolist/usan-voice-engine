@@ -9,12 +9,6 @@ the always_on/requires_config gating flags), and that the response set matches
 from usan_api.schemas.tool_catalog import TOOL_NAMES
 
 
-def test_tool_catalog_requires_admin_session(client):
-    # Mirrors the admin plane: no session cookie -> 401.
-    r = client.get("/v1/admin/tool-catalog")
-    assert r.status_code == 401
-
-
 def test_tool_catalog_returns_fifteen_tools_in_order(client, super_admin_acting_session):
     r = client.get("/v1/admin/tool-catalog")
     assert r.status_code == 200

@@ -10,17 +10,10 @@ and server-default assertions below), plus `_check_constraints` / `_indexdef`.
 """
 
 import asyncio
-import os
-import subprocess
-import sys
-from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
-
-API_DIR = Path(__file__).resolve().parents[1]
-TEST_SECRET = "a" * 32
 
 
 async def _columns(async_database_url: str, table: str) -> dict[str, tuple[str, str, str | None]]:
@@ -223,37 +216,5 @@ def test_idx_calls_in_flight_recency_keyed(async_database_url: str) -> None:
     assert "'in_progress'" in indexdef
 
 
-def test_downgrade_then_upgrade_roundtrip(database_url: str, async_database_url: str) -> None:
-    # Runs last in this module; leaves the session DB at head.
-    env = {
-        **os.environ,
-        "DATABASE_URL": database_url,
-        "LIVEKIT_API_KEY": "key",
-        "LIVEKIT_API_SECRET": TEST_SECRET,
-        "LIVEKIT_URL": "ws://livekit:7880",
-        "JWT_SIGNING_KEY": "s" * 32,
-        "OPERATOR_API_KEY": "o" * 32,
-    }
-    subprocess.run(
-        [sys.executable, "-m", "alembic", "downgrade", "0011"],
-        cwd=API_DIR,
-        env=env,
-        check=True,
-    )
-    try:
-        assert asyncio.run(_columns(async_database_url, "call_schedules")) == {}
-        assert asyncio.run(_columns(async_database_url, "call_batches")) == {}
-        assert asyncio.run(_columns(async_database_url, "call_batch_targets")) == {}
-        assert "idx_calls_in_flight" not in asyncio.run(_indexes(async_database_url, "calls"))
-    finally:
-        # A mid-test failure must not strand the shared session DB at 0011 —
-        # every other module in the run assumes head.
-        subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
-            cwd=API_DIR,
-            env=env,
-            check=True,
-        )
-    for table in ("call_schedules", "call_batches", "call_batch_targets"):
-        assert "id" in asyncio.run(_columns(async_database_url, table))
-    assert "idx_calls_in_flight" in asyncio.run(_indexes(async_database_url, "calls"))
+# The downgrade→upgrade round-trip lives in test_migration_roundtrip.py, shared
+# with the 0013/0014/0015 suites (one head→0011→head cycle instead of four).

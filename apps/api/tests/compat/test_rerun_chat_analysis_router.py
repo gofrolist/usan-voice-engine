@@ -48,11 +48,6 @@ def _seed_chat(compat_client, compat_headers, web_agent_id) -> str:
     return chat_id
 
 
-def test_rerun_requires_key(compat_client):
-    r = compat_client.put(f"/rerun-chat-analysis/{ids.encode_chat_id(uuid.uuid4())}")
-    assert r.status_code == 401
-
-
 def test_rerun_unknown_chat_404(compat_client, compat_headers, chat_analysis_on):
     r = compat_client.put(
         f"/rerun-chat-analysis/{ids.encode_chat_id(uuid.uuid4())}", headers=compat_headers

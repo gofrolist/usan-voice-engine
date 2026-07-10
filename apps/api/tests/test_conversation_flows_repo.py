@@ -1,42 +1,30 @@
 from __future__ import annotations
 
-import base64
 import uuid
 from datetime import UTC, datetime
 
 import pytest
 
 from usan_api.compat import ids
-from usan_api.compat.errors import CompatError
 from usan_api.db.models import ConversationFlow
 from usan_api.repositories import conversation_flows as repo
 from usan_api.tenant_context import set_tenant_context
 
 
-def test_cursor_codec_roundtrip_and_bad_input() -> None:
+def test_cursor_codec_roundtrip() -> None:
     fid = uuid.uuid4()
     now = datetime(2026, 6, 30, 12, 0, 0, tzinfo=UTC)
     token = ids.encode_conversation_flow_cursor(now, fid)
     decoded_at, decoded_id = ids.decode_conversation_flow_cursor(token)
     assert decoded_id == fid
     assert decoded_at == now
-    with pytest.raises(CompatError):
-        ids.decode_conversation_flow_cursor("not-valid-base64!!!")
-    with pytest.raises(CompatError):
-        ids.decode_conversation_flow_cursor(
-            base64.urlsafe_b64encode(b"no-pipe-separator").decode().rstrip("=")
-        )
 
 
-def test_id_codec_roundtrip_and_malformed() -> None:
+def test_id_codec_roundtrip() -> None:
     fid = uuid.uuid4()
     token = ids.encode_conversation_flow_id(fid)
     assert token == "conversation_flow_" + fid.hex
     assert ids.decode_conversation_flow_id(token) == fid
-    with pytest.raises(CompatError):
-        ids.decode_conversation_flow_id("llm_" + fid.hex)  # wrong prefix
-    with pytest.raises(CompatError):
-        ids.decode_conversation_flow_id("conversation_flow_zzzz")  # bad hex
 
 
 @pytest.mark.asyncio

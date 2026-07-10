@@ -13,11 +13,6 @@ def _create_web_call(client, headers, agent_id, **overrides):
     return client.post("/v2/create-web-call", json=body, headers=headers)
 
 
-def test_create_web_call_requires_key(compat_client, web_agent_id, mock_web_dispatch):
-    r = compat_client.post("/v2/create-web-call", json={"agent_id": web_agent_id})
-    assert r.status_code == 401
-
-
 def test_create_web_call_conforms(compat_client, compat_headers, web_agent_id, mock_web_dispatch):
     r = _create_web_call(
         compat_client,

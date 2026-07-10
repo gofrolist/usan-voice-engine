@@ -103,47 +103,38 @@ def _as_viewer(client, async_database_url: str) -> None:
     client.cookies.set(SESSION_COOKIE_NAME, token)
 
 
-def _seed_call(
-    async_database_url: str,
-    *,
-    contact_id: str,
-    direction: CallDirection = CallDirection.OUTBOUND,
-    status: CallStatus = CallStatus.QUEUED,
-    idempotency_key: str | None = None,
-) -> str:
-    """Direct-repo seed: the public enqueue rejects the reserved sched:/batch: prefixes."""
+def _seed_calls(async_database_url: str, specs: list[dict[str, Any]]) -> list[str]:
+    """Direct-repo seed: the public enqueue rejects the reserved sched:/batch: prefixes.
 
-    async def _go() -> str:
+    Batches several seeds onto ONE engine/event loop (each engine spin is the dominant
+    cost), but commits after EACH create so every call lands in its own transaction —
+    the paging test's exact-order assertion needs distinct created_at stamps.
+    """
+
+    async def _go() -> list[str]:
         engine = create_async_engine(async_database_url, poolclass=NullPool)
         try:
             factory = async_sessionmaker(engine, expire_on_commit=False)
+            ids: list[str] = []
             async with factory() as db:
-                call = await calls_repo.create_call(
-                    db,
-                    contact_id=uuid.UUID(contact_id),
-                    direction=direction,
-                    status=status,
-                    idempotency_key=idempotency_key,
-                )
-                await db.commit()
-                return str(call.id)
-        finally:
-            await engine.dispose()
-
-    return asyncio.run(_go())
-
-
-def _seed_inbound_call(async_database_url: str, *, contact_id: str) -> str:
-    async def _go() -> str:
-        engine = create_async_engine(async_database_url, poolclass=NullPool)
-        try:
-            factory = async_sessionmaker(engine, expire_on_commit=False)
-            async with factory() as db:
-                call = await calls_repo.create_inbound_call(
-                    db, contact_id=uuid.UUID(contact_id), livekit_room=f"room-in-{uuid.uuid4()}"
-                )
-                await db.commit()
-                return str(call.id)
+                for spec in specs:
+                    if spec.get("inbound"):
+                        call = await calls_repo.create_inbound_call(
+                            db,
+                            contact_id=uuid.UUID(spec["contact_id"]),
+                            livekit_room=f"room-in-{uuid.uuid4()}",
+                        )
+                    else:
+                        call = await calls_repo.create_call(
+                            db,
+                            contact_id=uuid.UUID(spec["contact_id"]),
+                            direction=CallDirection.OUTBOUND,
+                            status=spec.get("status", CallStatus.QUEUED),
+                            idempotency_key=spec.get("idempotency_key"),
+                        )
+                    await db.commit()  # own transaction per seed: distinct created_at
+                    ids.append(str(call.id))
+            return ids
         finally:
             await engine.dispose()
 
@@ -206,8 +197,8 @@ def _parse_created_at(raw: str) -> datetime:
     return datetime.fromisoformat(raw.replace("Z", "+00:00"))
 
 
-def test_admin_calls_requires_session(client):
-    assert client.get("/v1/admin/calls").status_code == 401
+def test_admin_calls_requires_session(bare_client):
+    assert bare_client.get("/v1/admin/calls").status_code == 401
 
 
 def test_admin_calls_viewer_readable(client, async_database_url):
@@ -252,18 +243,22 @@ def test_admin_calls_list_filters_paging_ordering(
     contact_a, _phone_a = _create_contact(client, name="Contact A")
     contact_b, _phone_b = _create_contact(client, name="Contact B")
 
-    sched_id = _seed_call(
+    sched_id, batch_id = _seed_calls(
         async_database_url,
-        contact_id=contact_a,
-        status=CallStatus.COMPLETED,
-        idempotency_key=f"sched:{contact_a}:2026-06-10",
-    )
-    batch_id = _seed_call(
-        async_database_url, contact_id=contact_a, idempotency_key=f"batch:{uuid.uuid4()}:0"
+        [
+            {
+                "contact_id": contact_a,
+                "status": CallStatus.COMPLETED,
+                "idempotency_key": f"sched:{contact_a}:2026-06-10",
+            },
+            {"contact_id": contact_a, "idempotency_key": f"batch:{uuid.uuid4()}:0"},
+        ],
     )
     operator_id = _enqueue(client, contact_a)
-    null_key_id = _seed_call(async_database_url, contact_id=contact_b)
-    inbound_id = _seed_inbound_call(async_database_url, contact_id=contact_b)
+    null_key_id, inbound_id = _seed_calls(
+        async_database_url,
+        [{"contact_id": contact_b}, {"contact_id": contact_b, "inbound": True}],
+    )
 
     def ids(query: str) -> list[str]:
         r = client.get(f"/v1/admin/calls{query}")
@@ -345,9 +340,7 @@ def test_admin_calls_list_contact_deleted_unknown(
     assert rows[call_id]["contact_id"] is None  # FK is ON DELETE SET NULL
 
 
-def test_admin_calls_list_audit_row_phi_free(
-    client, mock_dispatch, admin_session, async_database_url
-):
+def test_admin_calls_list_audit_row_phi_free(client, mock_dispatch, admin_session):
     contact_id, phone = _create_contact(client, name="Audit Sentinel Contact")
     _enqueue(client, contact_id)
 
@@ -433,10 +426,10 @@ def _capture_logs(client, url: str, *, level: str = "INFO") -> tuple[int, list[d
     return response.status_code, records
 
 
-def test_admin_call_detail_requires_session(client):
+def test_admin_call_detail_requires_session(bare_client):
     # §9 auth matrix: the list-level 401 does not pin the detail route — a per-route
     # dependency refactor must not silently drop the session gate here.
-    assert client.get(f"/v1/admin/calls/{uuid.uuid4()}").status_code == 401
+    assert bare_client.get(f"/v1/admin/calls/{uuid.uuid4()}").status_code == 401
 
 
 def test_admin_call_detail_404(client, admin_session):

@@ -179,7 +179,7 @@ def test_callback_super_admin_zero_membership_logs_in_no_active_org(
     assert claims["super"] is True
 
 
-def test_callback_unknown_identity_is_denied(sso_client, async_database_url, monkeypatch):
+def test_callback_unknown_identity_is_denied(sso_client, monkeypatch):
     _mock_oauth(monkeypatch, "ghost@x.com")
     r = _do_callback(sso_client)
     assert r.status_code == 403

@@ -16,15 +16,15 @@ from usan_api.settings import get_settings
 _COMPAT_TITLE = "USAN Voice Engine - RetellAI-Compatible API"
 
 
-def test_compat_docs_disabled_by_default(compat_client):
+def test_compat_docs_disabled_by_default(bare_client):
     # Default test env: COMPAT_DOCS_ENABLED is off, so the mounted sub-app serves no
     # OpenAPI/docs/redoc surface (openapi_url/docs_url are None -> no such route).
-    assert compat_client.get("/compat/openapi.json").status_code == 404
-    assert compat_client.get("/compat/docs").status_code == 404
-    assert compat_client.get("/compat/redoc").status_code == 404
+    assert bare_client.get("/compat/openapi.json").status_code == 404
+    assert bare_client.get("/compat/docs").status_code == 404
+    assert bare_client.get("/compat/redoc").status_code == 404
 
 
-def test_compat_docs_enabled_serves_a_separate_self_contained_openapi(compat_client):
+def test_compat_docs_enabled_serves_a_separate_self_contained_openapi(bare_client):
     # Build a docs-ENABLED sub-app from the (valid, env-backed) test settings and assert
     # its OpenAPI is the compat document — self-contained, with zero native /v1 paths.
     settings = get_settings().model_copy(update={"compat_docs_enabled": True})
@@ -42,10 +42,10 @@ def test_compat_docs_enabled_serves_a_separate_self_contained_openapi(compat_cli
         assert not any(p.startswith("/v1/") for p in paths)
 
 
-def test_native_openapi_excludes_compat_paths(compat_client):
+def test_native_openapi_excludes_compat_paths(bare_client):
     # The native app documents only native routes; the mounted sub-app's RetellAI paths
     # never appear in the native schema (when the native docs are served at all).
-    r = compat_client.get("/openapi.json")
+    r = bare_client.get("/openapi.json")
     if r.status_code != 200:
         return  # native docs disabled in this env — nothing to assert
     paths = r.json().get("paths", {})

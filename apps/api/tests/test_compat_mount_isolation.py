@@ -17,10 +17,10 @@ def test_health_unaffected_by_mount(client):
     assert r.json()["status"] == "ok"
 
 
-def test_native_route_keeps_detail_envelope(client):
+def test_native_route_keeps_detail_envelope(bare_client):
     # An existing native /v1 route called without a session still returns the native
     # {"detail": ...} error shape — the compat envelope never bleeds onto /v1 (SC-007).
-    r = client.get("/v1/admin/contacts")
+    r = bare_client.get("/v1/admin/contacts")
     assert r.status_code == 401
     body = r.json()
     assert "detail" in body

@@ -101,18 +101,20 @@ async def _seed_call_with_contact(
         await engine.dispose()
 
 
-def test_agent_config_requires_token(client):
-    r = client.get("/v1/runtime/agent-config", params={"direction": "outbound"})
+def test_agent_config_requires_token(bare_client):
+    r = bare_client.get("/v1/runtime/agent-config", params={"direction": "outbound"})
     assert r.status_code == 401
 
 
-def test_agent_config_invalid_direction_422(client):
-    r = client.get("/v1/runtime/agent-config", params={"direction": "sideways"}, headers=_wauth())
+def test_agent_config_invalid_direction_422(bare_client):
+    r = bare_client.get(
+        "/v1/runtime/agent-config", params={"direction": "sideways"}, headers=_wauth()
+    )
     assert r.status_code == 422
 
 
-def test_agent_config_missing_direction_422(client):
-    r = client.get("/v1/runtime/agent-config", headers=_wauth())
+def test_agent_config_missing_direction_422(bare_client):
+    r = bare_client.get("/v1/runtime/agent-config", headers=_wauth())
     assert r.status_code == 422
 
 
@@ -217,9 +219,11 @@ def test_inbound_resolves_direction_default_not_contact_profile(client, async_da
 
 
 def test_agent_config_not_rate_limited(client, async_database_url):
-    # Runtime route must not be throttled by the operator rate limiter.
+    # Runtime route must not be throttled by the operator rate limiter. 5 rapid
+    # requests is enough to trip a per-second limiter if one were applied; the
+    # old 20 added 15 sequential HTTP+DB round-trips for no extra signal.
     asyncio.run(_seed_default(async_database_url, direction="inbound", voice_id="vin"))
-    for _ in range(20):
+    for _ in range(5):
         r = client.get(
             "/v1/runtime/agent-config", params={"direction": "inbound"}, headers=_wauth()
         )

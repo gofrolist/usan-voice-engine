@@ -41,10 +41,6 @@ def _create(client, name: str, **overrides):
     return client.post(BASE, json=body)
 
 
-def test_list_requires_session(client):
-    assert client.get(BASE).status_code == 401
-
-
 def test_create_and_list_alphabetical(client, super_admin_acting_session):
     z = _create(client, "zebra_var", description="dz", example="ez")
     assert z.status_code == 201

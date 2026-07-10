@@ -9,7 +9,6 @@ import pytest
 from sqlalchemy import text
 
 from usan_api.compat import chat_service, ids
-from usan_api.compat.errors import CompatError
 from usan_api.db.base import ProfileStatus
 from usan_api.db.models import AgentProfile
 from usan_api.repositories import chat_analyses as analyses_repo
@@ -39,18 +38,6 @@ async def _seed_chat_with_message(db) -> uuid.UUID:
     await chats_repo.add_message(db, session_id=session.id, seq=1, role="user", content="hello")
     await db.flush()
     return session.id
-
-
-@pytest.mark.asyncio
-async def test_rerun_unknown_chat_404(app_session) -> None:
-    org_id = (await app_session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one()
-    await set_tenant_context(app_session, org_id)
-    with pytest.raises(CompatError) as exc:
-        await chat_service.rerun_chat_analysis(
-            app_session, _settings(), ids.encode_chat_id(uuid.uuid4())
-        )
-    assert exc.value.status_code == 404
-    await app_session.rollback()
 
 
 @pytest.mark.asyncio

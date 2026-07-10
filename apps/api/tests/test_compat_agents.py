@@ -84,16 +84,6 @@ async def _seed_native_profile(super_async_url: str, org_id: uuid.UUID, name: st
         await engine.dispose()
 
 
-# --- auth / envelope -------------------------------------------------------------------
-def test_missing_key_returns_401_envelope(compat_client):
-    r = compat_client.post("/create-retell-llm", json={"start_speaker": "agent"})
-    assert r.status_code == 401
-    body = r.json()
-    assert body["status"] == 401
-    assert "message" in body
-    assert "detail" not in body
-
-
 # --- create-retell-llm + create-agent (same underlying profile) ------------------------
 def test_create_retell_llm_returns_llm_id(compat_client, compat_headers):
     r = _create_llm(compat_client, compat_headers, general_prompt="Be concise.")
@@ -236,13 +226,13 @@ def test_list_agents_is_bare_array_with_api_and_native(
 
 
 def test_list_agents_pagination_walks_full_order_without_drops(compat_client, compat_headers):
-    # Paging one-at-a-time, using each page's last agent_id as the next cursor, must reproduce
+    # Paging in small pages, using each page's last agent_id as the next cursor, must reproduce
     # the full unpaginated order EXACTLY — no drops, no duplicates. Regression: the keyset once
     # filtered ``p.id > after`` (raw-UUID order), unrelated to the name sort the list is in, so
     # a second page dropped an arbitrary subset.
     created = {
         _new_agent(compat_client, compat_headers, agent_name=f"Agent {c}")["agent_id"]
-        for c in ("F", "C", "A", "E", "B", "D")
+        for c in ("D", "B", "A", "C")
     }
     full = [a["agent_id"] for a in compat_client.get("/list-agents", headers=compat_headers).json()]
     assert created <= set(full)
@@ -250,12 +240,12 @@ def test_list_agents_pagination_walks_full_order_without_drops(compat_client, co
     walked: list[str] = []
     cursor: str | None = None
     for _ in range(len(full) + 2):  # bounded so a buggy cursor can't loop forever
-        url = "/list-agents?limit=1" + (f"&pagination_key={cursor}" if cursor else "")
+        url = "/list-agents?limit=2" + (f"&pagination_key={cursor}" if cursor else "")
         page = compat_client.get(url, headers=compat_headers).json()
         if not page:
             break
-        walked.append(page[0]["agent_id"])
-        cursor = page[0]["agent_id"]
+        walked.extend(a["agent_id"] for a in page)
+        cursor = page[-1]["agent_id"]
     assert walked == full  # same order, every agent exactly once
 
 

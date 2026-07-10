@@ -19,11 +19,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.conftest import OPERATOR_HEADERS as _OP
 from usan_api import summarization
 from usan_api.settings import get_settings
 from usan_api.vertex_test import VertexTurn
-
-_OP = {"Authorization": "Bearer " + "o" * 32}
 
 
 @pytest.fixture
