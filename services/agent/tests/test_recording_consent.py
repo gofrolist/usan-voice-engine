@@ -83,7 +83,7 @@ async def test_inbound_disclosure_precedes_recording(monkeypatch):
     _settings_env(monkeypatch)
     manager = MagicMock()
 
-    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None, **kwargs):
         return {"call_id": "inb-1", "contact_known": True, "dynamic_vars": {"contact_name": "Ada"}}
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)

@@ -102,6 +102,16 @@ def _caller_phone(participant: Any) -> str | None:
     return attrs.get("sip.phoneNumber") or attrs.get("sip.from") or None
 
 
+def _dialed_number(participant: Any) -> str | None:
+    """Read the dialed DID (callee) from the SIP participant attributes (Surface 2A).
+
+    livekit-sip populates ``sip.trunkPhoneNumber`` with the number that was dialed; ``sip.to`` is
+    a fallback on newer sip servers. Forwarded to the inbound-call-router as ``to_number``.
+    """
+    attrs = getattr(participant, "attributes", None) or {}
+    return attrs.get("sip.trunkPhoneNumber") or attrs.get("sip.to") or None
+
+
 def _mask_phone(phone: str | None) -> str:
     """Mask a caller's phone for logs: keep only the last 4 digits (PHI minimization).
 
@@ -122,6 +132,7 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
     """
     participant = await ctx.wait_for_participant()
     phone = _caller_phone(participant)
+    to_number = _dialed_number(participant)
     log.info("Inbound caller present (phone={phone})", phone=_mask_phone(phone))
 
     # The lookup precedes session.start, so the caller hears a brief silence (the
@@ -129,10 +140,23 @@ async def _run_inbound(ctx: JobContext, settings: Settings, cfg: AgentConfig, lo
     # greets first — the caller is not yet expected to be speaking. If zero-gap
     # audio capture is ever needed, start the session first and reconfigure the
     # agent after the lookup.
-    info = await start_inbound_call(phone, ctx.room.name, settings)
-    if info and info.get("contact_known") and info.get("call_id"):
+    info = await start_inbound_call(phone, ctx.room.name, settings, to_number=to_number)
+    # Surface 2A: the inbound-call-router may pick a specific agent for this caller even when our
+    # own contacts table doesn't know them (override_applied), so the personalized path runs on
+    # either signal. A router override selects a different profile than the inbound default cfg
+    # fetched before this call, so re-resolve config by call_id (which now carries the override),
+    # falling back to that already-loaded inbound-default cfg if the re-fetch blips.
+    if info and info.get("call_id") and (info.get("contact_known") or info.get("override_applied")):
         call_id = str(info["call_id"])
         dynamic_vars = info.get("dynamic_vars") or {}
+        if info.get("override_applied"):
+            # Re-resolve by call_id (now carrying the override). fetch_agent_config never raises;
+            # on a transient failure it degrades to `fallback=cfg` — the DID's inbound-default
+            # already in hand — NOT the global default, so a blip can't strip the caller down to
+            # the generic default agent.
+            cfg = await fetch_agent_config(
+                settings, direction="inbound", call_id=call_id, fallback=cfg
+            )
         data = CheckInData(
             call_id=call_id,
             settings=settings,

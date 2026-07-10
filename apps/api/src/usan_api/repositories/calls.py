@@ -521,6 +521,7 @@ async def create_inbound_call(
     livekit_room: str,
     sip_call_id: str | None = None,
     dynamic_vars: dict[str, Any] | None = None,
+    profile_override: uuid.UUID | None = None,
 ) -> Call:
     """Create an answered inbound call (IN_PROGRESS, answered now).
 
@@ -537,6 +538,7 @@ async def create_inbound_call(
         livekit_room=livekit_room,
         sip_call_id=sip_call_id,
         dynamic_vars=dynamic_vars or {},
+        profile_override=profile_override,
         started_at=now,
         answered_at=now,
     )

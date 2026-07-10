@@ -382,11 +382,13 @@ async def start_inbound_call(
     livekit_room: str,
     settings: Settings,
     sip_call_id: str | None = None,
+    to_number: str | None = None,
 ) -> dict[str, Any] | None:
     """Best-effort: register an inbound call and fetch contact dynamic vars.
 
-    Returns parsed {call_id, contact_known, dynamic_vars} on success, or None on any
-    failure so the worker can fall back to a greet-only inbound conversation.
+    Returns parsed {call_id, contact_known, dynamic_vars, override_applied} on success, or None on
+    any failure so the worker can fall back to a greet-only inbound conversation. ``to_number`` is
+    the dialed DID, forwarded to the Surface 2A inbound-call-router when enabled.
     """
     url = f"{settings.api_base_url}/v1/calls/inbound"
     headers = {"Authorization": f"Bearer {_mint_worker_token(settings)}"}
@@ -394,6 +396,7 @@ async def start_inbound_call(
         "phone_e164": phone_e164,
         "livekit_room": livekit_room,
         "sip_call_id": sip_call_id,
+        "to_number": to_number,
     }
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -406,13 +409,23 @@ async def start_inbound_call(
 
 
 async def fetch_agent_config(
-    settings: Settings, *, direction: Literal["inbound", "outbound"], call_id: str | None = None
+    settings: Settings,
+    *,
+    direction: Literal["inbound", "outbound"],
+    call_id: str | None = None,
+    fallback: AgentConfig | None = None,
 ) -> AgentConfig:
-    """Fetch the resolved agent config; degrade to DEFAULT_AGENT_CONFIG on any failure.
+    """Fetch the resolved agent config; degrade to ``fallback`` (or DEFAULT_AGENT_CONFIG)
+    on any failure.
 
     Best-effort and never raises: a failed config fetch must never crash a call. Uses
     the worker token (matches the server's require_worker_token) and api_base_url
     (so the plaintext-http fail-closed rule holds).
+
+    ``fallback`` lets a caller that already holds a good config (e.g. an inbound re-fetch
+    after a router override, where the direction-default cfg is already in hand) degrade to
+    THAT config instead of the global default — so a transient re-fetch blip keeps the
+    DID's inbound personality rather than dropping to the generic default agent.
     """
     try:
         url = f"{settings.api_base_url}/v1/runtime/agent-config"
@@ -433,5 +446,6 @@ async def fetch_agent_config(
         logger.bind(direction=direction, err=type(exc).__name__).warning(
             "agent-config fetch failed; using defaults"
         )
-        # Return a copy so a caller mutating the result can't corrupt the shared singleton.
-        return DEFAULT_AGENT_CONFIG.model_copy(deep=True)
+        # Return a copy so a caller mutating the result can't corrupt the shared singleton
+        # (or the caller-supplied fallback).
+        return (fallback or DEFAULT_AGENT_CONFIG).model_copy(deep=True)

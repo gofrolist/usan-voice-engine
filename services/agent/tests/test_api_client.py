@@ -153,7 +153,9 @@ async def test_start_inbound_call_posts_worker_token_and_returns_json(monkeypatc
 
     monkeypatch.setattr(api_client.httpx, "AsyncClient", _FakeClient)
 
-    result = await api_client.start_inbound_call("+15551234567", "usan-inbound-1", _settings())
+    result = await api_client.start_inbound_call(
+        "+15551234567", "usan-inbound-1", _settings(), to_number="+15550001111"
+    )
 
     assert result == {
         "call_id": "inb-1",
@@ -165,6 +167,7 @@ async def test_start_inbound_call_posts_worker_token_and_returns_json(monkeypatc
         "phone_e164": "+15551234567",
         "livekit_room": "usan-inbound-1",
         "sip_call_id": None,
+        "to_number": "+15550001111",  # Surface 2A: dialed DID forwarded to the router
     }
     token = captured["headers"]["Authorization"].removeprefix("Bearer ")
     claims = jwt.decode(token, SECRET, algorithms=["HS256"])
@@ -365,6 +368,38 @@ async def test_fetch_agent_config_returns_default_on_error(monkeypatch):
     monkeypatch.setattr(api_client.httpx, "AsyncClient", _BoomClient)
     cfg = await api_client.fetch_agent_config(_settings(), direction="outbound", call_id="call-1")
     assert cfg == DEFAULT_AGENT_CONFIG  # never raises; local default
+
+
+@pytest.mark.asyncio
+async def test_fetch_agent_config_degrades_to_fallback_when_given(monkeypatch):
+    # Surface 2A: an inbound override re-fetch passes the already-loaded inbound-default cfg as
+    # fallback, so a transient failure keeps THAT config rather than dropping to the global default.
+    class _BoomClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **k):
+            raise RuntimeError("network down")
+
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", _BoomClient)
+    inbound_default = DEFAULT_AGENT_CONFIG.model_copy(
+        update={
+            "voice": DEFAULT_AGENT_CONFIG.voice.model_copy(
+                update={"cartesia_voice_id": "did-voice"}
+            )
+        }
+    )
+    cfg = await api_client.fetch_agent_config(
+        _settings(), direction="inbound", call_id="call-1", fallback=inbound_default
+    )
+    assert cfg.voice.cartesia_voice_id == "did-voice"  # kept the fallback, not the global default
+    assert cfg is not inbound_default  # returned a defensive copy
 
 
 @pytest.mark.asyncio

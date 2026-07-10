@@ -79,9 +79,10 @@ async def get_agent_config(
     contact_profile_id: uuid.UUID | None = None
     resolved_direction: Literal["inbound", "outbound"] = direction
     if call_id is not None:
-        # This branch only fires for outbound: the agent fetches inbound config with
-        # call_id=None (before the contact lookup), so an inbound call never reaches here
-        # and inbound resolves to the per-direction default by design.
+        # Outbound always passes a call_id. Inbound normally fetches config with call_id=None
+        # (before the contact lookup) and resolves to the per-direction default — EXCEPT when the
+        # Surface 2A inbound-call-router set a profile_override on the call: the worker then
+        # re-fetches by call_id and this branch resolves that override (direction stays inbound).
         call = await calls_repo.get_call(db, call_id)
         if call is not None:
             override_id = call.profile_override

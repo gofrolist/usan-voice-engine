@@ -11,7 +11,7 @@ from usan_agent.voicemail import VoicemailWatcher
 from usan_agent.worker import CallMetadata, parse_metadata
 
 
-async def _fake_fetch(settings, *, direction, call_id=None):
+async def _fake_fetch(settings, *, direction, call_id=None, fallback=None):
     return DEFAULT_AGENT_CONFIG
 
 
@@ -239,10 +239,28 @@ def test_caller_phone_none_when_absent():
     assert worker._caller_phone(p) is None
 
 
+def test_dialed_number_reads_trunk_attribute():
+    p = MagicMock()
+    p.attributes = {"sip.trunkPhoneNumber": "+15550001111", "sip.to": "+15559999999"}
+    assert worker._dialed_number(p) == "+15550001111"  # trunk wins over sip.to
+
+
+def test_dialed_number_falls_back_to_sip_to():
+    p = MagicMock()
+    p.attributes = {"sip.to": "+15559999999"}
+    assert worker._dialed_number(p) == "+15559999999"
+
+
+def test_dialed_number_none_when_absent():
+    p = MagicMock()
+    p.attributes = {}
+    assert worker._dialed_number(p) is None
+
+
 async def test_inbound_known_contact_runs_check_in(monkeypatch):
     _settings(monkeypatch)
 
-    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None, **kwargs):
         assert phone == "+15551234567"
         assert room == "usan-inbound-x"
         return {"call_id": "inb-1", "contact_known": True, "dynamic_vars": {"contact_name": "Ada"}}
@@ -308,7 +326,7 @@ async def test_inbound_known_contact_runs_check_in(monkeypatch):
 async def test_inbound_unknown_caller_falls_back_to_greet_only(monkeypatch):
     _settings(monkeypatch)
 
-    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None, **kwargs):
         return None  # unknown caller / lookup failed
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
@@ -359,7 +377,7 @@ async def test_inbound_unknown_contact_known_false_falls_back_to_greet_only(monk
     # check-in agent, and must NOT register a transcript flush.
     _settings(monkeypatch)
 
-    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None, **kwargs):
         return {"call_id": "inb-9", "contact_known": False, "dynamic_vars": {}}
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
@@ -402,6 +420,77 @@ async def test_inbound_unknown_contact_known_false_falls_back_to_greet_only(monk
     assert flushes["n"] == 0
     worker.greet.assert_awaited_once()
     captured["session"].start.assert_awaited_once()
+
+
+async def test_inbound_router_override_refetches_config_and_runs_personalized(monkeypatch):
+    # Surface 2A: the inbound-call-router picked an agent for a caller our contacts table does NOT
+    # know (contact_known=False, override_applied=True). The worker must (a) still run the
+    # personalized inbound agent, and (b) re-fetch config by call_id so the override profile's
+    # config is used instead of the inbound default fetched before the lookup.
+    _settings(monkeypatch)
+
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None, **kwargs):
+        return {
+            "call_id": "inb-ovr",
+            "contact_known": False,
+            "override_applied": True,
+            "dynamic_vars": {"first_name": "John"},
+        }
+
+    monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
+
+    fetch_calls: list[str | None] = []
+
+    async def _tracking_fetch(settings, *, direction, call_id=None, fallback=None):
+        fetch_calls.append(call_id)
+        return DEFAULT_AGENT_CONFIG
+
+    monkeypatch.setattr(worker, "fetch_agent_config", _tracking_fetch)
+
+    built = {}
+
+    def _fake_build_inbound_agent(cfg, *, resolved_vars=None, custom_vars=None, **kwargs):
+        built["custom_vars"] = custom_vars
+        agent = MagicMock(name="inbound_agent")
+        built["agent"] = agent
+        return agent
+
+    captured = {}
+
+    def _fake_build_session(settings, cfg=None, userdata=None):
+        captured["userdata"] = userdata
+        session = MagicMock()
+        session.start = AsyncMock()
+        session.generate_reply = AsyncMock()
+        session.say = AsyncMock()
+        return session
+
+    fake_greet_only = MagicMock()
+    monkeypatch.setattr(worker, "build_inbound_agent", _fake_build_inbound_agent)
+    monkeypatch.setattr(worker, "build_session", _fake_build_session)
+    monkeypatch.setattr(worker, "build_agent", fake_greet_only)
+    monkeypatch.setattr(worker, "register_transcript_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "register_metrics_flush", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "start_call_recording", AsyncMock())
+
+    participant = MagicMock()
+    participant.attributes = {"sip.phoneNumber": "+19998887777", "sip.trunkPhoneNumber": "+1222"}
+
+    ctx = MagicMock()
+    ctx.connect = AsyncMock()
+    ctx.wait_for_participant = AsyncMock(return_value=participant)
+    ctx.room.name = "usan-inbound-ovr"
+    ctx.job.metadata = None  # inbound
+
+    await worker.entrypoint(ctx)
+
+    # Personalized path taken despite contact_known=False, carrying the router vars.
+    assert built["custom_vars"] == {"first_name": "John"}
+    assert captured["userdata"].call_id == "inb-ovr"
+    fake_greet_only.assert_not_called()
+    # Config re-fetched with the call_id so profile_override resolves (the pre-lookup fetch had
+    # call_id=None; the override fetch carries "inb-ovr").
+    assert "inb-ovr" in fetch_calls
 
 
 async def test_outbound_starts_call_recording(monkeypatch):
@@ -447,7 +536,7 @@ async def test_outbound_starts_call_recording(monkeypatch):
 async def test_inbound_known_starts_call_recording(monkeypatch):
     _settings(monkeypatch)
 
-    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None, **kwargs):
         return {"call_id": "inb-1", "contact_known": True, "dynamic_vars": {"contact_name": "Ada"}}
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
@@ -651,7 +740,7 @@ async def test_outbound_threads_resolved_vars_into_builder(monkeypatch):
 async def test_inbound_threads_resolved_vars_into_builder(monkeypatch):
     _settings(monkeypatch)
 
-    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None, **kwargs):
         return {
             "call_id": "inb-1",
             "contact_known": True,
@@ -746,7 +835,7 @@ async def test_inbound_greet_only_passes_settings_to_build_agent(monkeypatch):
     # this test FAILS — settings is needed so RAG activates for known configs.
     _settings(monkeypatch)
 
-    async def _fake_start_inbound(phone, room, settings, sip_call_id=None):
+    async def _fake_start_inbound(phone, room, settings, sip_call_id=None, **kwargs):
         return None  # unknown caller / lookup failed
 
     monkeypatch.setattr(worker, "start_inbound_call", _fake_start_inbound)
