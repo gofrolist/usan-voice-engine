@@ -19,7 +19,7 @@ dependencies = [
     "google-genai>=1.0.0",
     "limits>=5.8.0",
     "prometheus-fastapi-instrumentator>=8.0.0,<9",
-    "prometheus-client>=0.21.1,<0.26",
+    "prometheus-client>=0.21.1,<0.27",
     "pgvector>=0.3.6",
     "python-multipart>=0.0.12",
 ]
@@ -32,7 +32,7 @@ dev = [
     "mypy>=1.13.0",
     "testcontainers[postgres]>=4.8.0",
     "pytest-xdist>=3.6",
-    "retell-sdk==5.56.0",
+    "retell-sdk==5.57.0",
     "openapi-schema-validator>=0.6.2",
     "jsonschema>=4.21",
     "referencing>=0.35",
