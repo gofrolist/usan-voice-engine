@@ -1237,11 +1237,11 @@ wheels = [
 
 [[package]]
 name = "pyjwt"
-version = "2.13.0"
+version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/a5/5197bfd06417837ac079921c66fa6393f1dea3557272a263cebfef69e432/pyjwt-2.15.0.tar.gz", hash = "sha256:b11c5f9791d7bf51c2b39a81ed669f6b2dbbd669df2942f6c60167e9e3d1abe4", size = 120513, upload-time = "2026-09-23T16:56:00.689Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/55/40e45bf052ee8ee12a4dfd785519660f8effa7b065442b91646ec6828619/pyjwt-2.15.0-py3-none-any.whl", hash = "sha256:7a3742debf6b879e912dbb9819ceec1594be812452b78c5f2e2dfc56564954f8", size = 33680, upload-time = "2026-09-23T16:55:59.241Z" },
 ]
 
 [package.optional-dependencies]
@@ -1374,7 +1374,7 @@ wheels = [
 
 [[package]]
 name = "retell-sdk"
-version = "6.0.0"
+version = "6.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1385,9 +1385,9 @@ dependencies = [
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9b/6e/92e4bd750fcc77832b8fce9f4ba6ed28032ce8b4b270a5b18c7718ac6257/retell_sdk-6.0.0.tar.gz", hash = "sha256:9bca0686f1f94116003e0cc272971c569882503fab43ffe40aab441cb2422182", size = 599133, upload-time = "2026-09-14T06:21:04.43Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/50/8f4340d3a638c71531657070346957324dd6d170841347f58a36a9fd4603/retell_sdk-6.0.1.tar.gz", hash = "sha256:1e5b94f0e1010caf23d28da84da02643a267a4526167eb96df1270b47cdc9e1b", size = 599203, upload-time = "2026-09-14T20:35:07.338Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/61/82/e438f4263b7f098dc253eb6bebbd8e99149179a91fe4f1e7373f8d35d585/retell_sdk-6.0.0-py3-none-any.whl", hash = "sha256:21ca68e4c8a762bdbfdfc5575168114fedd983bc1e19c2f3fa8484eaae398ab4", size = 614267, upload-time = "2026-09-14T06:21:02.893Z" },
+    { url = "https://files.pythonhosted.org/packages/38/d3/6dc49e6b1aef647a676c33bb61ae093355db9ac59af1b577e7df2ebf297e/retell_sdk-6.0.1-py3-none-any.whl", hash = "sha256:422f23ff9147449014a09614d7e2937364e23a8529e96ae8738305601d78ff60", size = 614268, upload-time = "2026-09-14T20:35:05.9Z" },
 ]
 
 [[package]]
@@ -1689,7 +1689,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-xdist", specifier = ">=3.6" },
     { name = "referencing", specifier = ">=0.35" },
-    { name = "retell-sdk", specifier = "==6.0.0" },
+    { name = "retell-sdk", specifier = "==6.0.1" },
     { name = "ruff", specifier = ">=0.15.0" },
     { name = "testcontainers", extras = ["postgres"], specifier = ">=4.8.0" },
 ]
