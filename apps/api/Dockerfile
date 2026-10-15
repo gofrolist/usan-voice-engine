@@ -3,7 +3,7 @@
 # ── Builder ──────────────────────────────────────────────────────────────────
 # Resolves the locked dependency set into a self-contained /app/.venv. uv and its
 # download caches live ONLY in this stage and never reach the runtime image.
-FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS builder
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS builder
 
 # No UV_COMPILE_BYTECODE: precompiling .pyc adds ~57MB to the image for only a
 # sub-second, once-per-(re)start import gain on a long-lived container — a poor
@@ -33,7 +33,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Clean slim base — no uv, no build caches. Just the interpreter, the venv and the
 # migration assets. Same pinned digest as the builder so the venv's interpreter
 # symlink resolves.
-FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS runtime
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
